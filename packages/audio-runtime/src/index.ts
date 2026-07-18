@@ -1,13 +1,15 @@
-import type { AudioSource, PlaybackEvent } from '../../contracts/src/index';
+import type {
+  AudioSource,
+  PlaybackEvent,
+} from '../../contracts/src/index.ts';
 
 export type PlaybackListener = (event: PlaybackEvent) => void;
 
-export interface PlaybackClock {
-  readonly positionMs: number;
-  play(source: AudioSource): Promise<void>;
-  pause(): void;
-  resume(): void;
-  interrupt(): Promise<void>;
+export interface AudioPlayerPort {
+  play(generation: number, segmentId: string, source: AudioSource): Promise<void>;
+  pause(generation: number): void;
+  resume(generation: number): void;
+  stop(generation: number): Promise<void>;
   subscribe(listener: PlaybackListener): () => void;
 }
 

@@ -1,4 +1,4 @@
-import type { AvatarAction, Emotion } from '../../contracts/src/index';
+import type { AvatarAction, Emotion } from '../../contracts/src/index.ts';
 
 export interface CharacterConfig {
   id: string;

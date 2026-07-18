@@ -1,11 +1,6 @@
-import type { PerformancePlan } from '../../contracts/src/index';
-
-export type RuntimeCommand =
-  | { type: 'perform'; plan: PerformancePlan }
-  | { type: 'interrupt' }
-  | { type: 'look-at'; x: number; y: number };
+import type { AvatarEvent, AvatarSnapshot } from '../../contracts/src/index.ts';
 
 export interface RuntimeTransport {
-  send(command: RuntimeCommand): void;
-  subscribe(listener: (command: RuntimeCommand) => void): () => void;
+  dispatch(event: AvatarEvent): void;
+  subscribe(listener: (snapshot: AvatarSnapshot) => void): () => void;
 }
