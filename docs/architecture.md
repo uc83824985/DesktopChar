@@ -2,7 +2,7 @@
 
 ## 设计结论
 
-首版使用 Live2D，桌面侧先按 Electron 的进程模型划分，但领域包不依赖 Electron，因此后续切换 Tauri 时只需替换 `apps/desktop`。运行时的核心原则是：LLM/上游给出“哪里该变”，播放器给出“什么时候变”，Avatar Runtime 决定“怎么平滑变”。
+首版使用 Live2D，桌面侧先按 Electron 的进程模型划分，但领域包不依赖 Electron，因此后续切换 Tauri 时只需替换 `apps/desktop`。运行时的核心原则是：LLM/上游给出“哪里该变”，播放器给出“什么时候变”，Avatar Runtime 决定“怎么平滑变”。Runtime 是 Avatar 状态的唯一所有者；UI、播放器、TTS 和 Renderer 只能发送事实事件或执行 Runtime 下发的 Effect，不得直接修改状态。
 
 ```text
 TTS MCP / Response Planner
@@ -32,6 +32,8 @@ TTS MCP / Response Planner
 6. `live2d-renderer` 把领域命令映射为具体 Pixi/Live2D API，不理解 LLM、TTS 或业务状态。
 7. 中断时先停止播放器，再取消 Timeline，嘴型归零，最后平滑回到 neutral/idle。
 
+模块职责、事件模型、Effect 边界和状态所有权详见 [Avatar Runtime 模块设计](avatar-runtime.md)。当前代码中的 `setState`、`setEmotion`、`playAction` 等公开直控接口属于待替换的早期骨架，不作为后续实现契约。
+
 ## 包依赖约束
 
 ```text
@@ -46,6 +48,9 @@ config -> contracts
 
 - `contracts` 不依赖任何其他项目包。
 - `avatar-runtime` 不导入 Pixi、Live2D SDK、Electron 或 MCP 客户端。
+- Runtime 是 `AvatarSnapshot`、状态机、Timeline、动作队列和中断 generation 的唯一所有者。
+- UI、播放器、TTS 和 Renderer 不得调用状态 setter；它们只向 Runtime 提交 `AvatarEvent`。
+- Runtime reducer 只计算 `Snapshot + Effects`，由外围 effect runner 执行音频、TTS 和渲染副作用。
 - `live2d-renderer` 不选择情绪，不调度音频，不保存会话业务状态。
 - UI 不读取 `_wavFileHandler`、`internalModel` 等第三方私有字段；这些兼容细节只能留在适配器内部。
 - 参考仓库不进入构建、打包和运行时依赖。
@@ -57,6 +62,7 @@ config -> contracts
 - `ServiceContext` 聚合 ASR、TTS、Agent、Live2D 与 MCP provider，工厂模式便于切换实现，但对本项目首版过重。
 - conversation 层把文本、actions、音频、音量切片组成 WebSocket payload，证明“协议携带表演意图、前端负责播放”可行。
 - 前端播放开始/完成会反馈后端，说明播放生命周期不能用 TTS 请求完成时间替代。
+- 详细的模块映射、适用边界和落地约束见 [Open-LLM-VTuber 模块化参考](references/open-llm-vtuber.md)。
 
 ### Open-LLM-VTuber-Web (`d176e7d`)
 
