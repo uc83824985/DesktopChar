@@ -1,0 +1,22 @@
+# Dependencies and build output
+node_modules/
+dist/
+out/
+coverage/
+*.log
+
+# Local environment
+.env
+.env.*
+!.env.example
+
+# Editors and operating systems
+.idea/
+.vscode/
+.DS_Store
+Thumbs.db
+
+# Cloned third-party research repositories
+references/Open-LLM-VTuber/
+references/Open-LLM-VTuber-Web/
+references/NagaAgent/
