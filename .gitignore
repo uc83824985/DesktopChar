@@ -15,8 +15,3 @@ coverage/
 .vscode/
 .DS_Store
 Thumbs.db
-
-# Cloned third-party research repositories
-references/Open-LLM-VTuber/
-references/Open-LLM-VTuber-Web/
-references/NagaAgent/
