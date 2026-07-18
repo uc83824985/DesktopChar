@@ -3,7 +3,7 @@ import type { AvatarCapabilities, PerformancePlan } from '../../contracts/src/in
 export const capabilities: AvatarCapabilities = {
   emotions: ['neutral', 'happy'],
   actions: ['nod'],
-  parameters: ['ParamAngleX', 'ParamEyeBallX', 'ParamMouthOpenY', 'ParamMouthForm'],
+  parameters: ['ParamAngleX', 'ParamAngleY', 'ParamEyeBallX', 'ParamMouthOpenY', 'ParamMouthForm'],
   supportsMouthForm: true,
   supportsGaze: true,
   supportsHitTest: false,

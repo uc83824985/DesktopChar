@@ -40,6 +40,14 @@ function threeSegmentPlan(): PerformancePlan {
   };
 }
 
+test('look events are projected through Runtime-owned renderer effects', () => {
+  const effects = new ControlledEffects();
+  const runtime = createRuntime(effects);
+  runtime.dispatch({ type: 'user.look-target-changed', x: 0.5, y: -0.25 });
+  assert.deepEqual(effects.frames.at(-1), { ParamAngleX: 15, ParamAngleY: -7.5 });
+  assert.deepEqual(runtime.getSnapshot().gaze, { x: 0.5, y: -0.25, active: true });
+});
+
 test('out-of-order TTS completion still produces sequence-ordered playback', () => {
   const effects = new ControlledEffects();
   const runtime = createRuntime(effects);

@@ -140,6 +140,13 @@ export class AvatarRuntime {
       this.failedSequences.clear();
       this.layers = emptyLayers();
     }
+    else if (acceptedEvent.type === 'user.look-target-changed' && this.snapshot.capabilities?.supportsGaze) {
+      this.layers.gaze = {
+        ParamAngleX: { value: acceptedEvent.x * 30 },
+        ParamAngleY: { value: acceptedEvent.y * 30 },
+      };
+      this.emitFrame();
+    }
 
     const transition = reduceAvatarSnapshot(this.snapshot, acceptedEvent);
     this.snapshot = transition.snapshot;

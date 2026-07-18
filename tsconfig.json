@@ -7,9 +7,11 @@
     "moduleResolution": "NodeNext",
     "noEmit": true,
     "noUncheckedIndexedAccess": true,
+    "skipLibCheck": true,
     "strict": true,
     "target": "ES2023",
+    "lib": ["ES2023", "DOM", "DOM.Iterable"],
     "types": ["node"]
   },
-  "include": ["packages/**/*.ts"]
+  "include": ["packages/**/*.ts", "apps/**/*.ts"]
 }

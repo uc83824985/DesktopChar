@@ -1,32 +1,36 @@
 # Live2D Desktop Character
 
-二次元 AI 桌面角色的首版工程骨架。项目采用“桌面壳 + 表演运行时 + Live2D 渲染适配器 + TTS MCP 适配器”的分层结构，参考仓库仅用于理解实现边界，不作为源码依赖。
+事件驱动的 AI 桌面角色运行时。Avatar Runtime 是状态唯一所有者；UI、播放器和渲染器只发送事实事件或执行 Runtime Effects。
 
 ## 模块
 
-- `apps/desktop`：Electron 主进程、preload 安全桥与渲染进程装配。
-- `packages/contracts`：跨模块事件、命令和领域类型，禁止依赖具体 UI 或渲染库。
-- `packages/avatar-runtime`：状态机、表演规划、Timeline 和多层参数合成。
-- `packages/live2d-renderer`：Live2D/Pixi 薄适配层。
-- `packages/audio-runtime`：真实播放时钟与口型数据源。
-- `packages/tts-mcp-adapter`：把已有 TTS MCP 输出规范化为可播放音频。
-- `packages/transport`：桌面端内部及可选后端之间的消息传输。
-- `packages/config`：角色、模型、动作白名单和运行时配置。
+- `apps/desktop`：当前浏览器前台测试壳，后续承载 Electron main/preload/renderer。
+- `packages/contracts`：跨模块事件、效果和领域类型。
+- `packages/avatar-runtime`：状态机、Planner、Timeline 与 Parameter Mixer。
+- `packages/live2d-renderer`：模型无关端口、生命周期和 Live2D 适配边界。
+- `packages/audio-runtime`：真实播放时钟接口。
+- `packages/tts-mcp-adapter`：TTS MCP 输出适配。
+- `packages/transport`、`packages/config`：传输和配置边界。
 
-详细设计见 [docs/architecture.md](docs/architecture.md)。
+详细设计见 [架构文档](docs/architecture.md) 和 [Avatar Runtime](docs/avatar-runtime.md)。
 
-## 当前进展
+## 一键前台测试
 
-Avatar Runtime 的前两个阶段已实现：
-
-- 事件驱动 contracts、只读 Snapshot、Runtime Effect 与 generation 隔离；
-- Planner、播放时钟驱动的 Timeline、分层 Parameter Mixer；
-- Fake TTS/Player/Renderer 驱动的端到端纵向闭环；
-- TTS 乱序完成后的顺序播放、暂停/恢复、中断、失败跳过与能力降级测试。
-
-当前仍未接入真实 Electron、Live2D 渲染库或 TTS MCP。运行检查：
+安装 Node.js 24 后，在仓库根目录执行：
 
 ```bash
 npm install
-npm run check
+npm start
 ```
+
+浏览器会自动打开 `http://127.0.0.1:5173`。看到“Runtime 已就绪”后，可测试模拟说话、动作事件和鼠标视线跟随。UI 只向 Runtime 提交事件，模型参数由 Runtime Effects 驱动。
+
+## 验证
+
+```bash
+npm run check
+npm audit --omit=dev
+npm run test:smoke
+```
+
+`test:smoke` 在 Windows Edge 中实际加载 Core、Mao 模型和纹理，并操作三个前台按钮。首次启动前请阅读 [Live2D 资源与许可说明](docs/live2d-assets.md)。
