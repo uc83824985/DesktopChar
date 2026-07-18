@@ -14,3 +14,19 @@
 - `packages/config`：角色、模型、动作白名单和运行时配置。
 
 详细设计见 [docs/architecture.md](docs/architecture.md)。
+
+## 当前进展
+
+Avatar Runtime 的前两个阶段已实现：
+
+- 事件驱动 contracts、只读 Snapshot、Runtime Effect 与 generation 隔离；
+- Planner、播放时钟驱动的 Timeline、分层 Parameter Mixer；
+- Fake TTS/Player/Renderer 驱动的端到端纵向闭环；
+- TTS 乱序完成后的顺序播放、暂停/恢复、中断、失败跳过与能力降级测试。
+
+当前仍未接入真实 Electron、Live2D 渲染库或 TTS MCP。运行检查：
+
+```bash
+npm install
+npm run check
+```

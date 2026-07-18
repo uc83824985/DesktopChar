@@ -73,9 +73,21 @@ export function reduceAvatarSnapshot(
       return { snapshot, effects: [] };
 
     case 'tts.segment-failed':
-    case 'playback.failed':
     case 'renderer.motion-failed':
       return { snapshot: withError(snapshot, event.error), effects: [] };
+
+    case 'playback.failed':
+      return {
+        snapshot: withError({
+          ...snapshot,
+          state: 'thinking',
+          segmentId: null,
+          sequence: null,
+          playback: { status: 'stopped', positionMs: snapshot.playback.positionMs },
+          gesture: { actionId: null, action: null, queueLength: 0 },
+        }, event.error),
+        effects: [],
+      };
 
     case 'playback.started':
       return {
@@ -119,9 +131,10 @@ export function reduceAvatarSnapshot(
       return {
         snapshot: {
           ...snapshot,
-          state: 'idle',
+          state: 'thinking',
+          segmentId: null,
+          sequence: null,
           playback: { status: 'idle', positionMs: event.positionMs },
-          emotion: { current: 'neutral', intensity: 0 },
           gesture: { actionId: null, action: null, queueLength: 0 },
         },
         effects: [],
@@ -183,6 +196,69 @@ export function reduceAvatarSnapshot(
         ],
       };
     }
+
+    case 'runtime.segment-selected':
+      return {
+        snapshot: {
+          ...snapshot,
+          state: 'thinking',
+          segmentId: event.segmentId,
+          sequence: event.sequence,
+          playback: { status: 'loading', positionMs: 0 },
+        },
+        effects: [],
+      };
+
+    case 'timeline.emotion-cue':
+      return {
+        snapshot: {
+          ...snapshot,
+          emotion: {
+            current: event.cue.emotion,
+            intensity: event.cue.intensity,
+          },
+        },
+        effects: [],
+      };
+
+    case 'timeline.action-cue':
+      return {
+        snapshot: {
+          ...snapshot,
+          gesture: {
+            actionId: event.cue.id,
+            action: event.cue.action,
+            queueLength: snapshot.gesture.queueLength,
+          },
+        },
+        effects: [{
+          type: 'renderer.play-motion',
+          generation: snapshot.generation,
+          command: {
+            actionId: event.cue.id,
+            action: event.cue.action,
+            priority: event.cue.priority ?? 0,
+          },
+        }],
+      };
+
+    case 'runtime.plan-completed':
+      return {
+        snapshot: {
+          ...snapshot,
+          state: 'idle',
+          planId: null,
+          segmentId: null,
+          sequence: null,
+          playback: { status: 'idle', positionMs: 0 },
+          emotion: { current: 'neutral', intensity: 0 },
+          gesture: { actionId: null, action: null, queueLength: 0 },
+        },
+        effects: [],
+      };
+
+    case 'runtime.effect-failed':
+      return { snapshot: withError(snapshot, event.error), effects: [] };
 
     case 'plan.failed':
       return { snapshot: withError(snapshot, event.error), effects: [] };

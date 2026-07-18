@@ -378,3 +378,17 @@ interrupt(...)
 8. 缺少 gaze 或 mouth-form 能力时可降级运行。
 9. 表情结束后回到角色定义的 neutral，而不是盲目归零。
 10. Effect 失败会产生错误 Event，不直接修改 Snapshot。
+
+## 实现状态
+
+截至当前实现节点，前两个阶段已经落地：
+
+- `contracts` 已移除公开状态 setter，改为 Event、Snapshot、Effect 和 Transition；
+- reducer 是状态变化的统一入口，并按 generation 忽略过期异步事件；
+- Planner 会排序 segment、验证 ID/sequence、裁剪情绪强度并按角色能力降级；
+- Timeline 只通过 playback position 推进，支持 pause、resume、cancel 和 cue 去重；
+- Mixer 按 Base、Gaze、Expression、Gesture、Mouth 顺序合成并过滤模型不支持的参数；
+- Runtime 支持 TTS 并行就绪、sequence 顺序播放、单轨 Player、动作 cue、amplitude mouth、中断和错误回流；
+- Fake Effect Executor 覆盖了 TTS、Player 和 Renderer 的端到端行为。
+
+尚未进入本轮范围的真实适配包括 Electron、Live2D/Pixi Renderer 和现有 TTS MCP。它们应继续通过现有端口接入，不能绕过 Runtime 修改状态。

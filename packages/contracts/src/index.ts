@@ -148,7 +148,20 @@ export type RendererEvent =
   | { type: 'renderer.motion-failed'; generation: number; actionId: string; error: RuntimeError }
   | { type: 'renderer.failed'; error: RuntimeError };
 
-export type AvatarEvent = UserEvent | PlanEvent | TtsEvent | PlaybackEvent | RendererEvent;
+export type RuntimeInternalEvent =
+  | { type: 'runtime.segment-selected'; generation: number; segmentId: string; sequence: number }
+  | { type: 'runtime.plan-completed'; generation: number; planId: string }
+  | { type: 'runtime.effect-failed'; generation: number; error: RuntimeError }
+  | { type: 'timeline.emotion-cue'; generation: number; cue: EmotionCue }
+  | { type: 'timeline.action-cue'; generation: number; cue: ActionCue };
+
+export type AvatarEvent =
+  | UserEvent
+  | PlanEvent
+  | TtsEvent
+  | PlaybackEvent
+  | RendererEvent
+  | RuntimeInternalEvent;
 
 export type ParameterBlendMode = 'add' | 'multiply' | 'overwrite' | 'lerp';
 
