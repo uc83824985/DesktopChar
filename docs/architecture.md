@@ -34,6 +34,8 @@ TTS MCP / Response Planner
 
 模块职责、事件模型、Effect 边界和状态所有权详见 [Avatar Runtime 模块设计](avatar-runtime.md)。当前代码中的 `setState`、`setEmotion`、`playAction` 等公开直控接口属于待替换的早期骨架，不作为后续实现契约。
 
+当前 `audio-runtime` 已提供单声道 `pcm_s16le` 的 Web Audio 分片播放器，并使用先验铃声在前台核对“播放采样 -> level 事件 -> Runtime/Mixer -> Mao 参数”时点；验收细节见 [先验铃声流与口型时点验收](audio-lip-sync-acceptance.md)。
+
 ## 包依赖约束
 
 ```text

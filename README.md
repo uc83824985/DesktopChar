@@ -27,6 +27,8 @@ npm start
 
 浏览器会自动打开 `http://127.0.0.1:5173`。看到“Runtime 已就绪”后，可测试模拟说话、动作事件和鼠标视线跟随。UI 只向 Runtime 提交事件，模型参数由 Runtime Effects 驱动。
 
+“口型同步验收”会播放一段先验已知的三段式 PCM 提示音，并同时检查播放器电平和 Mao 实际嘴部参数是否与播放时点匹配；验收规则见 [先验铃声流与口型时点验收](docs/audio-lip-sync-acceptance.md)。
+
 ## 验证
 
 ```bash
