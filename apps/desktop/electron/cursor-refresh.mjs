@@ -6,6 +6,7 @@ const WM_MOUSEMOVE = 0x0200;
 const HTCLIENT = 1;
 const SMTO_BLOCK = 0x0001;
 const SMTO_ABORTIFHUNG = 0x0002;
+const SWP_REFRESH_FRAME_NO_ACTIVATE = 0x0001 | 0x0002 | 0x0004 | 0x0010 | 0x0020;
 const IDC_ARROW = 32512;
 const IDC_HAND = 32649;
 const IDC_SIZEALL = 32646;
@@ -31,25 +32,30 @@ function createKoffiBindings(api) {
   const user32 = api.load('user32.dll');
   const kernel32 = api.load('kernel32.dll');
   const POINT = api.struct('DesktopChar_POINT', { x: 'long', y: 'long' });
-  const HWND = api.pointer('DesktopChar_HWND', api.opaque());
   return {
-    address: api.address,
     getCursorPos: user32.func('int __stdcall GetCursorPos(_Out_ DesktopChar_POINT *pos)'),
-    windowFromPoint: user32.func('DesktopChar_HWND __stdcall WindowFromPoint(DesktopChar_POINT point)'),
-    loadCursor: user32.func('DesktopChar_HWND __stdcall LoadCursorW(DesktopChar_HWND hInstance, uintptr_t cursorName)'),
-    setCursor: user32.func('DesktopChar_HWND __stdcall SetCursor(DesktopChar_HWND cursor)'),
-    sendMessageTimeout: user32.func('intptr_t __stdcall SendMessageTimeoutW(DesktopChar_HWND hWnd, uint32_t Msg, uintptr_t wParam, intptr_t lParam, uint32_t flags, uint32_t timeout, _Out_ uintptr_t *result)'),
+    windowFromPoint: user32.func('uintptr_t __stdcall WindowFromPoint(DesktopChar_POINT point)'),
+    getForegroundWindow: user32.func('uintptr_t __stdcall GetForegroundWindow()'),
+    setWindowPos: user32.func('int __stdcall SetWindowPos(uintptr_t hWnd, uintptr_t hWndInsertAfter, int x, int y, int cx, int cy, uint32_t flags)'),
+    loadCursor: user32.func('uintptr_t __stdcall LoadCursorW(uintptr_t hInstance, uintptr_t cursorName)'),
+    setCursor: user32.func('uintptr_t __stdcall SetCursor(uintptr_t cursor)'),
+    sendMessageTimeout: user32.func('intptr_t __stdcall SendMessageTimeoutW(uintptr_t hWnd, uint32_t Msg, uintptr_t wParam, intptr_t lParam, uint32_t flags, uint32_t timeout, _Out_ uintptr_t *result)'),
     getLastError: kernel32.func('uint32_t __stdcall GetLastError()'),
     POINT,
-    HWND,
   };
 }
 
 function refreshCursor(bindings, options = {}) {
   const point = {};
   if (!bindings.getCursorPos(point)) return failure(bindings.getLastError());
-  const target = bindings.windowFromPoint(point);
+  const pointTarget = bindings.windowFromPoint(point);
+  const requestedTarget = options.windowHandle ? BigInt(options.windowHandle) : 0n;
+  const target = requestedTarget || pointTarget;
   if (!target) return failure(0);
+
+  const frameRefreshed = Boolean(options.refreshFrame && requestedTarget && bindings.setWindowPos(
+    requestedTarget, 0n, 0, 0, 0, 0, SWP_REFRESH_FRAME_NO_ACTIVATE,
+  ));
 
   const screenPoint = makeLParam(point.x, point.y);
   const hitResult = [BigInt(HTCLIENT)];
@@ -62,14 +68,14 @@ function refreshCursor(bindings, options = {}) {
   const hitTest = Number(hitResult[0]);
   const cursorResult = [0n];
   const cursorDelivered = bindings.sendMessageTimeout(
-    target, WM_SETCURSOR, bindings.address(target), makeLParam(hitTest, WM_MOUSEMOVE),
+    target, WM_SETCURSOR, target, makeLParam(hitTest, WM_MOUSEMOVE),
     SMTO_ABORTIFHUNG | SMTO_BLOCK, 50, cursorResult,
   );
   const cursorHandled = Boolean(cursorResult[0]);
   let cursorSet = false;
   const cursorName = CURSOR_RESOURCES[options.cursor];
   if (cursorName && bindings.loadCursor && bindings.setCursor) {
-    const cursor = bindings.loadCursor(null, BigInt(cursorName));
+    const cursor = bindings.loadCursor(0n, BigInt(cursorName));
     if (cursor) {
       bindings.setCursor(cursor);
       // SetCursor returns the previous cursor, which may legitimately be NULL.
@@ -81,6 +87,10 @@ function refreshCursor(bindings, options = {}) {
     delivered: Boolean(cursorDelivered),
     handled: cursorHandled,
     cursorSet,
+    frameRefreshed,
+    targetIsRequested: Boolean(requestedTarget && target === requestedTarget),
+    pointTargetIsRequested: Boolean(requestedTarget && pointTarget === requestedTarget),
+    foregroundIsRequested: Boolean(requestedTarget && bindings.getForegroundWindow() === requestedTarget),
     hitTest,
     error: cursorDelivered ? 0 : bindings.getLastError(),
   };

@@ -180,6 +180,7 @@ function registerIpc() {
 }
 
 function applyPointerPresentation(presentation) {
+  const enteredInteractive = pointerPresentation.passthrough && !presentation.passthrough;
   const changed = pointerPresentation.passthrough !== presentation.passthrough
     || pointerPresentation.cursor !== presentation.cursor;
   pointerPresentation = { ...presentation };
@@ -189,10 +190,26 @@ function applyPointerPresentation(presentation) {
     cursorRefreshTimer = setTimeout(() => {
       cursorRefreshTimer = undefined;
       const current = { ...pointerPresentation };
-      const result = nativeCursorRefresh.refresh({ cursor: current.cursor });
-      console.log('[cursor-refresh]', { presentation: current, available: nativeCursorRefresh.available, ...result });
+      const windowHandle = current.passthrough || !avatarWindow
+        ? undefined
+        : nativeWindowHandleAddress(avatarWindow.getNativeWindowHandle());
+      const result = nativeCursorRefresh.refresh({
+        cursor: current.cursor,
+        windowHandle,
+        refreshFrame: enteredInteractive && !current.passthrough,
+      });
+      console.log('[cursor-refresh]', {
+        presentation: current,
+        available: nativeCursorRefresh.available,
+        focused: avatarWindow?.isFocused() ?? false,
+        ...result,
+      });
     }, 16);
   }
+}
+
+function nativeWindowHandleAddress(buffer) {
+  return buffer.length >= 8 ? buffer.readBigUInt64LE(0) : BigInt(buffer.readUInt32LE(0));
 }
 
 function isPointerPresentation(value) {
