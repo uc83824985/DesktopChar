@@ -183,7 +183,7 @@ function setMousePassthrough(passthrough) {
   avatarWindow?.setIgnoreMouseEvents(passthrough, { forward: passthrough });
   if (changed && process.platform === 'win32') {
     setImmediate(() => {
-      const result = nativeCursorRefresh.refresh();
+      const result = nativeCursorRefresh.refresh({ interactive: !passthrough });
       console.log(`[cursor-refresh] native available=${nativeCursorRefresh.available} passthrough=${passthrough}`, result);
     });
   }

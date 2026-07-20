@@ -8,6 +8,8 @@ test('delegates cursor refresh to the native Windows bridge', () => {
   const bridge = createNativeCursorRefresh({ platform: 'win32', bindings: {
     getCursorPos(point) { point.x = 125; point.y = 90; return 1; },
     windowFromPoint: point => (calls.push(['point', point.x, point.y]), target),
+    loadCursor(_instance, name) { calls.push(['loadCursor', name]); return {}; },
+    setCursor(cursor) { calls.push(['setCursor', cursor]); return {}; },
     sendMessageTimeout(_target, message, wParam, lParam, flags, timeout, output) {
       calls.push(['message', message, wParam, lParam, flags, timeout]);
       output[0] = message === 0x0084 ? 1n : 0n;
@@ -18,11 +20,15 @@ test('delegates cursor refresh to the native Windows bridge', () => {
   } });
   assert.equal(bridge.available, true);
   assert.equal(bridge.backend, 'koffi');
-  assert.deepEqual(bridge.refresh(), { refreshed: true, hitTest: 1, error: 0 });
+  assert.deepEqual(bridge.refresh({ interactive: true }), {
+    refreshed: true, delivered: true, handled: false, cursorSet: true, hitTest: 1, error: 0,
+  });
   assert.deepEqual(calls, [
     ['point', 125, 90],
     ['message', 0x0084, 0n, 5898365n, 3, 50],
     ['message', 0x0020, 123n, 33554433n, 3, 50],
+    ['loadCursor', 32649n],
+    ['setCursor', {}],
   ]);
 });
 
@@ -31,4 +37,22 @@ test('keeps unsupported platforms and missing addons non-fatal', () => {
   const missing = createNativeCursorRefresh({ platform: 'win32', koffi: { load() { throw new Error('missing'); } } });
   assert.equal(missing.available, false);
   assert.deepEqual(missing.refresh(), { refreshed: false, error: -1 });
+});
+
+test('restores the system arrow when switching back to passthrough', () => {
+  const cursorNames = [];
+  const bridge = createNativeCursorRefresh({ platform: 'win32', bindings: {
+    getCursorPos(point) { point.x = 1; point.y = 2; return 1; },
+    windowFromPoint: () => ({}),
+    sendMessageTimeout(_target, message, _wParam, _lParam, _flags, _timeout, output) {
+      output[0] = message === 0x0084 ? 1n : 0n;
+      return 1n;
+    },
+    loadCursor(_instance, name) { cursorNames.push(name); return {}; },
+    setCursor() { return null; },
+    address: () => 1n,
+    getLastError: () => 0,
+  } });
+  assert.equal(bridge.refresh({ interactive: false }).cursorSet, true);
+  assert.deepEqual(cursorNames, [32512n]);
 });
