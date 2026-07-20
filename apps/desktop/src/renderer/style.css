@@ -11,5 +11,13 @@ h1 { margin: 10px 0; font-size: clamp(40px, 6vw, 72px); line-height: .95; }
 button { padding: 11px 17px; border: 0; border-radius: 999px; color: #111426; background: #f1efff; cursor: pointer; font-weight: 700; }
 button:hover:not(:disabled) { transform: translateY(-1px); background: #c9c4ff; }
 button:disabled { opacity: .38; cursor: wait; }
+.tone-debug { margin: -12px 0 20px; padding: 13px 14px; border: 1px solid #9e9ae833; border-radius: 14px; background: #080a15a8; font-variant-numeric: tabular-nums; }
+.tone-debug-title { margin: 0 0 8px; color: #9e9ae8; font-size: 9px; letter-spacing: .14em; }
+.tone-debug dl { display: grid; gap: 4px; margin: 0; }
+.tone-debug dl div { display: grid; grid-template-columns: 76px 1fr; gap: 8px; }
+.tone-debug dt { color: #8589a5; font-size: 10px; }
+.tone-debug dd { margin: 0; color: #daddf4; font-size: 10px; overflow-wrap: anywhere; }
+.tone-sync-log { max-height: 92px; margin: 9px 0 0; padding: 7px 0 0 18px; overflow: auto; border-top: 1px solid #ffffff12; color: #979bb7; font-size: 9px; line-height: 1.45; }
+.tone-sync-log:empty { display: none; }
 .hint { margin: 0; color: #8589a5; font-size: 12px; line-height: 1.6; }
 @media (max-width: 720px) { .panel { top: auto; right: 18px; bottom: 18px; left: 18px; width: auto; transform: none; padding: 20px; } h1 { font-size: 36px; } }

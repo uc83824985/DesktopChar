@@ -31,6 +31,16 @@ try {
   if (toneAcceptance.status !== 'passed') {
     throw new Error(`Known-tone lip-sync acceptance failed: ${JSON.stringify(toneAcceptance.metrics)}`);
   }
+  const traceDisplay = await page.locator('#tone-debug').evaluate(panel => ({
+    hidden: panel.hidden,
+    playback: panel.querySelector('#tone-playback-point')?.textContent,
+    model: panel.querySelector('#tone-model-point')?.textContent,
+    frame: panel.querySelector('#tone-frame-point')?.textContent,
+    logEntries: panel.querySelectorAll('#tone-sync-log li').length,
+  }));
+  if (traceDisplay.hidden || traceDisplay.logEntries < 5 || !traceDisplay.model?.includes('ParamA')) {
+    throw new Error(`Known-tone on-screen trace is incomplete: ${JSON.stringify(traceDisplay)}`);
+  }
   await page.getByRole('button', { name: '模拟说话' }).click();
   await page.getByRole('button', { name: '播放动作' }).click();
   await page.getByRole('button', { name: '恢复中立' }).click();
@@ -41,8 +51,10 @@ try {
     ...toneAcceptance.metrics.player.transitionErrorsMs,
     ...toneAcceptance.metrics.model.transitionErrorsMs,
   );
+  const modelResponseMs = toneAcceptance.metrics.response.maximumModelResponseMs;
+  const frameResponseMs = toneAcceptance.metrics.response.maximumFrameResponseMs;
   console.log(
-    `Live2D smoke test passed (${canvas.width}x${canvas.height}); known-tone lip sync matched within ${maximumTimingErrorMs.toFixed(1)} ms.`,
+    `Live2D smoke test passed (${canvas.width}x${canvas.height}); timeline ${maximumTimingErrorMs.toFixed(1)} ms, model response ${modelResponseMs.toFixed(2)} ms, rendered frame ${frameResponseMs.toFixed(2)} ms.`,
   );
 }
 catch (error) {

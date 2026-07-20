@@ -21,6 +21,15 @@
           <button id="motion" disabled>播放动作</button>
           <button id="reset" disabled>恢复中立</button>
         </div>
+        <section id="tone-debug" class="tone-debug" aria-label="口型同步实时响应" hidden>
+          <p class="tone-debug-title">KNOWN-TONE SYNC TRACE</p>
+          <dl>
+            <div><dt>播放端</dt><dd id="tone-playback-point">等待验收</dd></div>
+            <div><dt>口型参数</dt><dd id="tone-model-point">等待验收</dd></div>
+            <div><dt>下一屏幕帧</dt><dd id="tone-frame-point">等待验收</dd></div>
+          </dl>
+          <ol id="tone-sync-log" class="tone-sync-log"></ol>
+        </section>
         <p class="hint">移动鼠标测试视线跟随。测试模型与 Cubism Core © Live2D Inc.，启动即表示同意仓库内所附许可。</p>
       </section>
     </main>

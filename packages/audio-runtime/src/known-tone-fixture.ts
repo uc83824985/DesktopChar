@@ -39,6 +39,30 @@ export interface KnownToneAcceptanceResult {
   maximumSilenceLevel: number;
 }
 
+export interface KnownToneResponseTrace {
+  atMs: number;
+  playbackObservedAtMs: number;
+  modelAppliedAtMs?: number;
+  framePresentedAtMs?: number;
+}
+
+export interface KnownToneResponseTimingOptions {
+  modelResponseLimitMs?: number;
+  frameResponseLimitMs?: number;
+}
+
+export interface KnownToneResponseTimingResult {
+  passed: boolean;
+  issues: string[];
+  sampleCount: number;
+  modelResponseCount: number;
+  frameResponseCount: number;
+  maximumModelResponseMs: number | null;
+  p95ModelResponseMs: number | null;
+  maximumFrameResponseMs: number | null;
+  p95FrameResponseMs: number | null;
+}
+
 export function createKnownToneAudioSource(requestId: string): AudioStreamSource {
   return {
     delivery: 'stream', requestId, uri: KNOWN_TONE_STREAM_URI,
@@ -138,6 +162,46 @@ export function evaluateKnownToneAcceptance(
   return { passed: issues.length === 0, issues, observedToneLevels, transitionErrorsMs, maximumSilenceLevel };
 }
 
+export function evaluateKnownToneResponseTiming(
+  traces: readonly KnownToneResponseTrace[],
+  options: KnownToneResponseTimingOptions = {},
+): KnownToneResponseTimingResult {
+  const modelResponseLimitMs = positive(options.modelResponseLimitMs ?? 12, 'modelResponseLimitMs');
+  const frameResponseLimitMs = positive(options.frameResponseLimitMs ?? 50, 'frameResponseLimitMs');
+  const issues: string[] = [];
+  const modelLatencies = traces.flatMap(trace => trace.modelAppliedAtMs === undefined
+    ? []
+    : [trace.modelAppliedAtMs - trace.playbackObservedAtMs]);
+  const frameLatencies = traces.flatMap(trace => trace.framePresentedAtMs === undefined
+    ? []
+    : [trace.framePresentedAtMs - trace.playbackObservedAtMs]);
+
+  const invalidModel = modelLatencies.filter(value => !Number.isFinite(value) || value < 0);
+  const invalidFrame = frameLatencies.filter(value => !Number.isFinite(value) || value < 0);
+  if (!traces.length) issues.push('no playback response traces were captured');
+  if (modelLatencies.length !== traces.length) issues.push(`${traces.length - modelLatencies.length} model responses are missing`);
+  if (frameLatencies.length !== traces.length) issues.push(`${traces.length - frameLatencies.length} presentation frames are missing`);
+  if (invalidModel.length) issues.push(`${invalidModel.length} model response latencies are invalid`);
+  if (invalidFrame.length) issues.push(`${invalidFrame.length} frame response latencies are invalid`);
+
+  const maximumModelResponseMs = maximumOrNull(modelLatencies);
+  const p95ModelResponseMs = percentileOrNull(modelLatencies, 0.95);
+  const maximumFrameResponseMs = maximumOrNull(frameLatencies);
+  const p95FrameResponseMs = percentileOrNull(frameLatencies, 0.95);
+  if (maximumModelResponseMs !== null && maximumModelResponseMs > modelResponseLimitMs) {
+    issues.push(`model response ${maximumModelResponseMs.toFixed(2)} ms exceeds ${modelResponseLimitMs.toFixed(2)} ms`);
+  }
+  if (maximumFrameResponseMs !== null && maximumFrameResponseMs > frameResponseLimitMs) {
+    issues.push(`frame response ${maximumFrameResponseMs.toFixed(2)} ms exceeds ${frameResponseLimitMs.toFixed(2)} ms`);
+  }
+
+  return {
+    passed: issues.length === 0, issues, sampleCount: traces.length,
+    modelResponseCount: modelLatencies.length, frameResponseCount: frameLatencies.length,
+    maximumModelResponseMs, p95ModelResponseMs, maximumFrameResponseMs, p95FrameResponseMs,
+  };
+}
+
 function knownToneSample(atMs: number): number {
   const pulse = KNOWN_TONE_PULSES.find(candidate => atMs >= candidate.startMs && atMs < candidate.endMs);
   if (!pulse) return 0;
@@ -156,6 +220,16 @@ function median(values: number[]): number {
   const ordered = [...values].sort((left, right) => left - right);
   const middle = Math.floor(ordered.length / 2);
   return ordered.length % 2 ? ordered[middle]! : (ordered[middle - 1]! + ordered[middle]!) / 2;
+}
+
+function maximumOrNull(values: number[]): number | null {
+  return values.length ? Math.max(...values) : null;
+}
+
+function percentileOrNull(values: number[], percentile: number): number | null {
+  if (!values.length) return null;
+  const ordered = [...values].sort((left, right) => left - right);
+  return ordered[Math.min(ordered.length - 1, Math.ceil(ordered.length * percentile) - 1)]!;
 }
 
 function abortableDelay(delayMs: number, signal?: AbortSignal): Promise<void> {

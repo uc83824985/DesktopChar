@@ -1,15 +1,18 @@
-import { Application, Ticker } from 'pixi.js';
+import { Application, Ticker, UPDATE_PRIORITY } from 'pixi.js';
 import { Live2DModel } from 'pixi-live2d-display/cubism4';
 import type { AvatarEvent, RuntimeEffect } from '../../../../packages/contracts/src/index.ts';
 import type { AmplitudeSample } from '../../../../packages/contracts/src/index.ts';
 import {
+  KNOWN_TONE_PULSES,
   KNOWN_TONE_SPEECH_TEXT,
   KNOWN_TONE_STREAM_URI,
   WebAudioPcmStreamPlayer,
   createKnownToneAudioSource,
   createKnownTonePcmStream,
   evaluateKnownToneAcceptance,
+  evaluateKnownToneResponseTiming,
 } from '../../../../packages/audio-runtime/src/index.ts';
+import type { KnownToneResponseTrace } from '../../../../packages/audio-runtime/src/index.ts';
 import { AvatarRuntime, DefaultAvatarPlanner, ParameterMixer } from '../../../../packages/avatar-runtime/src/index.ts';
 import { DEFAULT_TTS_CONFIG } from '../../../../packages/config/src/index.ts';
 import type { TtsAdapter } from '../../../../packages/tts-mcp-adapter/src/index.ts';
@@ -23,19 +26,36 @@ const speak = document.querySelector<HTMLButtonElement>('#speak')!;
 const tone = document.querySelector<HTMLButtonElement>('#tone')!;
 const motion = document.querySelector<HTMLButtonElement>('#motion')!;
 const reset = document.querySelector<HTMLButtonElement>('#reset')!;
+const toneDebug = document.querySelector<HTMLElement>('#tone-debug')!;
+const tonePlaybackPoint = document.querySelector<HTMLElement>('#tone-playback-point')!;
+const toneModelPoint = document.querySelector<HTMLElement>('#tone-model-point')!;
+const toneFramePoint = document.querySelector<HTMLElement>('#tone-frame-point')!;
+const toneSyncLog = document.querySelector<HTMLOListElement>('#tone-sync-log')!;
 const app = new Application({ view: canvas, resizeTo: window, backgroundAlpha: 0, antialias: true, autoDensity: true, resolution: Math.min(devicePixelRatio, 2) });
 
 type CubismCoreModel = {
   setParameterValueById(id: string, value: number): void;
   getParameterValueById(id: string): number;
 };
+interface ToneSyncTrace extends KnownToneResponseTrace {
+  level: number;
+  modelValue?: number;
+}
+interface ToneAcceptanceRun {
+  segmentId: string;
+  playerLevels: AmplitudeSample[];
+  modelLevels: AmplitudeSample[];
+  traces: ToneSyncTrace[];
+  lastLoggedBucket: number;
+  lastLoggedPhase: string;
+}
 let model: Live2DModel | undefined;
 let runtime: AvatarRuntime | undefined;
 let playbackTimer: ReturnType<typeof setInterval> | undefined;
 let gestureUntil = 0;
 let gesturePhase = 0;
-let toneAcceptance: { segmentId: string; playerLevels: AmplitudeSample[]; modelLevels: AmplitudeSample[] } | null = null;
-let applyingToneLevelAtMs: number | null = null;
+let toneAcceptance: ToneAcceptanceRun | null = null;
+let applyingToneTrace: ToneSyncTrace | null = null;
 const mockTtsAdapter = new MockTtsAdapter({ ...DEFAULT_TTS_CONFIG.mock, logger: new JsonConsoleTtsLogger() });
 const ttsAdapter: TtsAdapter = {
   prepare: request => request.text === KNOWN_TONE_SPEECH_TEXT
@@ -58,12 +78,19 @@ tonePlayer.subscribe(event => {
   const active = toneAcceptance?.segmentId === event.segmentId ? toneAcceptance : null;
   if (active && event.type === 'playback.level') {
     active.playerLevels.push({ atMs: event.positionMs, value: event.value });
-    applyingToneLevelAtMs = event.positionMs;
+    const trace: ToneSyncTrace = {
+      atMs: event.positionMs, level: event.value, playbackObservedAtMs: performance.now(),
+    };
+    active.traces.push(trace);
+    applyingToneTrace = trace;
+    tonePlaybackPoint.textContent = `T+${formatMs(trace.atMs)} · L=${trace.level.toFixed(3)} · ${tonePhase(trace.atMs)}`;
     try { runtime?.dispatch(event); }
-    finally { applyingToneLevelAtMs = null; }
+    finally { applyingToneTrace = null; }
   }
   else runtime?.dispatch(event);
-  if (active && event.type === 'playback.completed') finishToneAcceptance(active);
+  if (active && event.type === 'playback.completed') {
+    app.ticker.addOnce(() => finishToneAcceptance(active), undefined, UPDATE_PRIORITY.UTILITY);
+  }
   else if (active && event.type === 'playback.interrupted') failToneAcceptance('acceptance playback was interrupted');
 });
 
@@ -119,9 +146,17 @@ function submitToneAcceptance(): void {
   if (!runtime || runtime.getSnapshot().state !== 'idle') return;
   const suffix = Date.now();
   const segmentId = `known-tone-${suffix}`;
-  toneAcceptance = { segmentId, playerLevels: [], modelLevels: [] };
+  toneAcceptance = {
+    segmentId, playerLevels: [], modelLevels: [], traces: [],
+    lastLoggedBucket: -1, lastLoggedPhase: '',
+  };
   document.body.dataset.toneAcceptance = 'running';
   delete document.body.dataset.toneAcceptanceMetrics;
+  toneDebug.hidden = false;
+  tonePlaybackPoint.textContent = '正在等待 playback.level';
+  toneModelPoint.textContent = '正在等待 ParamA 写入';
+  toneFramePoint.textContent = '正在等待下一屏幕帧';
+  toneSyncLog.replaceChildren();
   runtime.dispatch({ type: 'plan.submitted', plan: { id: `known-tone-plan-${suffix}`, segments: [{
     id: segmentId, sequence: 0, displayText: '先验铃声口型同步验收', speechText: KNOWN_TONE_SPEECH_TEXT,
   }] } });
@@ -178,11 +213,20 @@ function execute(effect: RuntimeEffect, dispatch: (event: AvatarEvent) => void):
     for (const [id, value] of Object.entries(effect.frame)) {
       const modelParameter = id === 'ParamMouthOpenY' ? 'ParamA' : id;
       core.setParameterValueById(modelParameter, value);
-      if (toneAcceptance && applyingToneLevelAtMs !== null && modelParameter === 'ParamA') {
-        toneAcceptance.modelLevels.push({
-          atMs: applyingToneLevelAtMs,
-          value: core.getParameterValueById(modelParameter),
-        });
+      if (toneAcceptance && applyingToneTrace && modelParameter === 'ParamA') {
+        const active = toneAcceptance;
+        const trace = applyingToneTrace;
+        trace.modelAppliedAtMs = performance.now();
+        trace.modelValue = core.getParameterValueById(modelParameter);
+        active.modelLevels.push({ atMs: trace.atMs, value: trace.modelValue });
+        const modelDelayMs = trace.modelAppliedAtMs - trace.playbackObservedAtMs;
+        toneModelPoint.textContent = `ParamA=${trace.modelValue.toFixed(3)} · Δ ${formatMs(modelDelayMs)}`;
+        app.ticker.addOnce(() => {
+          trace.framePresentedAtMs = performance.now();
+          const frameDelayMs = trace.framePresentedAtMs - trace.playbackObservedAtMs;
+          toneFramePoint.textContent = `已完成 Pixi 帧 · Δ ${formatMs(frameDelayMs)}`;
+          logToneTrace(active, trace);
+        }, undefined, UPDATE_PRIORITY.UTILITY);
       }
     }
   }
@@ -192,20 +236,22 @@ function execute(effect: RuntimeEffect, dispatch: (event: AvatarEvent) => void):
   }
 }
 
-function finishToneAcceptance(active: { segmentId: string; playerLevels: AmplitudeSample[]; modelLevels: AmplitudeSample[] }): void {
+function finishToneAcceptance(active: ToneAcceptanceRun): void {
   if (toneAcceptance !== active) return;
   const player = evaluateKnownToneAcceptance(active.playerLevels);
   const model = evaluateKnownToneAcceptance(active.modelLevels);
-  const passed = player.passed && model.passed;
-  const metrics = { passed, player, model };
+  const response = evaluateKnownToneResponseTiming(active.traces);
+  const passed = player.passed && model.passed && response.passed;
+  const metrics = { passed, player, model, response };
   document.body.dataset.toneAcceptance = passed ? 'passed' : 'failed';
   document.body.dataset.toneAcceptanceMetrics = JSON.stringify(metrics);
   toneAcceptance = null;
   if (passed) {
     const maximumTimingError = Math.max(...player.transitionErrorsMs, ...model.transitionErrorsMs);
-    status.textContent = `口型同步验收通过 · 最大时点误差 ${Math.round(maximumTimingError)} ms`;
+    status.textContent = `口型同步验收通过 · 时轴 ${Math.round(maximumTimingError)} ms · 参数 ${formatMs(response.maximumModelResponseMs ?? 0)} · 屏幕帧 ${formatMs(response.maximumFrameResponseMs ?? 0)}`;
   }
-  else status.textContent = `口型同步验收失败：${[...player.issues, ...model.issues].join('；')}`;
+  else status.textContent = `口型同步验收失败：${[...player.issues, ...model.issues, ...response.issues].join('；')}`;
+  console.info(JSON.stringify({ event: 'tone.sync.result', ...metrics }));
 }
 
 function failToneAcceptance(message: string): void {
@@ -213,7 +259,35 @@ function failToneAcceptance(message: string): void {
   document.body.dataset.toneAcceptanceMetrics = JSON.stringify({ passed: false, issues: [message] });
   toneAcceptance = null;
   status.textContent = `口型同步验收失败：${message}`;
+  toneFramePoint.textContent = `失败 · ${message}`;
 }
+
+function logToneTrace(active: ToneAcceptanceRun, trace: ToneSyncTrace): void {
+  const bucket = Math.floor(trace.atMs / 100);
+  const phase = tonePhase(trace.atMs);
+  if (bucket === active.lastLoggedBucket && phase === active.lastLoggedPhase) return;
+  active.lastLoggedBucket = bucket;
+  active.lastLoggedPhase = phase;
+  const modelDelayMs = trace.modelAppliedAtMs === undefined ? null : trace.modelAppliedAtMs - trace.playbackObservedAtMs;
+  const frameDelayMs = trace.framePresentedAtMs === undefined ? null : trace.framePresentedAtMs - trace.playbackObservedAtMs;
+  const entry = document.createElement('li');
+  entry.textContent = `${formatMs(trace.atMs)} ${phase} · L ${trace.level.toFixed(2)} → ParamA ${(trace.modelValue ?? 0).toFixed(2)} · 参数 ${formatMs(modelDelayMs ?? 0)} / 帧 ${formatMs(frameDelayMs ?? 0)}`;
+  toneSyncLog.append(entry);
+  while (toneSyncLog.children.length > 12) toneSyncLog.firstElementChild?.remove();
+  toneSyncLog.scrollTop = toneSyncLog.scrollHeight;
+  console.info(JSON.stringify({
+    event: 'tone.sync.trace', timestamp: new Date().toISOString(), audioPositionMs: trace.atMs,
+    phase, playbackLevel: trace.level, modelValue: trace.modelValue,
+    modelResponseMs: modelDelayMs, frameResponseMs: frameDelayMs,
+  }));
+}
+
+function tonePhase(positionMs: number): string {
+  const pulseIndex = KNOWN_TONE_PULSES.findIndex(pulse => positionMs >= pulse.startMs && positionMs < pulse.endMs);
+  return pulseIndex < 0 ? '静音' : `提示音 ${pulseIndex + 1}`;
+}
+
+function formatMs(value: number): string { return `${value.toFixed(1)}ms`; }
 
 function clearPlayback(): void { if (playbackTimer) clearInterval(playbackTimer); playbackTimer = undefined; }
 function sampleAmplitude(samples: Array<{ atMs: number; value: number }> | undefined, positionMs: number): number {

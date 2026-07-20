@@ -8,6 +8,7 @@ import {
   createKnownToneAudioSource,
   createKnownTonePcmStream,
   evaluateKnownToneAcceptance,
+  evaluateKnownToneResponseTiming,
   measurePcmS16LeLevel,
 } from '../src/known-tone-fixture.ts';
 
@@ -22,6 +23,29 @@ test('known tone fixture produces deterministic 24kHz mono PCM with expected lev
     assert.ok(Math.abs(level - pulse.amplitude) < 0.015, `${level} should match ${pulse.amplitude}`);
   }
   assert.ok(levelBetween(pcm, 450, 550) < 0.001);
+});
+
+test('known tone response timing requires every playback level to reach the model and a frame', () => {
+  const onTime = Array.from({ length: 10 }, (_, index) => ({
+    atMs: index * 25,
+    playbackObservedAtMs: 1_000 + index * 25,
+    modelAppliedAtMs: 1_001 + index * 25,
+    framePresentedAtMs: 1_012 + index * 25,
+  }));
+  const accepted = evaluateKnownToneResponseTiming(onTime);
+  assert.equal(accepted.passed, true, accepted.issues.join('; '));
+  assert.equal(accepted.maximumModelResponseMs, 1);
+  assert.equal(accepted.maximumFrameResponseMs, 12);
+
+  const delayed = onTime.map((trace, index) => index === 5
+    ? { ...trace, modelAppliedAtMs: trace.playbackObservedAtMs + 20 }
+    : trace);
+  assert.equal(evaluateKnownToneResponseTiming(delayed).passed, false);
+
+  const missingFrame = onTime.map((trace, index) => index === 3
+    ? { atMs: trace.atMs, playbackObservedAtMs: trace.playbackObservedAtMs, modelAppliedAtMs: trace.modelAppliedAtMs }
+    : trace);
+  assert.equal(evaluateKnownToneResponseTiming(missingFrame).passed, false);
 });
 
 test('known tone acceptance detects correct playback timing and rejects a shifted mouth track', async () => {
