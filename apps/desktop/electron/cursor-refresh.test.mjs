@@ -21,7 +21,7 @@ test('delegates cursor refresh to the native Windows bridge', () => {
   assert.equal(bridge.backend, 'koffi');
   assert.deepEqual(bridge.refresh({ cursor: 'pointer' }), {
     refreshed: true, delivered: true, handled: false, cursorSet: true,
-    frameRefreshed: false, syntheticInputAccepted: false,
+    frameRefreshed: false, cursorNudgeAccepted: false,
     targetIsRequested: false, pointTargetIsRequested: false,
     foregroundIsRequested: false, hitTest: 1, error: 0,
   });
@@ -83,7 +83,7 @@ test('refreshes the explicit avatar HWND without activation when stationary cove
     getForegroundWindow: () => 88n,
     setWindowPos(...args) { calls.push(['setWindowPos', ...args]); return 1; },
     getSystemMetrics(index) { return ({ 76: -1920, 77: 0, 78: 3840, 79: 1080 })[index]; },
-    sendInput(count, input, size) { calls.push(['sendInput', count, input, size]); return 1; },
+    sendInput(count, input, size) { calls.push(['sendInput', count, input, size]); return 2; },
     inputSize: 40,
     sendMessageTimeout(target, message, wParam, _lParam, _flags, _timeout, output) {
       calls.push(['message', target, message, wParam]);
@@ -95,17 +95,20 @@ test('refreshes the explicit avatar HWND without activation when stationary cove
     getLastError: () => 0,
   } });
   const result = bridge.refresh({
-    cursor: 'pointer', windowHandle: 99n, refreshFrame: true, rerouteInput: true,
+    cursor: 'pointer', windowHandle: 99n, refreshFrame: true, nudgeCursor: true,
   });
   assert.equal(result.frameRefreshed, true);
-  assert.equal(result.syntheticInputAccepted, true);
+  assert.equal(result.cursorNudgeAccepted, true);
   assert.equal(result.targetIsRequested, true);
   assert.equal(result.pointTargetIsRequested, false);
   assert.equal(result.foregroundIsRequested, false);
   assert.deepEqual(calls[0], ['setWindowPos', 99n, 0n, 0, 0, 0, 0, 0x37]);
   assert.equal(calls[1][0], 'sendInput');
-  assert.equal(calls[1][1], 1);
-  assert.equal(calls[1][2].mi.dwFlags, 0xe001);
+  assert.equal(calls[1][1], 2);
+  assert.equal(calls[1][2].length, 2);
+  assert.equal(calls[1][2][0].mi.dwFlags, 0xe001);
+  assert.equal(calls[1][2][1].mi.dwFlags, 0xe001);
+  assert.notEqual(calls[1][2][0].mi.dx, calls[1][2][1].mi.dx);
   assert.equal(calls[1][3], 40);
   assert.deepEqual(calls[2].slice(0, 4), ['message', 99n, 0x0084, 0n]);
   assert.deepEqual(calls[3].slice(0, 4), ['message', 99n, 0x0020, 99n]);

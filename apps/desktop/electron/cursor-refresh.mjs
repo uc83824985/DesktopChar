@@ -64,7 +64,7 @@ function refreshCursor(bindings, options = {}) {
   const frameRefreshed = Boolean(options.refreshFrame && requestedTarget && bindings.setWindowPos(
     requestedTarget, 0n, 0, 0, 0, 0, SWP_REFRESH_FRAME_NO_ACTIVATE,
   ));
-  const syntheticInputAccepted = Boolean(options.rerouteInput && rerouteCursorInput(bindings, point));
+  const cursorNudgeAccepted = Boolean(options.nudgeCursor && nudgeCursorInput(bindings, point));
 
   const screenPoint = makeLParam(point.x, point.y);
   const hitResult = [BigInt(HTCLIENT)];
@@ -97,7 +97,7 @@ function refreshCursor(bindings, options = {}) {
     handled: cursorHandled,
     cursorSet,
     frameRefreshed,
-    syntheticInputAccepted,
+    cursorNudgeAccepted,
     targetIsRequested: Boolean(requestedTarget && target === requestedTarget),
     pointTargetIsRequested: Boolean(requestedTarget && pointTarget === requestedTarget),
     foregroundIsRequested: Boolean(requestedTarget && bindings.getForegroundWindow() === requestedTarget),
@@ -106,24 +106,26 @@ function refreshCursor(bindings, options = {}) {
   };
 }
 
-function rerouteCursorInput(bindings, point) {
+function nudgeCursorInput(bindings, point) {
   const left = bindings.getSystemMetrics(76);
   const top = bindings.getSystemMetrics(77);
   const width = bindings.getSystemMetrics(78);
   const height = bindings.getSystemMetrics(79);
   if (width <= 1 || height <= 1) return false;
-  const input = {
+  const neighborX = point.x < left + width - 1 ? point.x + 1 : point.x - 1;
+  const makeInput = (x, y) => ({
     type: 0,
     mi: {
-      dx: Math.round(((point.x - left) * 65535) / (width - 1)),
-      dy: Math.round(((point.y - top) * 65535) / (height - 1)),
+      dx: Math.round(((x - left) * 65535) / (width - 1)),
+      dy: Math.round(((y - top) * 65535) / (height - 1)),
       mouseData: 0,
       dwFlags: MOUSEEVENTF_REROUTE,
       time: 0,
       dwExtraInfo: 0n,
     },
-  };
-  return bindings.sendInput(1, input, bindings.inputSize) === 1;
+  });
+  const inputs = [makeInput(neighborX, point.y), makeInput(point.x, point.y)];
+  return bindings.sendInput(inputs.length, inputs, bindings.inputSize) === inputs.length;
 }
 
 function makeLParam(low, high) {

@@ -198,7 +198,7 @@ function applyPointerPresentation(presentation) {
         cursor: current.cursor,
         windowHandle,
         refreshFrame: enteredInteractive && !current.passthrough,
-        rerouteInput: enteredInteractive && !current.passthrough && !focused,
+        nudgeCursor: enteredInteractive && !current.passthrough && !focused,
       });
       console.log('[cursor-refresh]', {
         presentation: current,
