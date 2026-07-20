@@ -7,12 +7,13 @@
 - `apps/desktop`：Electron main/preload/renderer 与可复用的浏览器前台测试壳。
 - `packages/contracts`：跨模块事件、效果和领域类型。
 - `packages/avatar-runtime`：状态机、Planner、Timeline 与 Parameter Mixer。
+- `packages/scene-runtime`：通用 Scene Actor、关系约束、原子事务、Behavior 路由与 2.5D 渲染计划。
 - `packages/live2d-renderer`：模型无关端口、生命周期和 Live2D 适配边界。
 - `packages/audio-runtime`：真实播放时钟接口。
 - `packages/tts-mcp-adapter`：TTS MCP 输出适配。
 - `packages/transport`、`packages/config`：传输和配置边界。
 
-详细设计见 [架构文档](docs/architecture.md) 和 [Avatar Runtime](docs/avatar-runtime.md)。
+详细设计见 [架构文档](docs/architecture.md)、[Avatar Runtime](docs/avatar-runtime.md) 和 [Scene Engine 抽象](docs/scene-engine.md)。
 
 角色级视线校准及资源修改边界见 [GazeProfile 工作流](docs/gaze-calibration.md)；透明区穿透、角色点击/拖动和窗口包围盒同步见 [透明桌面悬浮壳](docs/desktop-shell.md)。
 

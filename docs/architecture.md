@@ -38,10 +38,17 @@ Electron 壳层在领域链路之外：main 独占原生窗口位置、包围盒
 
 当前 `audio-runtime` 已提供单声道 `pcm_s16le` 的 Web Audio 分片播放器，并使用先验铃声在前台核对“播放采样 -> level 事件 -> Runtime/Mixer -> Mao 参数”时点；验收细节见 [先验铃声流与口型时点验收](audio-lip-sync-acceptance.md)。
 
+## Scene Engine 边界
+
+可交互桌面场景采用通用 `SceneActor + Component + Slot + Relation + Behavior + RenderPart`，不在引擎层增加家具、物件或播放器等业务类型。Scene Runtime 独占场景状态，通过 generation 隔离旧事件，并将 Scene、Transaction 和 Fragment 作为原子变更提交；应用层负责声明内容、注册行为和选择 Scenario。
+
+渲染侧使用 Color、Depth、Coverage/Picking 分离的 2.5D 描述：可拆资源通过 RenderPart 和 Render Band 表达稳定前后关系，难拆资源通过 box、ellipsoid、mesh、depth-map 等 proxy 参与深度合成。完整边界、约束和测试映射见 [Scene Engine 抽象设计](scene-engine.md)。
+
 ## 包依赖约束
 
 ```text
 apps/desktop -> transport, config, avatar-runtime, audio-runtime, live2d-renderer
+apps/desktop -> scene-runtime
 avatar-runtime -> contracts
 audio-runtime -> contracts
 live2d-renderer -> contracts
