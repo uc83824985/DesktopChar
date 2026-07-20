@@ -14,7 +14,7 @@
 
 详细设计见 [架构文档](docs/architecture.md) 和 [Avatar Runtime](docs/avatar-runtime.md)。
 
-TTS Mock、虚拟 MCP 绑定和真实服务接入契约见 [TTS Adapter 文档](docs/tts-adapter.md)。
+TTS Mock、流式 MCP/HTTP 绑定和真实服务接入契约见 [TTS Adapter 文档](docs/tts-adapter.md)；Qwen3-TTS 当前公开推理接口的流式能力核对见 [Qwen3-TTS 阅读记录](docs/references/qwen3-tts.md)。
 
 ## 一键前台测试
 

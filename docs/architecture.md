@@ -25,8 +25,8 @@ TTS MCP / Response Planner
 ## 运行链路
 
 1. 上游提交由若干 `PerformanceSegment` 组成的表演计划。
-2. `tts-mcp-adapter` 仅把纯文本合成为 `AudioSource`，并保留可选 viseme 时间戳。
-3. `audio-runtime` 播放音频，以真实播放位置发出 `PlaybackEvent`。
+2. `tts-mcp-adapter` 把纯文本准备为流式优先的 `AudioSource`；MCP 返回流描述，音频字节由 HTTP 数据面增量传输。
+3. `audio-runtime` 消费流或整段音频，以真实缓冲、播放位置、实时电平和播放生命周期发出 `PlaybackEvent`。
 4. `avatar-runtime` 校验情绪和动作白名单，生成 cue，并按播放时钟推进 Timeline。
 5. Mixer 依次合成 Base、Gaze、Expression、Gesture、Mouth；Mouth 最后写入。
 6. `live2d-renderer` 把领域命令映射为具体 Pixi/Live2D API，不理解 LLM、TTS 或业务状态。
@@ -75,6 +75,13 @@ config -> contracts
 - `live2dController.ts` 把 state、action、emotion、tracking、mouth 分成独立通道，再在帧更新时合成，适合作为 Avatar Runtime 的直接思想来源。
 - action queue、关键帧插值、表情淡入淡出、鼠标追踪均应留在运行时层。
 - 其 talking 状态中的随机 viseme 只能作为无音频数据时的降级；首版优先使用真实音频包络或 TTS viseme 时间戳。
+
+### Qwen3-TTS (`022e286`)
+
+- 模型 README 描述低延迟流式架构，但当前公开 `generate_*()` 仍返回完整 `List[np.ndarray]` 和采样率。
+- `non_streaming_mode=false` 只模拟流式文本输入；内部 `chunked_decode()` 最终也会拼接所有块后返回，不能直接视为音频流接口。
+- 本项目因此把 MCP 作为控制面、HTTP 作为音频数据面，并要求真实 provider 在整句完成前产出字节；只对完整波形事后分片不能降低首包延迟。
+- 详细代码路径和落地映射见 [Qwen3-TTS 流式实现阅读记录](references/qwen3-tts.md)。
 
 ## 首版实施顺序
 
