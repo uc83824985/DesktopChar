@@ -14,6 +14,8 @@
 
 详细设计见 [架构文档](docs/architecture.md) 和 [Avatar Runtime](docs/avatar-runtime.md)。
 
+TTS Mock、虚拟 MCP 绑定和真实服务接入契约见 [TTS Adapter 文档](docs/tts-adapter.md)。
+
 ## 一键前台测试
 
 安装 Node.js 24 后，在仓库根目录执行：
@@ -29,6 +31,7 @@ npm start
 
 ```bash
 npm run check
+npm run diagnose:tts
 npm audit --omit=dev
 npm run test:smoke
 ```

@@ -21,6 +21,7 @@ try {
   page.on('pageerror', error => errors.push(error.stack ?? error.message));
   await page.goto('http://127.0.0.1:4173', { waitUntil: 'networkidle' });
   await page.locator('body[data-ready="true"]').waitFor({ timeout: 20_000 });
+  await page.locator('body[data-tts-health="ready"]').waitFor({ timeout: 5_000 });
   await page.getByRole('button', { name: '模拟说话' }).click();
   await page.getByRole('button', { name: '播放动作' }).click();
   await page.getByRole('button', { name: '恢复中立' }).click();

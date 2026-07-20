@@ -2,6 +2,8 @@ import { Application, Ticker } from 'pixi.js';
 import { Live2DModel } from 'pixi-live2d-display/cubism4';
 import type { AvatarEvent, RuntimeEffect } from '../../../../packages/contracts/src/index.ts';
 import { AvatarRuntime, DefaultAvatarPlanner, ParameterMixer } from '../../../../packages/avatar-runtime/src/index.ts';
+import { DEFAULT_TTS_CONFIG } from '../../../../packages/config/src/index.ts';
+import { JsonConsoleTtsLogger, MockTtsAdapter, TtsRuntimeEffectHandler } from '../../../../packages/tts-mcp-adapter/src/index.ts';
 import './style.css';
 
 Live2DModel.registerTicker(Ticker);
@@ -18,6 +20,8 @@ let runtime: AvatarRuntime | undefined;
 let playbackTimer: ReturnType<typeof setInterval> | undefined;
 let gestureUntil = 0;
 let gesturePhase = 0;
+const ttsAdapter = new MockTtsAdapter({ ...DEFAULT_TTS_CONFIG.mock, logger: new JsonConsoleTtsLogger() });
+const ttsEffects = new TtsRuntimeEffectHandler(ttsAdapter);
 
 try {
   model = await Live2DModel.from('/models/Mao/Mao.model3.json', { autoInteract: false });
@@ -35,6 +39,8 @@ try {
     parameters: ['ParamA', 'ParamMouthOpenY', 'ParamMouthForm', 'ParamAngleX', 'ParamAngleY'],
     supportsMouthForm: true, supportsGaze: true, supportsHitTest: true,
   } });
+  const ttsHealth = await ttsAdapter.health();
+  document.body.dataset.ttsHealth = ttsHealth.status;
   runtime.subscribe(snapshot => {
     status.textContent = snapshot.state === 'speaking'
       ? `Runtime: speaking · ${Math.round(snapshot.playback.positionMs)} ms`
@@ -74,19 +80,17 @@ function submitDemo(withAction: boolean): void {
 }
 
 function execute(effect: RuntimeEffect, dispatch: (event: AvatarEvent) => void): void {
-  if (effect.type === 'tts.synthesize') {
-    queueMicrotask(() => dispatch({ type: 'tts.segment-ready', generation: effect.generation, segmentId: effect.segment.id, sequence: effect.segment.sequence,
-      audio: { uri: 'demo:silence', durationMs: 1800, amplitude: Array.from({ length: 19 }, (_, index) => ({ atMs: index * 100, value: index % 3 === 0 ? 0.15 : 0.75 })) } }));
-  }
-  else if (effect.type === 'audio.play') {
+  if (ttsEffects.handle(effect, dispatch)) return;
+  if (effect.type === 'audio.play') {
     clearPlayback();
     const startedAt = performance.now();
+    const durationMs = effect.source.durationMs ?? 1_800;
     dispatch({ type: 'playback.started', generation: effect.generation, segmentId: effect.segmentId, positionMs: 0 });
     playbackTimer = setInterval(() => {
       const positionMs = performance.now() - startedAt;
-      if (positionMs >= 1800) {
+      if (positionMs >= durationMs) {
         clearPlayback();
-        dispatch({ type: 'playback.completed', generation: effect.generation, segmentId: effect.segmentId, positionMs: 1800 });
+        dispatch({ type: 'playback.completed', generation: effect.generation, segmentId: effect.segmentId, positionMs: durationMs });
       } else dispatch({ type: 'playback.progress', generation: effect.generation, segmentId: effect.segmentId, positionMs });
     }, 50);
   }
