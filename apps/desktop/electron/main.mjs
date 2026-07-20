@@ -86,7 +86,7 @@ function createAvatarWindow() {
       sandbox: true,
     },
   });
-  avatarWindow.setAlwaysOnTop(true, 'floating');
+  avatarWindow.setAlwaysOnTop(true);
   setMousePassthrough(true);
   avatarWindow.webContents.setWindowOpenHandler(() => ({ action: 'deny' }));
   avatarWindow.webContents.on('will-navigate', event => event.preventDefault());
@@ -105,6 +105,7 @@ function registerIpc() {
   ipcMain.handle(channels.ready, event => {
     requireAvatarSender(event);
     avatarWindow.showInactive();
+    avatarWindow.setAlwaysOnTop(true);
     publishBounds();
     return windowState();
   });
@@ -159,6 +160,7 @@ function restoreDefaultPosition() {
   const display = screen.getDisplayNearestPoint(screen.getCursorScreenPoint());
   const { width, height } = avatarWindow.getBounds();
   avatarWindow.setBounds(initialAvatarBounds(display.workArea, { width, height }));
+  publishBounds();
 }
 
 function publishBounds() {

@@ -413,6 +413,7 @@ function initializeDesktopInteraction(): void {
   void desktopShell.ready().then(state => {
     updateDesktopBounds(state.bounds);
     updateMousePassthrough(state.mousePassthrough);
+    document.body.dataset.desktopShell = 'ready';
   }).catch(error => {
     document.body.dataset.desktopShell = 'failed';
     console.error('Desktop shell initialization failed', error);
@@ -503,6 +504,7 @@ function endAvatarDrag(event: PointerEvent): void {
 function updateDesktopBounds(bounds: { x: number; y: number; width: number; height: number }): void {
   desktopBounds = bounds;
   document.body.dataset.windowBounds = `${bounds.x},${bounds.y},${bounds.width},${bounds.height}`;
+  fitModel();
 }
 
 function updateMousePassthrough(passthrough: boolean): void {
@@ -566,10 +568,13 @@ function sampleAmplitude(samples: Array<{ atMs: number; value: number }> | undef
 function coreModel(target: Live2DModel): CubismCoreModel { return target.internalModel.coreModel as CubismCoreModel; }
 function fitModel(): void {
   if (!model) return;
+  const layoutWidth = model.internalModel.width;
+  const layoutHeight = model.internalModel.height;
   const scale = desktopShell
-    ? Math.min(innerWidth / model.width * 0.92, innerHeight / model.height * 0.94)
-    : Math.min(innerWidth / model.width * 0.7, innerHeight / model.height * 0.82);
+    ? Math.min(innerWidth / layoutWidth * 0.92, innerHeight / layoutHeight * 0.94)
+    : Math.min(innerWidth / layoutWidth * 0.7, innerHeight / layoutHeight * 0.82);
   model.scale.set(scale);
   model.anchor.set(0.5, 0.5);
   model.position.set(innerWidth * (desktopShell ? 0.5 : 0.68), innerHeight * 0.5);
+  document.body.dataset.modelScale = scale.toFixed(6);
 }

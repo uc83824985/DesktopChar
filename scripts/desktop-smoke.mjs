@@ -16,6 +16,7 @@ try {
   });
   page.on('pageerror', error => errors.push(error.stack ?? error.message));
   await page.locator('body[data-ready="true"][data-shell="floating"]').waitFor({ timeout: 20_000 });
+  await page.locator('body[data-desktop-shell="ready"]').waitFor({ timeout: 2_000 });
   await page.locator('body[data-gaze-follow="enabled"]').waitFor({ timeout: 2_000 });
   await page.locator('body[data-pixel-selection]').waitFor({ timeout: 2_000 });
 
@@ -36,16 +37,33 @@ try {
     await api.endDrag();
   });
 
-  const moved = await page.evaluate(async () => ({
-    state: await window.desktopChar?.getWindowState(),
-    reportedBounds: document.body.dataset.windowBounds,
-    panelDisplay: getComputedStyle(document.querySelector('.panel')).display,
-    rootBackground: getComputedStyle(document.documentElement).backgroundColor,
-    bodyBackground: getComputedStyle(document.body).backgroundColor,
-    background: getComputedStyle(document.querySelector('main')).backgroundColor,
-    pixelReadback: document.body.dataset.pixelReadback,
-    pixelSelection: document.body.dataset.pixelSelection,
-  }));
+  const moved = await page.evaluate(async () => {
+    const body = document.body;
+    const canvas = document.querySelector('#avatar');
+    const modelScaleBeforeResize = body.dataset.modelScale;
+    window.dispatchEvent(new Event('resize'));
+    const modelScaleAfterResize = body.dataset.modelScale;
+    const selectionBeforeCursorCheck = body.dataset.pixelSelection;
+    body.dataset.pixelSelection = 'covered';
+    const selectedCursor = getComputedStyle(canvas).cursor;
+    body.dataset.pixelSelection = 'transparent';
+    const transparentCursor = getComputedStyle(canvas).cursor;
+    body.dataset.pixelSelection = selectionBeforeCursorCheck;
+    return {
+      state: await window.desktopChar?.getWindowState(),
+      reportedBounds: body.dataset.windowBounds,
+      panelDisplay: getComputedStyle(document.querySelector('.panel')).display,
+      rootBackground: getComputedStyle(document.documentElement).backgroundColor,
+      bodyBackground: getComputedStyle(body).backgroundColor,
+      background: getComputedStyle(document.querySelector('main')).backgroundColor,
+      pixelReadback: body.dataset.pixelReadback,
+      pixelSelection: body.dataset.pixelSelection,
+      modelScaleBeforeResize,
+      modelScaleAfterResize,
+      selectedCursor,
+      transparentCursor,
+    };
+  });
   const movedState = moved.state;
   if (!movedState || movedState.bounds.x !== initial.bounds.x - 36 || movedState.bounds.y !== initial.bounds.y - 28) {
     throw new Error(`Avatar bounds did not follow drag: ${JSON.stringify({ initial, movedState })}`);
@@ -64,6 +82,12 @@ try {
   }
   if (!['outside', 'pending', 'covered', 'transparent'].includes(moved.pixelSelection)) {
     throw new Error(`Pixel coverage state is not updating: ${JSON.stringify(moved)}`);
+  }
+  if (!moved.modelScaleBeforeResize || moved.modelScaleBeforeResize !== moved.modelScaleAfterResize) {
+    throw new Error(`Avatar scale is not stable across resize: ${JSON.stringify(moved)}`);
+  }
+  if (moved.selectedCursor !== 'grab' || moved.transparentCursor !== 'default') {
+    throw new Error(`Pixel selection does not change cursor feedback: ${JSON.stringify(moved)}`);
   }
   if (errors.length) throw new Error(`Desktop renderer errors:\n${errors.join('\n')}`);
   console.log(`Electron floating smoke passed (${movedState.bounds.width}x${movedState.bounds.height} at ${movedState.bounds.x},${movedState.bounds.y}; pixel readback ${moved.pixelReadback}).`);
