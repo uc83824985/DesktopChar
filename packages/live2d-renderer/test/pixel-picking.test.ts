@@ -320,6 +320,33 @@ test('WebGL2 backend issues a one-pixel PBO read and resolves it after a fence',
   assert.equal(calls.some(call => call.name === 'deleteBuffer'), true);
 });
 
+test('WebGL2 backend can force synchronous reads for transparent desktop framebuffers', () => {
+  const calls: Array<{ name: string; args: unknown[] }> = [];
+  const fakeGl = {
+    PIXEL_PACK_BUFFER: 1, PIXEL_PACK_BUFFER_BINDING: 2, STREAM_READ: 3,
+    RGBA: 4, UNSIGNED_BYTE: 5, SYNC_GPU_COMMANDS_COMPLETE: 6,
+    drawingBufferWidth: 100, drawingBufferHeight: 50,
+    isContextLost: () => false,
+    createBuffer: () => ({}),
+    getParameter: () => null,
+    bindBuffer: (...args: unknown[]) => calls.push({ name: 'bindBuffer', args }),
+    bufferData: (...args: unknown[]) => calls.push({ name: 'bufferData', args }),
+    readPixels: (...args: unknown[]) => {
+      calls.push({ name: 'readPixels', args });
+      const output = args[6];
+      if (output instanceof Uint8Array) output.set([10, 20, 30, 200]);
+    },
+    fenceSync: () => ({}), flush() {}, clientWaitSync: () => 0, getBufferSubData() {}, deleteSync() {}, deleteBuffer() {},
+  } as unknown as WebGL2RenderingContext;
+  const canvas = { getBoundingClientRect: () => ({ left: 0, top: 0, width: 100, height: 50 }) } as HTMLCanvasElement;
+  const backend = new WebGLPixelReadbackBackend(fakeGl, canvas, { mode: 'synchronous' });
+
+  assert.equal(backend.readbackMode, 'sync-readpixels');
+  assert.deepEqual(backend.issue({ x: 10, y: 10 }).poll(), { status: 'ready', rgba: [10, 20, 30, 200] });
+  assert.equal(calls.some(call => call.name === 'bindBuffer'), false);
+  assert.equal(calls.filter(call => call.name === 'readPixels').length, 1);
+});
+
 test('WebGL1 backend falls back to a synchronous four-byte read without changing coordinates', () => {
   const reads: unknown[][] = [];
   const fakeGl = {

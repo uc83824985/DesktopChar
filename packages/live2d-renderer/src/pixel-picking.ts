@@ -284,6 +284,8 @@ export interface WebGLPixelReadbackBackendOptions {
   prepareReadback?: () => void;
   /** Device-pixel radius around the cursor; one reads a 3x3 footprint. */
   sampleRadiusPixels?: number;
+  /** Force a direct readPixels call when default-framebuffer PBO snapshots are unreliable. */
+  mode?: 'auto' | 'synchronous';
 }
 
 /** Reads a tiny device-pixel footprint from the final WebGL framebuffer. */
@@ -303,7 +305,7 @@ export class WebGLPixelReadbackBackend implements PixelReadbackBackend {
     this.canvas = canvas;
     this.prepareReadback = options.prepareReadback;
     this.sampleRadiusPixels = boundedSampleRadius(options.sampleRadiusPixels ?? 0);
-    this.readbackMode = supportsAsyncPixelReadback(gl) ? 'async-pbo' : 'sync-readpixels';
+    this.readbackMode = options.mode !== 'synchronous' && supportsAsyncPixelReadback(gl) ? 'async-pbo' : 'sync-readpixels';
   }
 
   issue(point: PixelPoint): PixelReadbackTicket {

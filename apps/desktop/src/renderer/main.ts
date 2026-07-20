@@ -397,7 +397,14 @@ function initializeDesktopInteraction(): void {
   const readback = new WebGLPixelReadbackBackend(
     renderer.gl as WebGLRenderingContext | WebGL2RenderingContext,
     canvas,
-    { prepareReadback: () => renderer.framebuffer.bind(), sampleRadiusPixels: 1 },
+    {
+      prepareReadback: () => renderer.framebuffer.bind(),
+      sampleRadiusPixels: 1,
+      // Windows transparent default-framebuffer PBO reads can remain stale while
+      // the visible Live2D canvas animates. A 3x3 direct read is small and keeps
+      // stationary-pointer coverage tied to the frame actually shown.
+      mode: 'synchronous',
+    },
   );
   pixelPicker = new AsyncPixelCoveragePicker(readback, {
     alphaThreshold: 8 / 255,
