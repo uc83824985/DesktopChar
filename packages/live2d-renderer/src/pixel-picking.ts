@@ -57,7 +57,7 @@ export class PixelCoverageLatch {
   private value = false;
 
   constructor(options: PixelCoverageLatchOptions = {}) {
-    this.coveredSamplesToSelect = positiveInteger(options.coveredSamplesToSelect ?? 2, 'coveredSamplesToSelect');
+    this.coveredSamplesToSelect = positiveInteger(options.coveredSamplesToSelect ?? 1, 'coveredSamplesToSelect');
     this.transparentSamplesToClear = positiveInteger(options.transparentSamplesToClear ?? 3, 'transparentSamplesToClear');
   }
 
@@ -169,6 +169,7 @@ export class AsyncPixelCoveragePicker {
     if (this.disposed) return;
     ++this.frame;
     this.pollPending();
+    this.queueWatched(this.sequence);
     this.issueQueued();
   }
 
@@ -182,35 +183,37 @@ export class AsyncPixelCoveragePicker {
   }
 
   private pollPending(): void {
-    for (let index = this.pending.length - 1; index >= 0; index--) {
+    let currentSequenceBlocked = false;
+    for (let index = 0; index < this.pending.length;) {
       const read = this.pending[index]!;
+      const belongsToCurrentSequence = read.sequence === this.sequence;
+      if (belongsToCurrentSequence && currentSequenceBlocked) {
+        index++;
+        continue;
+      }
       const result = read.ticket.poll();
-      if (result.status === 'pending') continue;
+      if (result.status === 'pending') {
+        if (belongsToCurrentSequence) currentSequenceBlocked = true;
+        index++;
+        continue;
+      }
       read.ticket.dispose();
       this.pending.splice(index, 1);
       if (result.status === 'failed') {
-        if (read.sequence === this.sequence) {
-          this.options.onError?.(result.error);
-          this.queueWatched(read.sequence);
-        }
+        if (belongsToCurrentSequence) this.options.onError?.(result.error);
         continue;
       }
-      if (read.sequence !== this.sequence) continue;
+      if (!belongsToCurrentSequence) continue;
       const alpha = result.rgba[3] / 255;
-      try {
-        this.options.onResult({
-          sequence: read.sequence,
-          point: read.point,
-          rgba: result.rgba,
-          covered: result.rgba[3] > 0 && alpha >= this.options.alphaThreshold,
-          submittedFrame: read.submittedFrame,
-          resolvedFrame: this.frame,
-          latencyFrames: this.frame - read.submittedFrame,
-        });
-      }
-      finally {
-        this.queueWatched(read.sequence);
-      }
+      this.options.onResult({
+        sequence: read.sequence,
+        point: read.point,
+        rgba: result.rgba,
+        covered: result.rgba[3] > 0 && alpha >= this.options.alphaThreshold,
+        submittedFrame: read.submittedFrame,
+        resolvedFrame: this.frame,
+        latencyFrames: this.frame - read.submittedFrame,
+      });
     }
   }
 
@@ -224,7 +227,6 @@ export class AsyncPixelCoveragePicker {
     catch (cause) {
       if (read.sequence === this.sequence) {
         this.options.onError?.(asError(cause));
-        this.queueWatched(read.sequence);
       }
       return;
     }
@@ -246,14 +248,17 @@ export class AsyncPixelCoveragePicker {
 export interface WebGLPixelReadbackBackendOptions {
   /** Restore/bind the final composited framebuffer immediately before sampling. */
   prepareReadback?: () => void;
+  /** Device-pixel radius around the cursor; one reads a 3x3 footprint. */
+  sampleRadiusPixels?: number;
 }
 
-/** Reads exactly one device pixel from the final WebGL framebuffer. */
+/** Reads a tiny device-pixel footprint from the final WebGL framebuffer. */
 export class WebGLPixelReadbackBackend implements PixelReadbackBackend {
-  readonly readbackMode: 'async-pbo' | 'sync-one-pixel';
+  readonly readbackMode: 'async-pbo' | 'sync-readpixels';
   private readonly gl: WebGLRenderingContext | WebGL2RenderingContext;
   private readonly canvas: HTMLCanvasElement;
   private readonly prepareReadback: (() => void) | undefined;
+  private readonly sampleRadiusPixels: number;
 
   constructor(
     gl: WebGLRenderingContext | WebGL2RenderingContext,
@@ -263,7 +268,8 @@ export class WebGLPixelReadbackBackend implements PixelReadbackBackend {
     this.gl = gl;
     this.canvas = canvas;
     this.prepareReadback = options.prepareReadback;
-    this.readbackMode = supportsAsyncPixelReadback(gl) ? 'async-pbo' : 'sync-one-pixel';
+    this.sampleRadiusPixels = boundedSampleRadius(options.sampleRadiusPixels ?? 0);
+    this.readbackMode = supportsAsyncPixelReadback(gl) ? 'async-pbo' : 'sync-readpixels';
   }
 
   issue(point: PixelPoint): PixelReadbackTicket {
@@ -271,10 +277,16 @@ export class WebGLPixelReadbackBackend implements PixelReadbackBackend {
     const rect = this.canvas.getBoundingClientRect();
     const pixel = toFramebufferPixel(point, rect, this.gl.drawingBufferWidth, this.gl.drawingBufferHeight);
     if (!pixel) return readyTicket([0, 0, 0, 0]);
+    const region = centeredFramebufferRegion(
+      pixel,
+      this.sampleRadiusPixels,
+      this.gl.drawingBufferWidth,
+      this.gl.drawingBufferHeight,
+    );
     this.prepareReadback?.();
     return this.readbackMode === 'async-pbo' && supportsAsyncPixelReadback(this.gl)
-      ? issueAsyncReadback(this.gl, pixel.x, pixel.y)
-      : issueSynchronousReadback(this.gl, pixel.x, pixel.y);
+      ? issueAsyncReadback(this.gl, region)
+      : issueSynchronousReadback(this.gl, region);
   }
 }
 
@@ -303,29 +315,47 @@ export function toFramebufferPixel(
   };
 }
 
+interface FramebufferRegion extends PixelPoint {
+  width: number;
+  height: number;
+}
+
+function centeredFramebufferRegion(
+  pixel: PixelPoint,
+  radius: number,
+  framebufferWidth: number,
+  framebufferHeight: number,
+): FramebufferRegion {
+  const x = Math.max(0, pixel.x - radius);
+  const y = Math.max(0, pixel.y - radius);
+  const right = Math.min(framebufferWidth - 1, pixel.x + radius);
+  const top = Math.min(framebufferHeight - 1, pixel.y + radius);
+  return { x, y, width: right - x + 1, height: top - y + 1 };
+}
+
 function issueSynchronousReadback(
   gl: WebGLRenderingContext | WebGL2RenderingContext,
-  x: number,
-  y: number,
+  region: FramebufferRegion,
 ): PixelReadbackTicket {
-  const bytes = new Uint8Array(4);
+  const bytes = new Uint8Array(region.width * region.height * 4);
   try {
-    gl.readPixels(x, y, 1, 1, gl.RGBA, gl.UNSIGNED_BYTE, bytes);
-    return readyTicket(asRgba(bytes));
+    gl.readPixels(region.x, region.y, region.width, region.height, gl.RGBA, gl.UNSIGNED_BYTE, bytes);
+    return readyTicket(peakAlphaRgba(bytes));
   }
   catch (cause) {
     return failedTicket(asError(cause));
   }
 }
 
-function issueAsyncReadback(gl: WebGL2RenderingContext, x: number, y: number): PixelReadbackTicket {
+function issueAsyncReadback(gl: WebGL2RenderingContext, region: FramebufferRegion): PixelReadbackTicket {
   const buffer = gl.createBuffer();
   if (!buffer) return failedTicket(new Error('Unable to allocate pixel pack buffer'));
+  const byteLength = region.width * region.height * 4;
   const previous = gl.getParameter(gl.PIXEL_PACK_BUFFER_BINDING) as WebGLBuffer | null;
   try {
     gl.bindBuffer(gl.PIXEL_PACK_BUFFER, buffer);
-    gl.bufferData(gl.PIXEL_PACK_BUFFER, 4, gl.STREAM_READ);
-    gl.readPixels(x, y, 1, 1, gl.RGBA, gl.UNSIGNED_BYTE, 0);
+    gl.bufferData(gl.PIXEL_PACK_BUFFER, byteLength, gl.STREAM_READ);
+    gl.readPixels(region.x, region.y, region.width, region.height, gl.RGBA, gl.UNSIGNED_BYTE, 0);
   }
   catch (cause) {
     gl.bindBuffer(gl.PIXEL_PACK_BUFFER, previous);
@@ -339,11 +369,11 @@ function issueAsyncReadback(gl: WebGL2RenderingContext, x: number, y: number): P
     return failedTicket(new Error('Unable to create pixel readback fence'));
   }
   gl.flush();
-  return new WebGL2PixelReadbackTicket(gl, buffer, sync);
+  return new WebGL2PixelReadbackTicket(gl, buffer, sync, byteLength);
 }
 
 class WebGL2PixelReadbackTicket implements PixelReadbackTicket {
-  private readonly bytes = new Uint8Array(4);
+  private readonly bytes: Uint8Array;
   private disposed = false;
   private readonly gl: WebGL2RenderingContext;
   private readonly buffer: WebGLBuffer;
@@ -353,10 +383,12 @@ class WebGL2PixelReadbackTicket implements PixelReadbackTicket {
     gl: WebGL2RenderingContext,
     buffer: WebGLBuffer,
     sync: WebGLSync,
+    byteLength: number,
   ) {
     this.gl = gl;
     this.buffer = buffer;
     this.sync = sync;
+    this.bytes = new Uint8Array(byteLength);
   }
 
   poll(): PixelReadbackPoll {
@@ -369,7 +401,7 @@ class WebGL2PixelReadbackTicket implements PixelReadbackTicket {
     try {
       this.gl.bindBuffer(this.gl.PIXEL_PACK_BUFFER, this.buffer);
       this.gl.getBufferSubData(this.gl.PIXEL_PACK_BUFFER, 0, this.bytes);
-      return { status: 'ready', rgba: asRgba(this.bytes) };
+      return { status: 'ready', rgba: peakAlphaRgba(this.bytes) };
     }
     catch (cause) {
       return { status: 'failed', error: asError(cause) };
@@ -409,8 +441,12 @@ function supportsAsyncPixelReadback(
     && 'PIXEL_PACK_BUFFER' in gl;
 }
 
-function asRgba(bytes: Uint8Array): PixelRgba {
-  return [bytes[0]!, bytes[1]!, bytes[2]!, bytes[3]!];
+function peakAlphaRgba(bytes: Uint8Array): PixelRgba {
+  let peakOffset = 0;
+  for (let offset = 4; offset < bytes.length; offset += 4) {
+    if (bytes[offset + 3]! > bytes[peakOffset + 3]!) peakOffset = offset;
+  }
+  return [bytes[peakOffset]!, bytes[peakOffset + 1]!, bytes[peakOffset + 2]!, bytes[peakOffset + 3]!];
 }
 
 function validatePoint(point: PixelPoint): void {
@@ -427,5 +463,12 @@ function asError(cause: unknown): Error {
 
 function positiveInteger(value: number, label: string): number {
   if (!Number.isInteger(value) || value < 1) throw new RangeError(`${label} must be a positive integer`);
+  return value;
+}
+
+function boundedSampleRadius(value: number): number {
+  if (!Number.isInteger(value) || value < 0 || value > 8) {
+    throw new RangeError('sampleRadiusPixels must be an integer between 0 and 8');
+  }
   return value;
 }

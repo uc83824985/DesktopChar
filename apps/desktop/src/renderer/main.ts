@@ -86,7 +86,7 @@ let dragInteraction: {
   moved: boolean;
 } | undefined;
 const pendingToneTraces: ToneSyncTrace[] = [];
-const pixelCoverageLatch = new PixelCoverageLatch({ coveredSamplesToSelect: 2, transparentSamplesToClear: 3 });
+const pixelCoverageLatch = new PixelCoverageLatch({ coveredSamplesToSelect: 1, transparentSamplesToClear: 3 });
 const runtimeFrame = new RuntimeParameterFrame({
   aliases: { ParamMouthOpenY: 'ParamA', ParamMouthForm: 'ParamMouthUp' },
 });
@@ -382,10 +382,10 @@ function initializeDesktopInteraction(): void {
   const readback = new WebGLPixelReadbackBackend(
     renderer.gl as WebGLRenderingContext | WebGL2RenderingContext,
     canvas,
-    { prepareReadback: () => renderer.framebuffer.bind() },
+    { prepareReadback: () => renderer.framebuffer.bind(), sampleRadiusPixels: 1 },
   );
   pixelPicker = new AsyncPixelCoveragePicker(readback, {
-    alphaThreshold: 1 / 255,
+    alphaThreshold: 8 / 255,
     onResult: applyPixelSelection,
     onError: handlePixelSelectionError,
   });
@@ -533,6 +533,8 @@ function applyPixelSelection(result: PixelCoverageResult): void {
   document.body.dataset.pixelCoverageStreak = decision.coveredStreak.toString();
   document.body.dataset.pixelTransparentStreak = decision.transparentStreak.toString();
   document.body.dataset.pixelAlpha = result.rgba[3].toString();
+  document.body.dataset.pixelSubmittedFrame = result.submittedFrame.toString();
+  document.body.dataset.pixelResolvedFrame = result.resolvedFrame.toString();
   document.body.dataset.pixelReadbackFrames = result.latencyFrames.toString();
   if (!dragInteraction) updateMousePassthrough(!decision.selected);
 }

@@ -77,7 +77,7 @@ try {
     || moved.background !== 'rgba(0, 0, 0, 0)') {
     throw new Error(`Floating renderer is not transparent: ${JSON.stringify(moved)}`);
   }
-  if (!['async-pbo', 'sync-one-pixel'].includes(moved.pixelReadback)) {
+  if (!['async-pbo', 'sync-readpixels'].includes(moved.pixelReadback)) {
     throw new Error(`Pixel coverage adapter is not active: ${JSON.stringify(moved)}`);
   }
   if (!['outside', 'pending', 'covered', 'transparent'].includes(moved.pixelSelection)) {

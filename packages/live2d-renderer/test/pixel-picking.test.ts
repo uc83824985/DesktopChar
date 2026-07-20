@@ -96,6 +96,33 @@ test('watch continuously samples a stationary cursor as animated coverage change
   assert.deepEqual(backend.issued[2]!.point, { x: 7, y: 8 });
 });
 
+test('watch pipelines every render frame and publishes completed reads in submission order', () => {
+  const backend = new ControlledBackend();
+  const results: PixelCoverageResult[] = [];
+  const picker = new AsyncPixelCoveragePicker(backend, {
+    maximumPendingReads: 6,
+    onResult: result => results.push(result),
+  });
+
+  picker.watch({ x: 11, y: 12 });
+  picker.afterRender();
+  picker.afterRender();
+  picker.afterRender();
+  assert.equal(backend.issued.length, 3);
+
+  backend.issued[2]!.ticket.resolve([0, 0, 0, 255]);
+  picker.afterRender();
+  assert.equal(results.length, 0);
+  assert.equal(backend.issued.length, 4);
+
+  backend.issued[0]!.ticket.resolve([0, 0, 0, 0]);
+  backend.issued[1]!.ticket.resolve([0, 0, 0, 255]);
+  picker.afterRender();
+  assert.deepEqual(results.map(result => result.submittedFrame), [1, 2, 3]);
+  assert.deepEqual(results.map(result => result.covered), [false, true, true]);
+  assert.equal(backend.issued.length, 5);
+});
+
 test('watch moving inside an actor eventually publishes the newest point despite late older fences', () => {
   const backend = new ControlledBackend();
   const results: PixelCoverageResult[] = [];
@@ -129,6 +156,24 @@ test('coverage latch selects promptly but ignores isolated transparent animation
   });
   assert.equal(latch.update(false).selected, true);
   assert.equal(latch.update(true).selected, true);
+  assert.equal(latch.update(false).selected, true);
+  assert.equal(latch.update(false).selected, true);
+  assert.deepEqual(latch.update(false), {
+    selected: false,
+    changed: true,
+    coveredStreak: 0,
+    transparentStreak: 3,
+  });
+});
+
+test('default coverage latch enters immediately and clears after three transparent frames', () => {
+  const latch = new PixelCoverageLatch();
+  assert.deepEqual(latch.update(true), {
+    selected: true,
+    changed: true,
+    coveredStreak: 1,
+    transparentStreak: 0,
+  });
   assert.equal(latch.update(false).selected, true);
   assert.equal(latch.update(false).selected, true);
   assert.deepEqual(latch.update(false), {
@@ -231,7 +276,32 @@ test('WebGL1 backend falls back to a synchronous four-byte read without changing
   } as HTMLCanvasElement;
   const backend = new WebGLPixelReadbackBackend(fakeGl, canvas);
 
-  assert.equal(backend.readbackMode, 'sync-one-pixel');
+  assert.equal(backend.readbackMode, 'sync-readpixels');
   assert.deepEqual(backend.issue({ x: 12, y: 34 }).poll(), { status: 'ready', rgba: [9, 8, 7, 6] });
   assert.deepEqual(reads[0]?.slice(0, 6), [12, 15, 1, 1, 4, 5]);
+});
+
+test('readback footprint keeps the strongest alpha around a high-DPI cursor point', () => {
+  const reads: unknown[][] = [];
+  const fakeGl = {
+    RGBA: 4,
+    UNSIGNED_BYTE: 5,
+    drawingBufferWidth: 100,
+    drawingBufferHeight: 50,
+    isContextLost: () => false,
+    readPixels: (...args: unknown[]) => {
+      reads.push(args);
+      const output = args[6] as Uint8Array;
+      output.set([1, 2, 3, 7], 0);
+      output.set([9, 8, 7, 220], 16);
+    },
+  } as unknown as WebGLRenderingContext;
+  const canvas = {
+    getBoundingClientRect: () => ({ left: 0, top: 0, width: 100, height: 50 }),
+  } as HTMLCanvasElement;
+  const backend = new WebGLPixelReadbackBackend(fakeGl, canvas, { sampleRadiusPixels: 1 });
+
+  assert.deepEqual(backend.issue({ x: 12, y: 34 }).poll(), { status: 'ready', rgba: [9, 8, 7, 220] });
+  assert.deepEqual(reads[0]?.slice(0, 6), [11, 14, 3, 3, 4, 5]);
+  assert.equal((reads[0]?.[6] as Uint8Array).byteLength, 36);
 });
