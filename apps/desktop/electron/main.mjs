@@ -9,6 +9,7 @@ import {
   parseLoopbackDevUrl,
 } from './window-policy.mjs';
 import { createAgentHttpServer, parseAgentPort } from './agent-http-server.mjs';
+import { refreshChromiumCursorAtScreenPoint } from './cursor-refresh.mjs';
 
 const directory = path.dirname(fileURLToPath(import.meta.url));
 const rendererRoot = path.resolve(directory, '../dist');
@@ -36,6 +37,8 @@ let avatarWindow = null;
 let cursorTimer;
 let dragState = null;
 let mousePassthrough = true;
+let pendingCursorRefresh = false;
+let cursorRefreshTimer;
 const agentServer = createAgentHttpServer({
   host: '127.0.0.1',
   port: parseAgentPort(process.env.DESKTOP_CHAR_AGENT_PORT),
@@ -63,7 +66,11 @@ else {
 }
 
 app.on('window-all-closed', () => app.quit());
-app.on('before-quit', () => { if (cursorTimer) clearInterval(cursorTimer); void agentServer.close().catch(() => {}); });
+app.on('before-quit', () => {
+  if (cursorTimer) clearInterval(cursorTimer);
+  if (cursorRefreshTimer) clearTimeout(cursorRefreshTimer);
+  void agentServer.close().catch(() => {});
+});
 
 function registerRendererProtocol() {
   protocol.handle('desktop-char', request => {
@@ -106,6 +113,12 @@ function createAvatarWindow() {
   avatarWindow.setAlwaysOnTop(true);
   setMousePassthrough(true);
   avatarWindow.webContents.setWindowOpenHandler(() => ({ action: 'deny' }));
+  avatarWindow.webContents.on('cursor-changed', (_event, type) => {
+    if (!pendingCursorRefresh) return;
+    pendingCursorRefresh = false;
+    if (cursorRefreshTimer) clearTimeout(cursorRefreshTimer);
+    console.log(`[cursor-refresh] Chromium resolved cursor type: ${type}`);
+  });
   avatarWindow.webContents.on('will-navigate', event => event.preventDefault());
   avatarWindow.on('move', publishBounds);
   avatarWindow.on('resize', publishBounds);
@@ -173,8 +186,26 @@ function registerIpc() {
 }
 
 function setMousePassthrough(passthrough) {
+  const changed = mousePassthrough !== passthrough;
   mousePassthrough = passthrough;
   avatarWindow?.setIgnoreMouseEvents(passthrough, { forward: passthrough });
+  if (changed && passthrough && pendingCursorRefresh) {
+    pendingCursorRefresh = false;
+    if (cursorRefreshTimer) clearTimeout(cursorRefreshTimer);
+  }
+  if (changed && !passthrough && process.platform === 'win32') {
+    pendingCursorRefresh = true;
+    setImmediate(() => {
+      const refreshed = refreshChromiumCursorAtScreenPoint(avatarWindow, screen.getCursorScreenPoint());
+      console.log(`[cursor-refresh] requested=${refreshed} focused=${avatarWindow?.isFocused() ?? false}`);
+      if (!refreshed) pendingCursorRefresh = false;
+      else cursorRefreshTimer = setTimeout(() => {
+        if (!pendingCursorRefresh) return;
+        pendingCursorRefresh = false;
+        console.warn('[cursor-refresh] Chromium emitted no cursor-changed event after injected mouseMove');
+      }, 250);
+    });
+  }
 }
 
 function restoreDefaultPosition() {
