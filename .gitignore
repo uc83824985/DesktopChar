@@ -3,7 +3,6 @@ node_modules/
 dist/
 out/
 coverage/
-native/**/build/
 *.log
 
 # Local environment

@@ -68,6 +68,7 @@ config -> contracts
 - 原生 Live2D 每帧更新可以产生候选动作/物理值，但 Runtime 拥有的参数必须在 `beforeModelUpdate` 最终覆盖后才能提交给 Cubism。
 - UI 不读取 `_wavFileHandler`、`internalModel` 等第三方私有字段；这些兼容细节只能留在适配器内部。
 - Electron renderer 不直接修改窗口位置或全局状态；bounds 和鼠标穿透由 main 持有并通过白名单 IPC 更新。
+- Windows 专属且 Electron 未暴露的短调用由 main 内的 Koffi shell adapter 统一访问；领域包和 renderer 不导入 FFI，已有 Electron API 的能力不重复建立 Win32 状态所有权。
 - `scene-ui-dom` 是 Web 与 Electron 共享的 DOM adapter，只消费 Scene Frame、注册 presenter 并路由 UI 事件；Electron 的透明窗口、bounds 和 IPC 能力不得下沉到该包。
 - 现有网页诊断页面继续作为测试夹具存在；它只在共享 DOM Host 旁装配测试控件，不作为产品 UI 或 Runtime 状态所有者。
 - 参考仓库不进入构建、打包和运行时依赖。
