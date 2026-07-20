@@ -38,6 +38,9 @@ let cursorTimer;
 let dragState = null;
 let mousePassthrough = true;
 const nativeCursorRefresh = createNativeCursorRefresh();
+const cursorRefreshStrategy = process.env.DESKTOP_CHAR_CURSOR_REFRESH === 'zero-move'
+  ? 'zero-move'
+  : 'set-cursor';
 const agentServer = createAgentHttpServer({
   host: '127.0.0.1',
   port: parseAgentPort(process.env.DESKTOP_CHAR_AGENT_PORT),
@@ -183,7 +186,10 @@ function setMousePassthrough(passthrough) {
   avatarWindow?.setIgnoreMouseEvents(passthrough, { forward: passthrough });
   if (changed && process.platform === 'win32') {
     setImmediate(() => {
-      const result = nativeCursorRefresh.refresh({ interactive: !passthrough });
+      const result = nativeCursorRefresh.refresh({
+        interactive: !passthrough,
+        strategy: cursorRefreshStrategy,
+      });
       console.log(`[cursor-refresh] native available=${nativeCursorRefresh.available} passthrough=${passthrough}`, result);
     });
   }

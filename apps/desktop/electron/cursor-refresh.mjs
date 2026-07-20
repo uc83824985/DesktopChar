@@ -33,6 +33,7 @@ function createKoffiBindings(api) {
   return {
     address: api.address,
     getCursorPos: user32.func('int __stdcall GetCursorPos(_Out_ DesktopChar_POINT *pos)'),
+    setCursorPos: user32.func('int __stdcall SetCursorPos(int x, int y)'),
     windowFromPoint: user32.func('DesktopChar_HWND __stdcall WindowFromPoint(DesktopChar_POINT point)'),
     loadCursor: user32.func('DesktopChar_HWND __stdcall LoadCursorW(DesktopChar_HWND hInstance, uintptr_t cursorName)'),
     setCursor: user32.func('DesktopChar_HWND __stdcall SetCursor(DesktopChar_HWND cursor)'),
@@ -64,8 +65,12 @@ function refreshCursor(bindings, options = {}) {
     SMTO_ABORTIFHUNG | SMTO_BLOCK, 50, cursorResult,
   );
   const cursorHandled = Boolean(cursorResult[0]);
+  const zeroMoveRequested = options.strategy === 'zero-move';
+  const zeroMoveAccepted = zeroMoveRequested && bindings.setCursorPos
+    ? Boolean(bindings.setCursorPos(point.x, point.y))
+    : false;
   let cursorSet = false;
-  if (typeof options.interactive === 'boolean' && bindings.loadCursor && bindings.setCursor) {
+  if (!zeroMoveRequested && typeof options.interactive === 'boolean' && bindings.loadCursor && bindings.setCursor) {
     const cursorName = options.interactive ? IDC_HAND : IDC_ARROW;
     const cursor = bindings.loadCursor(null, BigInt(cursorName));
     if (cursor) {
@@ -76,6 +81,8 @@ function refreshCursor(bindings, options = {}) {
   }
   return {
     refreshed: Boolean(cursorSet || (cursorDelivered && cursorHandled)),
+    zeroMoveRequested,
+    zeroMoveAccepted,
     delivered: Boolean(cursorDelivered),
     handled: cursorHandled,
     cursorSet,
