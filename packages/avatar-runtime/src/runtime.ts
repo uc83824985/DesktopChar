@@ -3,6 +3,7 @@ import type {
   AudioSource,
   AvatarEvent,
   AvatarSnapshot,
+  GazeProfile,
   ParameterValue,
   PerformancePlan,
   PerformanceSegment,
@@ -13,6 +14,7 @@ import type { ParameterLayers } from './mixer.ts';
 import { ParameterMixer } from './mixer.ts';
 import { createInitialSnapshot, reduceAvatarSnapshot } from './reducer.ts';
 import { PerformanceTimeline } from './timeline.ts';
+import { DEFAULT_GAZE_PROFILE, mapGazeTarget, validateGazeProfile } from './gaze-profile.ts';
 
 export interface RuntimeEffectExecutor {
   execute(effect: RuntimeEffect, dispatch: (event: AvatarEvent) => void): void | Promise<void>;
@@ -23,6 +25,7 @@ export interface AvatarRuntimeOptions {
   mixer: ParameterMixer;
   effects: RuntimeEffectExecutor;
   policy?: RuntimePolicy;
+  gazeProfile?: GazeProfile;
 }
 
 export class AvatarRuntime {
@@ -37,9 +40,12 @@ export class AvatarRuntime {
   private disposed = false;
   private layers: ParameterLayers = emptyLayers();
   private readonly options: AvatarRuntimeOptions;
+  private readonly gazeProfile: GazeProfile;
 
   constructor(options: AvatarRuntimeOptions) {
     this.options = options;
+    this.gazeProfile = options.gazeProfile ?? DEFAULT_GAZE_PROFILE;
+    validateGazeProfile(this.gazeProfile);
   }
 
   getSnapshot(): AvatarSnapshot {
@@ -150,11 +156,11 @@ export class AvatarRuntime {
       && this.snapshot.gaze.active
       && this.snapshot.capabilities?.supportsGaze
     ) {
-      this.layers.gaze = gazeLayer(acceptedEvent.x, acceptedEvent.y);
+      this.layers.gaze = gazeLayer(acceptedEvent.x, acceptedEvent.y, this.gazeProfile);
       this.emitFrame();
     }
     else if (acceptedEvent.type === 'user.gaze-follow-enabled' && this.snapshot.capabilities?.supportsGaze) {
-      this.layers.gaze = gazeLayer(this.snapshot.gaze.x, this.snapshot.gaze.y);
+      this.layers.gaze = gazeLayer(this.snapshot.gaze.x, this.snapshot.gaze.y, this.gazeProfile);
       this.emitFrame();
     }
     else if (acceptedEvent.type === 'user.gaze-follow-disabled') {
@@ -172,7 +178,7 @@ export class AvatarRuntime {
     this.executeAll(transition.effects);
 
     if (acceptedEvent.type === 'renderer.ready' && this.snapshot.gaze.active) {
-      this.layers.gaze = gazeLayer(this.snapshot.gaze.x, this.snapshot.gaze.y);
+      this.layers.gaze = gazeLayer(this.snapshot.gaze.x, this.snapshot.gaze.y, this.gazeProfile);
       this.emitFrame();
     }
 
@@ -362,15 +368,10 @@ function neutralMouthLayer(): Record<string, ParameterValue> {
   return { ParamMouthOpenY: { value: 0, blend: 'overwrite' } };
 }
 
-function gazeLayer(x: number, y: number): Record<string, ParameterValue> {
-  const normalizedX = Math.max(-1, Math.min(1, x));
-  const normalizedY = Math.max(-1, Math.min(1, y));
-  return {
-    ParamAngleX: { value: normalizedX * 30, blend: 'overwrite' },
-    ParamAngleY: { value: normalizedY * 30, blend: 'overwrite' },
-    ParamEyeBallX: { value: normalizedX, blend: 'overwrite' },
-    ParamEyeBallY: { value: normalizedY, blend: 'overwrite' },
-  };
+function gazeLayer(x: number, y: number, profile: GazeProfile): Record<string, ParameterValue> {
+  return Object.fromEntries(Object.entries(mapGazeTarget(x, y, profile)).map(([parameter, value]) => (
+    [parameter, { value, blend: 'overwrite' as const }]
+  )));
 }
 
 function emotionLayer(emotion: string, intensity: number): Record<string, ParameterValue> {

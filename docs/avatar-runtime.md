@@ -307,6 +307,8 @@ Base
 
 其中 `ParamMouthOpenY` 默认由 Mouth 独占。眼部跟随是 Runtime 持有的持续模式：模型具备 gaze 能力时默认开启，`user.look-target-changed` 只更新目标；在显式收到 `user.gaze-follow-disabled` 前，提交计划、中断、说话和原生 motion 都不能清除 gaze 层，Gaze 最终拥有 `ParamAngleX/Y` 与 `ParamEyeBallX/Y`。关闭后才释放这些参数给原生 motion/idle。
 
+标准化目标通过角色级 `GazeProfile` 映射到模型参数。每个轴的正负方向可分别配置端点和指数曲线，并共享中心死区；这使 Runtime 保持模型无关，同时允许补偿角色资源的非对称响应。配置调参与资源修改的边界见 [角色视线校准工作流](gaze-calibration.md)。
+
 ## Live2D Renderer 职责
 
 Renderer 负责：
@@ -397,8 +399,9 @@ interrupt(...)
 - Timeline 只通过 playback position 推进，支持 pause、resume、cancel 和 cue 去重；
 - Mixer 按 Base、Expression、Gesture、Gaze、Mouth 顺序合成并过滤模型不支持的参数；
 - Gaze 是可显式进入/退出的持续模式，默认开启且跨 plan、speech、motion 和 interrupt 保持；
+- 角色级 GazeProfile 已支持四个头眼轴、正负方向独立端点/曲线以及中心死区；Mao 的纵向配置已按资源非对称表现校准；
 - Runtime 支持 TTS 并行就绪、sequence 顺序播放、单轨 Player、动作 cue、amplitude mouth、中断和错误回流；
 - Fake Effect Executor 覆盖了 TTS、Player 和 Renderer 的端到端行为。
 - Live2D 前台已使用真实 Mao 模型验证帧末参数应用、PCM 口型、原生 `TapBody` motion 和持续眼部跟随。
 
-尚未进入本轮范围的真实适配包括 Electron 主进程窗口能力和现有 TTS MCP 的实际连接。它们应继续通过现有端口接入，不能绕过 Runtime 修改状态。
+现有 TTS MCP 的实际连接仍未进入本轮范围。它应继续通过现有端口接入，不能绕过 Runtime 修改状态。

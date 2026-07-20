@@ -117,6 +117,24 @@ export interface GazeState {
   active: boolean;
 }
 
+export interface GazeDirectionProfile {
+  limit: number;
+  exponent: number;
+}
+
+export interface GazeAxisProfile {
+  negative: GazeDirectionProfile;
+  positive: GazeDirectionProfile;
+  deadZone: number;
+}
+
+export interface GazeProfile {
+  headX: GazeAxisProfile;
+  headY: GazeAxisProfile;
+  eyeX: GazeAxisProfile;
+  eyeY: GazeAxisProfile;
+}
+
 export interface AvatarSnapshot {
   state: AvatarState;
   generation: number;

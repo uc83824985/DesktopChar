@@ -1,4 +1,4 @@
-import type { AvatarAction, Emotion } from '../../contracts/src/index.ts';
+import type { AvatarAction, Emotion, GazeProfile } from '../../contracts/src/index.ts';
 
 export interface CharacterConfig {
   id: string;
@@ -8,7 +8,24 @@ export interface CharacterConfig {
   allowedActions: AvatarAction[];
   expressionCooldownMs: number;
   idleReturnDelayMs: number;
+  gazeProfile: GazeProfile;
 }
+
+export const MAO_CHARACTER_CONFIG: CharacterConfig = {
+  id: 'mao',
+  modelJsonUrl: 'models/Mao/Mao.model3.json',
+  defaultEmotion: 'neutral',
+  allowedEmotions: ['neutral', 'happy'],
+  allowedActions: ['nod'],
+  expressionCooldownMs: 500,
+  idleReturnDelayMs: 800,
+  gazeProfile: {
+    headX: { negative: { limit: -30, exponent: 1 }, positive: { limit: 30, exponent: 1 }, deadZone: 0.02 },
+    headY: { negative: { limit: -20, exponent: 1 }, positive: { limit: 30, exponent: 0.9 }, deadZone: 0.02 },
+    eyeX: { negative: { limit: -1, exponent: 0.9 }, positive: { limit: 1, exponent: 0.9 }, deadZone: 0.01 },
+    eyeY: { negative: { limit: -1, exponent: 0.9 }, positive: { limit: 1, exponent: 0.85 }, deadZone: 0.01 },
+  },
+};
 
 export interface TtsConfig {
   mode: 'mock' | 'mcp';

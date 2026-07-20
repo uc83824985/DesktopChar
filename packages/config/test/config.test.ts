@@ -1,6 +1,11 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
-import { loadTtsConfig } from '../src/index.ts';
+import { loadTtsConfig, MAO_CHARACTER_CONFIG } from '../src/index.ts';
+
+test('Mao character profile compensates its stronger authored downward head deformation', () => {
+  assert.equal(MAO_CHARACTER_CONFIG.gazeProfile.headY.negative.limit, -20);
+  assert.equal(MAO_CHARACTER_CONFIG.gazeProfile.headY.positive.limit, 30);
+});
 
 test('loads offline mock defaults and MCP binding variables', () => {
   assert.equal(loadTtsConfig({}).mode, 'mock');
