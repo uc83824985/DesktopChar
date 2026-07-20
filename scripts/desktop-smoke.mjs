@@ -56,6 +56,7 @@ try {
       modelScaleBeforeResize,
       modelScaleAfterResize,
       cursorIntent: body.dataset.cursorIntent,
+      computedCursor: body.dataset.computedCursor,
     };
   });
   const movedState = moved.state;
@@ -80,7 +81,8 @@ try {
   if (!moved.modelScaleBeforeResize || moved.modelScaleBeforeResize !== moved.modelScaleAfterResize) {
     throw new Error(`Avatar scale is not stable across resize: ${JSON.stringify(moved)}`);
   }
-  if (moved.cursorIntent !== 'default' || movedState.pointerPresentation?.cursor !== 'default') {
+  if (moved.cursorIntent !== 'default' || moved.computedCursor !== 'default'
+    || movedState.pointerPresentation?.cursor !== 'default') {
     throw new Error(`Pointer presentation is not synchronized: ${JSON.stringify(moved)}`);
   }
   if (errors.length) throw new Error(`Desktop renderer errors:\n${errors.join('\n')}`);

@@ -121,4 +121,4 @@ npm run test:desktop-smoke
 
 桌面交互以 `{ passthrough, cursor }` 作为不可拆分的 `PointerPresentation` 提交。Coverage、拖动和退出只调用 renderer 内同一个控制入口；preload 不再暴露独立的 `setMousePassthrough`。Electron main 校验组合后，同时应用窗口穿透和 Windows 光标刷新。CSS backend 与 Koffi backend 只消费相同的 `default | pointer | move` 语义，不各自判断像素选择状态。
 
-Windows 静止鼠标切换使用 `SetCursor` 立即应用同一语义对应的系统资源；不再使用零位移 `SetCursorPos`。后者是否产生新鼠标消息依赖焦点和历史输入状态，不能作为刷新协议。当前 `pointer` 在 CSS 与 Win32 都对应系统链接手形，`move` 对应系统移动光标，从而避免真实移动与静止动画覆盖显示两种不同资源。
+Windows 静止鼠标切换使用 `SetCursor` 应用同一语义对应的系统资源；刷新延后一个渲染帧，并且队列中只保留最新的 `PointerPresentation`，避免 Chromium 在窗口穿透切换提交后再次用旧 CSS cursor 覆盖结果。不再使用零位移 `SetCursorPos`，因为它是否产生新鼠标消息依赖焦点和历史输入状态，不能作为刷新协议。当前 `pointer` 在 CSS 与 Win32 都对应系统链接手形，`move` 对应系统移动光标，从而避免真实移动与静止动画覆盖显示两种不同资源。

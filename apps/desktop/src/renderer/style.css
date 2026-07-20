@@ -23,6 +23,3 @@ button:disabled { opacity: .38; cursor: wait; }
 @media (max-width: 720px) { .panel { top: auto; right: 18px; bottom: 18px; left: 18px; width: auto; transform: none; padding: 20px; } h1 { font-size: 36px; } }
 html[data-shell="floating"], body[data-shell="floating"], body[data-shell="floating"] main { background: transparent; }
 body[data-shell="floating"] .panel { display: none; }
-body[data-shell="floating"][data-cursor-intent="default"] #avatar { cursor: default; }
-body[data-shell="floating"][data-cursor-intent="pointer"] #avatar { cursor: pointer; }
-body[data-shell="floating"][data-cursor-intent="move"] #avatar { cursor: move; }

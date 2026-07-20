@@ -542,6 +542,8 @@ function updatePointerPresentation(presentation: PointerPresentation, publish = 
   pointerPresentation = { ...presentation };
   document.body.dataset.pointerMode = presentation.passthrough ? 'passthrough' : 'interactive';
   document.body.dataset.cursorIntent = presentation.cursor;
+  canvas.style.setProperty('cursor', cssCursor(presentation.cursor), 'important');
+  document.body.dataset.computedCursor = getComputedStyle(canvas).cursor;
   if (publish) publishPointerPresentation(presentation);
 }
 
@@ -557,6 +559,10 @@ function selectionPresentation(): PointerPresentation {
 
 function samePointerPresentation(a: PointerPresentation | undefined, b: PointerPresentation): boolean {
   return a?.passthrough === b.passthrough && a.cursor === b.cursor;
+}
+
+function cssCursor(intent: PointerPresentation['cursor']): string {
+  return intent === 'pointer' ? 'pointer' : intent === 'move' ? 'move' : 'default';
 }
 
 function advancePixelPicking(): void {

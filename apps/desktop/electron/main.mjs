@@ -35,6 +35,7 @@ protocol.registerSchemesAsPrivileged([{
 
 let avatarWindow = null;
 let cursorTimer;
+let cursorRefreshTimer;
 let dragState = null;
 let pointerPresentation = { passthrough: true, cursor: 'default' };
 const nativeCursorRefresh = createNativeCursorRefresh();
@@ -67,6 +68,7 @@ else {
 app.on('window-all-closed', () => app.quit());
 app.on('before-quit', () => {
   if (cursorTimer) clearInterval(cursorTimer);
+  if (cursorRefreshTimer) clearTimeout(cursorRefreshTimer);
   void agentServer.close().catch(() => {});
 });
 
@@ -183,10 +185,13 @@ function applyPointerPresentation(presentation) {
   pointerPresentation = { ...presentation };
   avatarWindow?.setIgnoreMouseEvents(presentation.passthrough, { forward: presentation.passthrough });
   if (changed && process.platform === 'win32') {
-    setImmediate(() => {
-      const result = nativeCursorRefresh.refresh({ cursor: presentation.cursor });
-      console.log('[cursor-refresh]', { presentation, available: nativeCursorRefresh.available, ...result });
-    });
+    if (cursorRefreshTimer) clearTimeout(cursorRefreshTimer);
+    cursorRefreshTimer = setTimeout(() => {
+      cursorRefreshTimer = undefined;
+      const current = { ...pointerPresentation };
+      const result = nativeCursorRefresh.refresh({ cursor: current.cursor });
+      console.log('[cursor-refresh]', { presentation: current, available: nativeCursorRefresh.available, ...result });
+    }, 16);
   }
 }
 
