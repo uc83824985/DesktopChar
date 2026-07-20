@@ -15,6 +15,7 @@ export interface DesktopWindowState {
   mousePassthrough: boolean;
   pointerPresentation: PointerPresentation;
   alwaysOnTop: boolean;
+  tts: DesktopTtsConfig;
 }
 
 export type DesktopCursorIntent = 'default' | 'pointer' | 'move';
@@ -34,6 +35,8 @@ export interface DesktopCharApi {
   setPointerPresentation(presentation: PointerPresentation): void;
   showContextMenu(): void;
   publishAgentState(state: AgentRuntimeState): void;
+  listTtsMcpTools(): Promise<McpToolDescriptor[]>;
+  callTtsMcpTool(name: string, args: Record<string, unknown>, options?: { timeoutMs?: number }): Promise<McpCallToolResult>;
   onAgentCommand(callback: (command: AgentCommand) => void): () => void;
   onBoundsChanged(callback: (bounds: DesktopRectangle) => void): () => void;
   onCursorPoint(callback: (point: DesktopPoint) => void): () => void;
@@ -47,6 +50,21 @@ export interface AgentRuntimeState {
   ready: boolean;
   snapshot: import('../../../../packages/contracts/src/index.ts').AvatarSnapshot | null;
 }
+
+export interface DesktopTtsConfig {
+  mode: 'mock' | 'mcp';
+  mcpUrl: string;
+  mcpTool: string;
+  mcpCancelTool: string;
+  timeoutMs: number;
+  requestIdArgument: string;
+  textArgument: string;
+  format: import('../../../../packages/tts-mcp-adapter/src/index.ts').TtsAudioFormat;
+  voice?: string;
+}
+
+export type McpToolDescriptor = import('../../../../packages/tts-mcp-adapter/src/index.ts').McpToolDescriptor;
+export type McpCallToolResult = import('../../../../packages/tts-mcp-adapter/src/index.ts').McpCallToolResult;
 
 declare global {
   interface Window {

@@ -1,4 +1,6 @@
 import { app, BrowserWindow, ipcMain, Menu, net, protocol, screen } from 'electron';
+import { Client } from '@modelcontextprotocol/sdk/client/index.js';
+import { StreamableHTTPClientTransport } from '@modelcontextprotocol/sdk/client/streamableHttp.js';
 import path from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 import {
@@ -14,6 +16,8 @@ import { createNativeCursorRefresh } from './cursor-refresh.mjs';
 const directory = path.dirname(fileURLToPath(import.meta.url));
 const rendererRoot = path.resolve(directory, '../dist');
 const devUrl = parseLoopbackDevUrl(process.env.DESKTOP_CHAR_DEV_URL);
+const rawConsoleLog = console.log.bind(console);
+const rawConsoleError = console.error.bind(console);
 const channels = {
   boundsChanged: 'avatar-window:bounds-changed',
   beginDrag: 'avatar-window:begin-drag',
@@ -26,7 +30,28 @@ const channels = {
   showContextMenu: 'avatar-window:show-context-menu',
   agentCommand: 'agent-http:command',
   agentState: 'agent-http:state',
+  mcpListTools: 'tts-mcp:list-tools',
+  mcpCallTool: 'tts-mcp:call-tool',
 };
+
+function safeLog(...args) {
+  try { rawConsoleLog(...args); }
+  catch (error) {
+    if (!isBrokenOutputPipe(error)) throw error;
+  }
+}
+
+function safeError(...args) {
+  try { rawConsoleError(...args); }
+  catch (error) {
+    if (!isBrokenOutputPipe(error)) throw error;
+  }
+}
+
+function isBrokenOutputPipe(error) {
+  return error && typeof error === 'object'
+    && (error.code === 'EPIPE' || error.code === 'ERR_STREAM_DESTROYED');
+}
 
 protocol.registerSchemesAsPrivileged([{
   scheme: 'desktop-char',
@@ -38,16 +63,19 @@ let cursorTimer;
 let cursorRefreshTimer;
 let dragState = null;
 let pointerPresentation = { passthrough: true, cursor: 'default' };
+let mcpSession = null;
 const nativeCursorRefresh = createNativeCursorRefresh();
+const ttsMode = process.env.DESKTOP_CHAR_TTS_MODE ?? 'mock';
+const ttsMcpUrl = process.env.DESKTOP_CHAR_TTS_MCP_URL ?? 'http://127.0.0.1:8766/mcp';
 const agentServer = createAgentHttpServer({
   host: '127.0.0.1',
   port: parseAgentPort(process.env.DESKTOP_CHAR_AGENT_PORT),
   ttsContext: {
-    requestedMode: process.env.DESKTOP_CHAR_TTS_MODE ?? 'mock',
-    activeMode: 'mock',
+    requestedMode: ttsMode,
+    activeMode: ttsMode === 'mcp' ? 'mcp' : 'mock',
     mcpTool: process.env.DESKTOP_CHAR_TTS_MCP_TOOL ?? 'tts_open_stream',
     mcpCancelTool: process.env.DESKTOP_CHAR_TTS_MCP_CANCEL_TOOL ?? 'tts_cancel_synthesis',
-    transport: process.env.DESKTOP_CHAR_TTS_MODE === 'mcp' ? 'McpClientPort injection required' : 'mock',
+    transport: ttsMode === 'mcp' ? ttsMcpUrl : 'mock',
   },
   onCommand(command) { avatarWindow?.webContents.send(channels.agentCommand, command); },
 });
@@ -61,7 +89,7 @@ else {
     registerIpc();
     createAvatarWindow();
     const address = await agentServer.listen();
-    console.log(`[agent-http] listening on http://127.0.0.1:${address.port}`);
+    safeLog(`[agent-http] listening on http://127.0.0.1:${address.port}`);
   });
 }
 
@@ -70,6 +98,7 @@ app.on('before-quit', () => {
   if (cursorTimer) clearInterval(cursorTimer);
   if (cursorRefreshTimer) clearTimeout(cursorRefreshTimer);
   void agentServer.close().catch(() => {});
+  void closeMcpSession().catch(() => {});
 });
 
 function registerRendererProtocol() {
@@ -114,6 +143,15 @@ function createAvatarWindow() {
   applyPointerPresentation({ passthrough: true, cursor: 'default' });
   avatarWindow.webContents.setWindowOpenHandler(() => ({ action: 'deny' }));
   avatarWindow.webContents.on('will-navigate', event => event.preventDefault());
+  avatarWindow.webContents.on('console-message', (_event, level, message, line, sourceId) => {
+    safeLog('[renderer-console]', { level, message, line, sourceId });
+  });
+  avatarWindow.webContents.on('did-fail-load', (_event, errorCode, errorDescription, validatedURL) => {
+    safeError('[renderer-load-failed]', { errorCode, errorDescription, validatedURL });
+  });
+  avatarWindow.webContents.on('render-process-gone', (_event, details) => {
+    safeError('[renderer-process-gone]', details);
+  });
   avatarWindow.on('move', publishBounds);
   avatarWindow.on('resize', publishBounds);
   avatarWindow.on('closed', () => { avatarWindow = null; });
@@ -177,6 +215,41 @@ function registerIpc() {
     if (!isAgentState(state)) return;
     agentServer.updateState(state);
   });
+  ipcMain.handle(channels.mcpListTools, async event => {
+    requireAvatarSender(event);
+    if (ttsMode !== 'mcp') throw new Error('TTS MCP mode is not enabled');
+    const session = await getMcpSession();
+    const result = await session.client.listTools(undefined, { timeout: 10_000 });
+    return result.tools.map(tool => ({
+      name: tool.name,
+      description: tool.description,
+      inputSchema: tool.inputSchema,
+      outputSchema: tool.outputSchema,
+    }));
+  });
+  ipcMain.handle(channels.mcpCallTool, async (event, name, args, options) => {
+    requireAvatarSender(event);
+    if (ttsMode !== 'mcp') throw new Error('TTS MCP mode is not enabled');
+    if (typeof name !== 'string' || !name.trim() || !isPlainRecord(args)) throw new TypeError('Invalid MCP tool call');
+    const session = await getMcpSession();
+    return session.client.callTool({ name, arguments: args }, undefined, { timeout: options?.timeoutMs ?? 30_000 });
+  });
+}
+
+async function getMcpSession() {
+  if (mcpSession) return mcpSession;
+  const transport = new StreamableHTTPClientTransport(new URL(ttsMcpUrl));
+  const client = new Client({ name: 'desktop-char', version: app.getVersion() });
+  await client.connect(transport);
+  mcpSession = { client, transport };
+  return mcpSession;
+}
+
+async function closeMcpSession() {
+  const session = mcpSession;
+  mcpSession = null;
+  if (!session) return;
+  await session.client.close();
 }
 
 function applyPointerPresentation(presentation) {
@@ -200,7 +273,7 @@ function applyPointerPresentation(presentation) {
         refreshFrame: enteredInteractive && !current.passthrough,
         nudgeCursor: enteredInteractive && !current.passthrough && !focused,
       });
-      console.log('[cursor-refresh]', {
+      safeLog('[cursor-refresh]', {
         presentation: current,
         available: nativeCursorRefresh.available,
         focused,
@@ -242,6 +315,17 @@ function windowState() {
     mousePassthrough: pointerPresentation.passthrough,
     pointerPresentation: { ...pointerPresentation },
     alwaysOnTop: avatarWindow.isAlwaysOnTop(),
+    tts: {
+      mode: ttsMode,
+      mcpUrl: ttsMcpUrl,
+      mcpTool: process.env.DESKTOP_CHAR_TTS_MCP_TOOL ?? 'tts_open_stream',
+      mcpCancelTool: process.env.DESKTOP_CHAR_TTS_MCP_CANCEL_TOOL ?? 'tts_cancel_synthesis',
+      timeoutMs: Number(process.env.DESKTOP_CHAR_TTS_TIMEOUT_MS ?? 30_000),
+      requestIdArgument: process.env.DESKTOP_CHAR_TTS_REQUEST_ID_ARGUMENT ?? 'request_id',
+      textArgument: process.env.DESKTOP_CHAR_TTS_TEXT_ARGUMENT ?? 'text',
+      format: process.env.DESKTOP_CHAR_TTS_FORMAT ?? 'pcm_s16le',
+      voice: process.env.DESKTOP_CHAR_TTS_VOICE,
+    },
   };
 }
 
@@ -252,4 +336,8 @@ function requireAvatarSender(event) {
 function isAgentState(value) {
   return value && typeof value === 'object' && typeof value.ready === 'boolean'
     && (value.snapshot === null || (typeof value.snapshot === 'object' && typeof value.snapshot.state === 'string'));
+}
+
+function isPlainRecord(value) {
+  return value && typeof value === 'object' && !Array.isArray(value);
 }

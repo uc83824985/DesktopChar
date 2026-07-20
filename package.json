@@ -6,6 +6,7 @@
   "scripts": {
     "start": "vite apps/desktop --config apps/desktop/vite.config.ts --open",
     "desktop": "npm run build && electron apps/desktop/electron/main.mjs",
+    "desktop:mcp": "powershell -NoProfile -ExecutionPolicy Bypass -File scripts/desktop-mcp-tts.ps1",
     "dev": "vite apps/desktop --config apps/desktop/vite.config.ts",
     "build": "vite build apps/desktop --config apps/desktop/vite.config.ts",
     "preview": "vite preview apps/desktop --config apps/desktop/vite.config.ts --open",
@@ -26,6 +27,7 @@
     "vite": "^8.1.5"
   },
   "dependencies": {
+    "@modelcontextprotocol/sdk": "^1.29.0",
     "@pixi/interaction": "^6.5.10",
     "@pixi/unsafe-eval": "^6.5.10",
     "koffi": "^3.1.1",

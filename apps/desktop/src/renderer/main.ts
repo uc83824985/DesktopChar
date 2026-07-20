@@ -24,10 +24,10 @@ import {
   WebGLPixelReadbackBackend,
 } from '../../../../packages/live2d-renderer/src/index.ts';
 import type { PixelCoverageResult } from '../../../../packages/live2d-renderer/src/index.ts';
-import type { TtsAdapter } from '../../../../packages/tts-mcp-adapter/src/index.ts';
-import { JsonConsoleTtsLogger, MockTtsAdapter, TtsRuntimeEffectHandler } from '../../../../packages/tts-mcp-adapter/src/index.ts';
+import type { McpCallOptions, McpClientPort, TtsAdapter } from '../../../../packages/tts-mcp-adapter/src/index.ts';
+import { JsonConsoleTtsLogger, McpTtsAdapter, MockTtsAdapter, TtsRuntimeEffectHandler } from '../../../../packages/tts-mcp-adapter/src/index.ts';
 import './style.css';
-import type { PointerPresentation } from '../preload/desktop-api.d.ts';
+import type { DesktopTtsConfig, PointerPresentation } from '../preload/desktop-api.d.ts';
 
 installCspShaderCompiler({ ShaderSystem });
 Live2DModel.registerTicker(Ticker);
@@ -92,16 +92,8 @@ const pixelCoverageLatch = new PixelCoverageLatch({ coveredSamplesToSelect: 1, t
 const runtimeFrame = new RuntimeParameterFrame({
   aliases: { ParamMouthOpenY: 'ParamA', ParamMouthForm: 'ParamMouthUp' },
 });
-const mockTtsAdapter = new MockTtsAdapter({ ...DEFAULT_TTS_CONFIG.mock, logger: new JsonConsoleTtsLogger() });
-const ttsAdapter: TtsAdapter = {
-  prepare: request => request.text === KNOWN_TONE_SPEECH_TEXT
-    ? Promise.resolve(createKnownToneAudioSource(request.requestId))
-    : mockTtsAdapter.prepare(request),
-  cancel: requestId => mockTtsAdapter.cancel(requestId),
-  capabilities: () => mockTtsAdapter.capabilities(),
-  health: () => mockTtsAdapter.health(),
-};
-const ttsEffects = new TtsRuntimeEffectHandler(ttsAdapter);
+let ttsEffects: TtsRuntimeEffectHandler | undefined;
+let audioPlayer: WebAudioPcmStreamPlayer | undefined;
 const tonePlayer = new WebAudioPcmStreamPlayer({
   initialBufferMs: 100, levelIntervalMs: 25, levelWindowMs: 20,
   openStream(source, signal) {
@@ -109,8 +101,11 @@ const tonePlayer = new WebAudioPcmStreamPlayer({
     return createKnownTonePcmStream({ chunkDurationMs: 20, chunkDelayMs: 1, signal });
   },
 });
+tonePlayer.subscribe(handleTonePlaybackEvent);
 document.body.dataset.toneAcceptance = 'idle';
-tonePlayer.subscribe(event => {
+
+function handleTonePlaybackEvent(event: AvatarEvent): void {
+  if (!isPlaybackEvent(event)) return;
   const active = toneAcceptance?.segmentId === event.segmentId ? toneAcceptance : null;
   if (active && event.type === 'playback.level') {
     active.playerLevels.push({ atMs: event.positionMs, value: event.value });
@@ -128,9 +123,19 @@ tonePlayer.subscribe(event => {
     afterRenderedFrames(2, () => finishToneAcceptance(active));
   }
   else if (active && event.type === 'playback.interrupted') failToneAcceptance('acceptance playback was interrupted');
-});
+}
 
 try {
+  const shellState = desktopShell ? await desktopShell.ready() : undefined;
+  const ttsAdapter = createTtsAdapter(shellState?.tts);
+  ttsEffects = new TtsRuntimeEffectHandler(ttsAdapter, {
+    format: shellState?.tts.format ?? DEFAULT_TTS_CONFIG.mcp.format,
+    ...(shellState?.tts.voice ? { voice: shellState.tts.voice } : {}),
+  });
+  audioPlayer = createRuntimeAudioPlayer(event => runtime?.dispatch(event));
+  document.body.dataset.ttsMode = shellState?.tts.mode ?? 'mock';
+  document.body.dataset.ttsHealth = 'checking';
+
   model = await Live2DModel.from(MAO_CHARACTER_CONFIG.modelJsonUrl, { autoInteract: false });
   model.internalModel.on('beforeModelUpdate', applyRuntimeFrame);
   app.stage.addChild(model);
@@ -156,8 +161,6 @@ try {
     ],
     supportsMouthForm: true, supportsGaze: true, supportsHitTest: true,
   } });
-  const ttsHealth = await ttsAdapter.health();
-  document.body.dataset.ttsHealth = ttsHealth.status;
   runtime.subscribe(snapshot => {
     desktopShell?.publishAgentState({ ready: true, snapshot });
     document.body.dataset.runtimeState = snapshot.state;
@@ -172,6 +175,12 @@ try {
       ? `Runtime: speaking · ${Math.round(snapshot.playback.positionMs)} ms`
       : 'Runtime 已就绪 · UI 仅发送事件，状态由 Runtime 持有';
   });
+  void ttsAdapter.health().then(report => {
+    document.body.dataset.ttsHealth = report.status;
+  }).catch(error => {
+    document.body.dataset.ttsHealth = 'unavailable';
+    console.error('[tts] health check failed', error);
+  });
 
   desktopShell?.onAgentCommand(command => {
     if (!runtime) return;
@@ -185,7 +194,7 @@ try {
     }
   });
 
-  if (desktopShell) initializeDesktopInteraction();
+  if (desktopShell) initializeDesktopInteraction(shellState);
   else window.addEventListener('pointermove', event => runtime?.dispatch({
       type: 'user.look-target-changed',
       x: event.clientX / innerWidth * 2 - 1,
@@ -202,7 +211,22 @@ try {
   document.body.dataset.ready = 'true';
 }
 catch (error) {
-  desktopShell?.publishAgentState({ ready: false, snapshot: null });
+  const failedSnapshot = {
+    state: 'idle' as const,
+    generation: 0,
+    planId: null,
+    segmentId: null,
+    sequence: null,
+    playback: { status: 'idle' as const, positionMs: 0 },
+    emotion: { current: 'neutral' as const, intensity: 0 },
+    gesture: { actionId: null, action: null, queueLength: 0 },
+    gaze: { x: 0, y: 0, active: false },
+    interrupted: false,
+    capabilities: null,
+    lastError: { code: 'renderer-startup-failed', message: error instanceof Error ? error.message : String(error), recoverable: false },
+  };
+  desktopShell?.publishAgentState({ ready: false, snapshot: failedSnapshot });
+  void desktopShell?.ready().catch(() => undefined);
   status.textContent = `加载失败：${error instanceof Error ? error.message : String(error)}`;
   document.body.dataset.ready = 'false';
   console.error(error);
@@ -240,7 +264,7 @@ function submitDemo(withAction: boolean): void {
 }
 
 function execute(effect: RuntimeEffect, dispatch: (event: AvatarEvent) => void): void {
-  if (ttsEffects.handle(effect, dispatch)) return;
+  if (ttsEffects?.handle(effect, dispatch)) return;
   if (effect.type === 'audio.play') {
     if (effect.source.uri === KNOWN_TONE_STREAM_URI) {
       return void tonePlayer.play(effect.generation, effect.segmentId, effect.source).catch(error => {
@@ -248,6 +272,14 @@ function execute(effect: RuntimeEffect, dispatch: (event: AvatarEvent) => void):
         dispatch({
           type: 'playback.failed', generation: effect.generation, segmentId: effect.segmentId,
           error: { code: 'known-tone-playback-failed', message: error instanceof Error ? error.message : String(error), recoverable: true },
+        });
+      });
+    }
+    if (effect.source.delivery === 'stream' && effect.source.codec === 'pcm_s16le') {
+      return void audioPlayer?.play(effect.generation, effect.segmentId, effect.source).catch(error => {
+        dispatch({
+          type: 'playback.failed', generation: effect.generation, segmentId: effect.segmentId,
+          error: { code: 'pcm-playback-failed', message: error instanceof Error ? error.message : String(error), recoverable: true },
         });
       });
     }
@@ -270,12 +302,19 @@ function execute(effect: RuntimeEffect, dispatch: (event: AvatarEvent) => void):
       }
     }, 50);
   }
-  else if (effect.type === 'audio.pause') tonePlayer.pause(effect.generation);
-  else if (effect.type === 'audio.resume') tonePlayer.resume(effect.generation);
+  else if (effect.type === 'audio.pause') {
+    tonePlayer.pause(effect.generation);
+    audioPlayer?.pause(effect.generation);
+  }
+  else if (effect.type === 'audio.resume') {
+    tonePlayer.resume(effect.generation);
+    audioPlayer?.resume(effect.generation);
+  }
   else if (effect.type === 'audio.stop') {
     clearPlayback();
     stopCurrentMotion('interrupted');
     void tonePlayer.stop(effect.generation);
+    void audioPlayer?.stop(effect.generation);
   }
   else if (effect.type === 'renderer.apply-frame') {
     runtimeFrame.replace(effect.frame);
@@ -310,6 +349,80 @@ function execute(effect: RuntimeEffect, dispatch: (event: AvatarEvent) => void):
       });
     });
   }
+}
+
+function createTtsAdapter(config: DesktopTtsConfig | undefined): TtsAdapter {
+  const logger = new JsonConsoleTtsLogger();
+  const baseAdapter: TtsAdapter = config?.mode === 'mcp' && desktopShell
+    ? new McpTtsAdapter({
+        client: createDesktopShellMcpClient(desktopShell),
+        toolName: config.mcpTool,
+        cancelToolName: config.mcpCancelTool,
+        timeoutMs: config.timeoutMs,
+        requestIdArgument: config.requestIdArgument,
+        textArgument: config.textArgument,
+        providerName: 'qwen3-tts-mcp',
+        formats: [config.format],
+        deliveryModes: ['stream'],
+        logger,
+      })
+    : new MockTtsAdapter({ ...DEFAULT_TTS_CONFIG.mock, logger });
+  return {
+    prepare: request => request.text === KNOWN_TONE_SPEECH_TEXT
+      ? Promise.resolve(createKnownToneAudioSource(request.requestId))
+      : baseAdapter.prepare(request),
+    cancel: requestId => baseAdapter.cancel(requestId),
+    capabilities: () => baseAdapter.capabilities(),
+    health: () => baseAdapter.health(),
+  };
+}
+
+function createDesktopShellMcpClient(shell: NonNullable<typeof desktopShell>): McpClientPort {
+  return {
+    listTools(options?: { signal?: AbortSignal; timeoutMs?: number }) {
+      throwIfAborted(options?.signal);
+      return shell.listTtsMcpTools();
+    },
+    callTool(name: string, args: Record<string, unknown>, options: McpCallOptions) {
+      throwIfAborted(options.signal);
+      return shell.callTtsMcpTool(name, args, { timeoutMs: options.timeoutMs });
+    },
+  };
+}
+
+function createRuntimeAudioPlayer(dispatch: (event: AvatarEvent) => void): WebAudioPcmStreamPlayer {
+  const player = new WebAudioPcmStreamPlayer({
+    initialBufferMs: 100, levelIntervalMs: 25, levelWindowMs: 20,
+    async openStream(source, signal) {
+      const response = await fetch(source.uri, { signal, cache: 'no-store' });
+      if (!response.ok || !response.body) throw new Error(`PCM stream failed: HTTP ${response.status}`);
+      return readByteStream(response.body);
+    },
+  });
+  player.subscribe(event => dispatch(event));
+  return player;
+}
+
+async function* readByteStream(stream: ReadableStream<Uint8Array>): AsyncIterable<Uint8Array> {
+  const reader = stream.getReader();
+  try {
+    while (true) {
+      const result = await reader.read();
+      if (result.done) return;
+      yield result.value;
+    }
+  }
+  finally {
+    reader.releaseLock();
+  }
+}
+
+function throwIfAborted(signal: AbortSignal | undefined): void {
+  if (signal?.aborted) throw new DOMException('MCP request aborted', 'AbortError');
+}
+
+function isPlaybackEvent(event: AvatarEvent): event is Extract<AvatarEvent, { type: `playback.${string}` }> {
+  return event.type.startsWith('playback.');
 }
 
 function applyRuntimeFrame(): void {
@@ -392,7 +505,7 @@ function tonePhase(positionMs: number): string {
 
 function formatMs(value: number): string { return `${value.toFixed(1)}ms`; }
 
-function initializeDesktopInteraction(): void {
+function initializeDesktopInteraction(initialState: Awaited<ReturnType<NonNullable<typeof desktopShell>['ready']>> | undefined): void {
   if (!desktopShell) return;
   const renderer = app.renderer as Renderer;
   const readback = new WebGLPixelReadbackBackend(
@@ -431,14 +544,16 @@ function initializeDesktopInteraction(): void {
     pixelPicker?.dispose();
     pixelPicker = undefined;
   }, { once: true });
-  void desktopShell.ready().then(state => {
+  const applyReadyState = (state: Awaited<ReturnType<NonNullable<typeof desktopShell>['ready']>>) => {
     updateDesktopBounds(state.bounds);
     updatePointerPresentation(state.pointerPresentation ?? {
       passthrough: state.mousePassthrough,
       cursor: state.mousePassthrough ? 'default' : 'pointer',
     });
     document.body.dataset.desktopShell = 'ready';
-  }).catch(error => {
+  };
+  if (initialState) applyReadyState(initialState);
+  else void desktopShell.ready().then(applyReadyState).catch(error => {
     document.body.dataset.desktopShell = 'failed';
     console.error('Desktop shell initialization failed', error);
   });

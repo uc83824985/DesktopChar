@@ -12,6 +12,8 @@ const channels = {
   showContextMenu: 'avatar-window:show-context-menu',
   agentCommand: 'agent-http:command',
   agentState: 'agent-http:state',
+  mcpListTools: 'tts-mcp:list-tools',
+  mcpCallTool: 'tts-mcp:call-tool',
 };
 
 contextBridge.exposeInMainWorld('desktopChar', {
@@ -24,6 +26,8 @@ contextBridge.exposeInMainWorld('desktopChar', {
   setPointerPresentation: presentation => ipcRenderer.send(channels.setPointerPresentation, presentation),
   showContextMenu: () => ipcRenderer.send(channels.showContextMenu),
   publishAgentState: state => ipcRenderer.send(channels.agentState, state),
+  listTtsMcpTools: () => ipcRenderer.invoke(channels.mcpListTools),
+  callTtsMcpTool: (name, args, options) => ipcRenderer.invoke(channels.mcpCallTool, name, args, options),
   onAgentCommand(callback) {
     const listener = (_event, command) => callback(command);
     ipcRenderer.on(channels.agentCommand, listener);

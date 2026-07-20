@@ -28,6 +28,56 @@ Invoke-RestMethod http://127.0.0.1:17373/v1/state
 
 `health.status=ready` 表示 renderer 已加载模型并发布 Runtime snapshot；`starting` 时提交表演会返回 HTTP 503。`capabilities.avatar` 在 renderer ready 后包含实际模型支持的 emotion、action 和参数能力。
 
+### 使用 MCP TTS 启动
+
+如果要让 DesktopChar 通过本机 MCP TTS 服务合成语音，先启动 TTS MCP 服务，再用包装脚本启动桌面角色。
+
+Qwen3-TTS MCP 示例：
+
+```powershell
+cd G:\Qwen3-TTS-GGUF
+python 63-Background-TTS-MCP-Server.py --model-dir model-base --voice output/design/my_voice.json --host 127.0.0.1 --port 8766 --path /mcp
+```
+
+DesktopChar 示例：
+
+```powershell
+cd G:\DesktopChar
+npm run desktop:mcp
+```
+
+`desktop:mcp` 等价于设置以下环境变量后执行 `npm run desktop`：
+
+```text
+DESKTOP_CHAR_TTS_MODE=mcp
+DESKTOP_CHAR_TTS_MCP_URL=http://127.0.0.1:8766/mcp
+DESKTOP_CHAR_TTS_MCP_TOOL=tts_open_stream
+DESKTOP_CHAR_TTS_MCP_CANCEL_TOOL=tts_cancel_synthesis
+DESKTOP_CHAR_TTS_REQUEST_ID_ARGUMENT=request_id
+DESKTOP_CHAR_TTS_TEXT_ARGUMENT=text
+DESKTOP_CHAR_TTS_FORMAT=pcm_s16le
+DESKTOP_CHAR_TTS_TIMEOUT_MS=30000
+```
+
+可覆盖参数：
+
+```powershell
+powershell -NoProfile -ExecutionPolicy Bypass -File scripts/desktop-mcp-tts.ps1 `
+  -McpUrl "http://127.0.0.1:8766/mcp" `
+  -Tool "tts_open_stream" `
+  -CancelTool "tts_cancel_synthesis" `
+  -Format "pcm_s16le" `
+  -TimeoutMs 60000
+```
+
+启动后确认 DesktopChar 实际使用 MCP：
+
+```powershell
+(Invoke-RestMethod http://127.0.0.1:17373/v1/capabilities).tts
+```
+
+期望 `activeMode` 为 `mcp`，`transport` 为 MCP URL。
+
 ## 提交最小表演
 
 第一阶段只接受完整计划，不接受 token 流或 `segment.appended`。请求必须使用 `application/json`，body 上限为 256 KiB：
@@ -76,7 +126,9 @@ Invoke-RestMethod -Method Post http://127.0.0.1:17373/v1/interrupt
 
 ## TTS MCP 接入上下文
 
-当前应用 case 默认装配 `MockTtsAdapter`，用于在没有本机 TTS 服务时验证 Agent -> Runtime -> 表现链路。现有真实接入边界已经准备为：
+当前应用 case 默认装配 `MockTtsAdapter`，用于在没有本机 TTS 服务时验证 Agent -> Runtime -> 表现链路。设置 `DESKTOP_CHAR_TTS_MODE=mcp` 后，Electron main 会持有 Streamable HTTP MCP session，并通过白名单 IPC 向 renderer 暴露 `tools/list` 与 `tools/call`。
+
+真实接入边界为：
 
 ```text
 concrete MCP session transport
@@ -100,6 +152,7 @@ concrete MCP session transport
 
 ```text
 DESKTOP_CHAR_TTS_MODE=mcp
+DESKTOP_CHAR_TTS_MCP_URL=http://127.0.0.1:8766/mcp
 DESKTOP_CHAR_TTS_MCP_TOOL=tts_open_stream
 DESKTOP_CHAR_TTS_MCP_CANCEL_TOOL=tts_cancel_synthesis
 DESKTOP_CHAR_TTS_REQUEST_ID_ARGUMENT=request_id
@@ -109,7 +162,7 @@ DESKTOP_CHAR_TTS_FORMAT=pcm_s16le
 DESKTOP_CHAR_TTS_VOICE=<optional>
 ```
 
-仍需由具体部署提供一个真实 `McpClientPort`，负责 MCP initialize/session、`tools/list` 与 `tools/call` 的 transport 生命周期。它可以是 stdio 或 Streamable HTTP，但不能让 renderer 直接持有子进程或远程认证信息：推荐在 Electron main/独立 sidecar 中建立会话，再通过白名单 IPC 暴露 `listTools/callTool`。完成该注入前，即使设置 `DESKTOP_CHAR_TTS_MODE=mcp`，当前 composition root 仍不会隐式切换离开 Mock；这是为了避免“配置显示 MCP、实际却静默降级”的错误验收。
+MCP session 生命周期由 Electron main 管理，renderer 不直接持有子进程或远程认证信息。若 MCP 服务不可用，renderer 不会阻塞窗口显示；TTS 健康检查会标记不可用，实际提交表演时会进入可恢复失败。
 
 真实 MCP 返回流描述至少应包含：
 
