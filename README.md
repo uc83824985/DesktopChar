@@ -20,6 +20,8 @@
 
 TTS Mock、流式 MCP/HTTP 绑定和真实服务接入契约见 [TTS Adapter 文档](docs/tts-adapter.md)；Qwen3-TTS 当前公开推理接口的流式能力核对见 [Qwen3-TTS 阅读记录](docs/references/qwen3-tts.md)。
 
+外部 Agent 可通过 Electron 随附的 loopback HTTP 控制面提交完整表演计划、发起中断并轮询 Runtime 状态；协议、PowerShell 示例与 TTS MCP 注入边界见 [外部 Agent 本地 HTTP 接入指南](docs/external-agent-http.md)。
+
 ## 一键前台测试
 
 安装 Node.js 24 后，在仓库根目录执行：

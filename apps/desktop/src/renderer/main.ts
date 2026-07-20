@@ -157,6 +157,7 @@ try {
   const ttsHealth = await ttsAdapter.health();
   document.body.dataset.ttsHealth = ttsHealth.status;
   runtime.subscribe(snapshot => {
+    desktopShell?.publishAgentState({ ready: true, snapshot });
     document.body.dataset.runtimeState = snapshot.state;
     document.body.dataset.gazeFollow = snapshot.gaze.active ? 'enabled' : 'disabled';
     const busy = snapshot.state !== 'idle';
@@ -168,6 +169,18 @@ try {
     status.textContent = snapshot.state === 'speaking'
       ? `Runtime: speaking · ${Math.round(snapshot.playback.positionMs)} ms`
       : 'Runtime 已就绪 · UI 仅发送事件，状态由 Runtime 持有';
+  });
+
+  desktopShell?.onAgentCommand(command => {
+    if (!runtime) return;
+    try {
+      if (command.type === 'performance.submit') runtime.dispatch({ type: 'plan.submitted', plan: command.plan });
+      else runtime.dispatch({ type: 'user.interrupt-requested' });
+    }
+    catch (error) {
+      console.error('[agent-http] command rejected', error);
+      desktopShell.publishAgentState({ ready: true, snapshot: runtime.getSnapshot() });
+    }
   });
 
   if (desktopShell) initializeDesktopInteraction();
@@ -187,6 +200,7 @@ try {
   document.body.dataset.ready = 'true';
 }
 catch (error) {
+  desktopShell?.publishAgentState({ ready: false, snapshot: null });
   status.textContent = `加载失败：${error instanceof Error ? error.message : String(error)}`;
   document.body.dataset.ready = 'false';
   console.error(error);

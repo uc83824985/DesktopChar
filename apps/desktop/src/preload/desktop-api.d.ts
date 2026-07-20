@@ -25,8 +25,19 @@ export interface DesktopCharApi {
   endDrag(): Promise<DesktopWindowState>;
   setMousePassthrough(passthrough: boolean): void;
   showContextMenu(): void;
+  publishAgentState(state: AgentRuntimeState): void;
+  onAgentCommand(callback: (command: AgentCommand) => void): () => void;
   onBoundsChanged(callback: (bounds: DesktopRectangle) => void): () => void;
   onCursorPoint(callback: (point: DesktopPoint) => void): () => void;
+}
+
+export type AgentCommand =
+  | { type: 'performance.submit'; plan: import('../../../../packages/contracts/src/index.ts').PerformancePlan }
+  | { type: 'performance.interrupt' };
+
+export interface AgentRuntimeState {
+  ready: boolean;
+  snapshot: import('../../../../packages/contracts/src/index.ts').AvatarSnapshot | null;
 }
 
 declare global {

@@ -109,3 +109,5 @@ config -> contracts
 4. 已完成角色级 GazeProfile，并对 Mao 的纵向非对称表现做运行时校准。
 5. 已完成 Electron 透明窗口、安全 preload、透明区穿透、角色点击/拖动和 bounds 同步。
 6. 后续接入真实 Agent/语音输入与可用的 TTS MCP/HTTP 服务；这些模块仍只通过 Event/Effect 端口连接。
+
+外部 Agent 的第一版应用装配已使用 `127.0.0.1` HTTP 控制面接收完整 `PerformancePlan` 和中断请求，由 Electron main 转为白名单 IPC，再由 renderer 提交 Runtime；Agent 通过 Runtime snapshot 判断实际播放完成。接口和真实 TTS MCP transport 注入边界见 [外部 Agent 本地 HTTP 接入指南](external-agent-http.md)。

@@ -8,6 +8,7 @@ import {
   isScreenPoint,
   parseLoopbackDevUrl,
 } from './window-policy.mjs';
+import { createAgentHttpServer, parseAgentPort } from './agent-http-server.mjs';
 
 const directory = path.dirname(fileURLToPath(import.meta.url));
 const rendererRoot = path.resolve(directory, '../dist');
@@ -22,6 +23,8 @@ const channels = {
   ready: 'avatar-window:ready',
   setMousePassthrough: 'avatar-window:set-mouse-passthrough',
   showContextMenu: 'avatar-window:show-context-menu',
+  agentCommand: 'agent-http:command',
+  agentState: 'agent-http:state',
 };
 
 protocol.registerSchemesAsPrivileged([{
@@ -33,6 +36,18 @@ let avatarWindow = null;
 let cursorTimer;
 let dragState = null;
 let mousePassthrough = true;
+const agentServer = createAgentHttpServer({
+  host: '127.0.0.1',
+  port: parseAgentPort(process.env.DESKTOP_CHAR_AGENT_PORT),
+  ttsContext: {
+    requestedMode: process.env.DESKTOP_CHAR_TTS_MODE ?? 'mock',
+    activeMode: 'mock',
+    mcpTool: process.env.DESKTOP_CHAR_TTS_MCP_TOOL ?? 'tts_open_stream',
+    mcpCancelTool: process.env.DESKTOP_CHAR_TTS_MCP_CANCEL_TOOL ?? 'tts_cancel_synthesis',
+    transport: process.env.DESKTOP_CHAR_TTS_MODE === 'mcp' ? 'McpClientPort injection required' : 'mock',
+  },
+  onCommand(command) { avatarWindow?.webContents.send(channels.agentCommand, command); },
+});
 
 const hasSingleInstanceLock = app.requestSingleInstanceLock();
 if (!hasSingleInstanceLock) app.quit();
@@ -42,11 +57,13 @@ else {
     if (!devUrl) registerRendererProtocol();
     registerIpc();
     createAvatarWindow();
+    const address = await agentServer.listen();
+    console.log(`[agent-http] listening on http://127.0.0.1:${address.port}`);
   });
 }
 
 app.on('window-all-closed', () => app.quit());
-app.on('before-quit', () => { if (cursorTimer) clearInterval(cursorTimer); });
+app.on('before-quit', () => { if (cursorTimer) clearInterval(cursorTimer); void agentServer.close().catch(() => {}); });
 
 function registerRendererProtocol() {
   protocol.handle('desktop-char', request => {
@@ -148,6 +165,11 @@ function registerIpc() {
       { label: '退出 DesktopChar', click: () => app.quit() },
     ]).popup({ window: avatarWindow });
   });
+  ipcMain.on(channels.agentState, (event, state) => {
+    requireAvatarSender(event);
+    if (!isAgentState(state)) return;
+    agentServer.updateState(state);
+  });
 }
 
 function setMousePassthrough(passthrough) {
@@ -175,4 +197,9 @@ function windowState() {
 
 function requireAvatarSender(event) {
   if (!avatarWindow || event.sender !== avatarWindow.webContents) throw new Error('Rejected untrusted IPC sender');
+}
+
+function isAgentState(value) {
+  return value && typeof value === 'object' && typeof value.ready === 'boolean'
+    && (value.snapshot === null || (typeof value.snapshot === 'object' && typeof value.snapshot.state === 'string'));
 }

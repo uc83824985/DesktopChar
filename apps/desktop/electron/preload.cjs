@@ -10,6 +10,8 @@ const channels = {
   ready: 'avatar-window:ready',
   setMousePassthrough: 'avatar-window:set-mouse-passthrough',
   showContextMenu: 'avatar-window:show-context-menu',
+  agentCommand: 'agent-http:command',
+  agentState: 'agent-http:state',
 };
 
 contextBridge.exposeInMainWorld('desktopChar', {
@@ -21,6 +23,12 @@ contextBridge.exposeInMainWorld('desktopChar', {
   endDrag: () => ipcRenderer.invoke(channels.endDrag),
   setMousePassthrough: passthrough => ipcRenderer.send(channels.setMousePassthrough, passthrough),
   showContextMenu: () => ipcRenderer.send(channels.showContextMenu),
+  publishAgentState: state => ipcRenderer.send(channels.agentState, state),
+  onAgentCommand(callback) {
+    const listener = (_event, command) => callback(command);
+    ipcRenderer.on(channels.agentCommand, listener);
+    return () => ipcRenderer.removeListener(channels.agentCommand, listener);
+  },
   onBoundsChanged(callback) {
     const listener = (_event, bounds) => callback(bounds);
     ipcRenderer.on(channels.boundsChanged, listener);
