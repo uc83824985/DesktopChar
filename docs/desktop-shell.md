@@ -124,3 +124,5 @@ npm run test:desktop-smoke
 Windows 静止鼠标切换使用 `SetCursor` 应用同一语义对应的系统资源；刷新延后一个渲染帧，并且队列中只保留最新的 `PointerPresentation`，避免 Chromium 在窗口穿透切换提交后再次用旧 CSS cursor 覆盖结果。不再使用零位移 `SetCursorPos`，因为它是否产生新鼠标消息依赖焦点和历史输入状态，不能作为刷新协议。当前 `pointer` 在 CSS 与 Win32 都对应系统链接手形，`move` 对应系统移动光标，从而避免真实移动与静止动画覆盖显示两种不同资源。
 
 从穿透进入可交互时，main 通过 `BrowserWindow.getNativeWindowHandle()` 把角色 HWND 明确传给 Koffi，不依赖切换瞬间可能仍指向下层窗口的 `WindowFromPoint`。该转换以 `SetWindowPos(SWP_FRAMECHANGED | SWP_NOACTIVATE | SWP_NOMOVE | SWP_NOSIZE | SWP_NOZORDER)` 提交命中样式，然后直接向角色 HWND 查询命中并刷新光标，不抢占前台焦点。日志同时记录 `focused`、`targetIsRequested`、`pointTargetIsRequested` 和 `foregroundIsRequested`，用于区分显式刷新、坐标命中和窗口激活状态。
+
+若该转换发生在角色窗口未聚焦时，Windows 不一定采用后台输入线程调用的 `SetCursor`。宿主会额外发送一次位置不变的 `SendInput` 鼠标移动，使用虚拟桌面绝对坐标、`MOUSEEVENTF_VIRTUALDESK` 和 `MOUSEEVENTF_MOVE_NOCOALESCE`，要求系统重新执行真实命中路由，但不调用 `focus()`、不改变前台窗口。该动作仅发生在 `passthrough -> interactive` 边沿，日志以 `syntheticInputAccepted` 标记系统是否接收。

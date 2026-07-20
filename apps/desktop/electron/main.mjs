@@ -190,6 +190,7 @@ function applyPointerPresentation(presentation) {
     cursorRefreshTimer = setTimeout(() => {
       cursorRefreshTimer = undefined;
       const current = { ...pointerPresentation };
+      const focused = avatarWindow?.isFocused() ?? false;
       const windowHandle = current.passthrough || !avatarWindow
         ? undefined
         : nativeWindowHandleAddress(avatarWindow.getNativeWindowHandle());
@@ -197,11 +198,12 @@ function applyPointerPresentation(presentation) {
         cursor: current.cursor,
         windowHandle,
         refreshFrame: enteredInteractive && !current.passthrough,
+        rerouteInput: enteredInteractive && !current.passthrough && !focused,
       });
       console.log('[cursor-refresh]', {
         presentation: current,
         available: nativeCursorRefresh.available,
-        focused: avatarWindow?.isFocused() ?? false,
+        focused,
         ...result,
       });
     }, 16);

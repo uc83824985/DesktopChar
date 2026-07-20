@@ -11,6 +11,7 @@ const IDC_ARROW = 32512;
 const IDC_HAND = 32649;
 const IDC_SIZEALL = 32646;
 const CURSOR_RESOURCES = { default: IDC_ARROW, pointer: IDC_HAND, move: IDC_SIZEALL };
+const MOUSEEVENTF_REROUTE = 0x0001 | 0x2000 | 0x4000 | 0x8000;
 
 export function createNativeCursorRefresh(options = {}) {
   const platform = options.platform ?? process.platform;
@@ -32,16 +33,23 @@ function createKoffiBindings(api) {
   const user32 = api.load('user32.dll');
   const kernel32 = api.load('kernel32.dll');
   const POINT = api.struct('DesktopChar_POINT', { x: 'long', y: 'long' });
+  const MOUSEINPUT = api.struct('DesktopChar_MOUSEINPUT', {
+    dx: 'long', dy: 'long', mouseData: 'uint32_t', dwFlags: 'uint32_t', time: 'uint32_t', dwExtraInfo: 'uintptr_t',
+  });
+  const INPUT = api.struct('DesktopChar_INPUT', { type: 'uint32_t', mi: MOUSEINPUT });
   return {
     getCursorPos: user32.func('int __stdcall GetCursorPos(_Out_ DesktopChar_POINT *pos)'),
     windowFromPoint: user32.func('uintptr_t __stdcall WindowFromPoint(DesktopChar_POINT point)'),
     getForegroundWindow: user32.func('uintptr_t __stdcall GetForegroundWindow()'),
     setWindowPos: user32.func('int __stdcall SetWindowPos(uintptr_t hWnd, uintptr_t hWndInsertAfter, int x, int y, int cx, int cy, uint32_t flags)'),
+    getSystemMetrics: user32.func('int __stdcall GetSystemMetrics(int index)'),
+    sendInput: user32.func('uint32_t __stdcall SendInput(uint32_t count, DesktopChar_INPUT *inputs, int size)'),
     loadCursor: user32.func('uintptr_t __stdcall LoadCursorW(uintptr_t hInstance, uintptr_t cursorName)'),
     setCursor: user32.func('uintptr_t __stdcall SetCursor(uintptr_t cursor)'),
     sendMessageTimeout: user32.func('intptr_t __stdcall SendMessageTimeoutW(uintptr_t hWnd, uint32_t Msg, uintptr_t wParam, intptr_t lParam, uint32_t flags, uint32_t timeout, _Out_ uintptr_t *result)'),
     getLastError: kernel32.func('uint32_t __stdcall GetLastError()'),
     POINT,
+    inputSize: api.sizeof(INPUT),
   };
 }
 
@@ -56,6 +64,7 @@ function refreshCursor(bindings, options = {}) {
   const frameRefreshed = Boolean(options.refreshFrame && requestedTarget && bindings.setWindowPos(
     requestedTarget, 0n, 0, 0, 0, 0, SWP_REFRESH_FRAME_NO_ACTIVATE,
   ));
+  const syntheticInputAccepted = Boolean(options.rerouteInput && rerouteCursorInput(bindings, point));
 
   const screenPoint = makeLParam(point.x, point.y);
   const hitResult = [BigInt(HTCLIENT)];
@@ -88,12 +97,33 @@ function refreshCursor(bindings, options = {}) {
     handled: cursorHandled,
     cursorSet,
     frameRefreshed,
+    syntheticInputAccepted,
     targetIsRequested: Boolean(requestedTarget && target === requestedTarget),
     pointTargetIsRequested: Boolean(requestedTarget && pointTarget === requestedTarget),
     foregroundIsRequested: Boolean(requestedTarget && bindings.getForegroundWindow() === requestedTarget),
     hitTest,
     error: cursorDelivered ? 0 : bindings.getLastError(),
   };
+}
+
+function rerouteCursorInput(bindings, point) {
+  const left = bindings.getSystemMetrics(76);
+  const top = bindings.getSystemMetrics(77);
+  const width = bindings.getSystemMetrics(78);
+  const height = bindings.getSystemMetrics(79);
+  if (width <= 1 || height <= 1) return false;
+  const input = {
+    type: 0,
+    mi: {
+      dx: Math.round(((point.x - left) * 65535) / (width - 1)),
+      dy: Math.round(((point.y - top) * 65535) / (height - 1)),
+      mouseData: 0,
+      dwFlags: MOUSEEVENTF_REROUTE,
+      time: 0,
+      dwExtraInfo: 0n,
+    },
+  };
+  return bindings.sendInput(1, input, bindings.inputSize) === 1;
 }
 
 function makeLParam(low, high) {
