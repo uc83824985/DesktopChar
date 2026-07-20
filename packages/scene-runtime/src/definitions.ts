@@ -6,6 +6,7 @@ import type {
   SceneRenderPart,
   SceneSlot,
   SceneTransform,
+  SceneUiSurfaceDefinition,
 } from './types.ts';
 
 export const IDENTITY_SCENE_TRANSFORM: SceneTransform = Object.freeze({
@@ -21,6 +22,7 @@ export interface SceneActorInput {
   components?: SceneCustomComponent[];
   slots?: SceneSlot[];
   renderParts?: SceneRenderPart[];
+  uiSurfaces?: SceneUiSurfaceDefinition[];
   behavior?: SceneBehaviorReference;
 }
 
@@ -34,6 +36,7 @@ export function defineSceneActor(input: SceneActorInput): SceneActorDefinition {
     components: [...(input.components ?? [])],
     slots: [...(input.slots ?? [])],
     renderParts: [...(input.renderParts ?? [])],
+    uiSurfaces: [...(input.uiSurfaces ?? [])],
   };
   if (input.behavior) actor.behavior = input.behavior;
   return actor;

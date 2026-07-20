@@ -4,4 +4,5 @@ export * from './render-plan.ts';
 export * from './runtime.ts';
 export * from './scenario.ts';
 export * from './types.ts';
+export * from './ui-frame.ts';
 export * from './validation.ts';

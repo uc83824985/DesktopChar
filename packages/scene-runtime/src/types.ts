@@ -78,6 +78,23 @@ export interface SceneBehaviorReference {
   config: SceneData;
 }
 
+export type SceneUiLayer = 'world-underlay' | 'world-overlay' | 'screen-overlay' | 'modal';
+export type SceneUiInputPolicy = 'pass-through' | 'surface' | 'modal';
+
+/**
+ * References an application-owned presenter without embedding DOM, framework
+ * components, or executable code in a scene definition.
+ */
+export interface SceneUiSurfaceDefinition {
+  id: string;
+  presenter: string;
+  layer: SceneUiLayer;
+  order: number;
+  input: SceneUiInputPolicy;
+  events: Record<string, string>;
+  config: SceneData;
+}
+
 export interface SceneActorDefinition {
   id: ActorId;
   transform: SceneTransform;
@@ -87,6 +104,7 @@ export interface SceneActorDefinition {
   components: SceneCustomComponent[];
   slots: SceneSlot[];
   renderParts: SceneRenderPart[];
+  uiSurfaces: SceneUiSurfaceDefinition[];
   behavior?: SceneBehaviorReference;
 }
 
@@ -191,11 +209,27 @@ export interface SceneRenderPass {
   dependsOn: string[];
 }
 
+export interface SceneUiSurfaceInstance {
+  id: string;
+  actorId: ActorId;
+  surfaceId: string;
+  presenter: string;
+  layer: SceneUiLayer;
+  order: number;
+  input: SceneUiInputPolicy;
+  events: Readonly<Record<string, string>>;
+  config: Readonly<SceneData>;
+  actorState: Readonly<SceneData>;
+  behaviorMode?: string;
+  transform: SceneTransform;
+}
+
 export interface SceneRenderFrame {
   generation: number;
   revision: number;
   actors: ResolvedSceneActor[];
   drawItems: SceneDrawItem[];
+  uiSurfaces: SceneUiSurfaceInstance[];
   orderEdges: Array<{ before: string; after: string }>;
   passes: SceneRenderPass[];
 }

@@ -46,6 +46,7 @@ function validateActor(actor: SceneActorDefinition): void {
   unique(actor.components.map(component => component.type), `Actor "${actor.id}" component type`);
   unique(actor.slots.map(slot => slot.id), `Actor "${actor.id}" slot id`);
   unique(actor.renderParts.map(part => part.id), `Actor "${actor.id}" render part id`);
+  unique(actor.uiSurfaces.map(surface => surface.id), `Actor "${actor.id}" UI surface id`);
 
   for (const capability of actor.capabilities) nonEmpty(capability, 'Capability');
   for (const component of actor.components) nonEmpty(component.type, 'Component type');
@@ -80,6 +81,29 @@ function validateActor(actor: SceneActorDefinition): void {
     }
     if (part.interaction?.enabled && part.interaction.coverage === 'none') {
       fail(`Render part "${actor.id}:${part.id}" cannot be interactive with no coverage`);
+    }
+  }
+
+  for (const surface of actor.uiSurfaces) {
+    const label = `UI surface "${actor.id}:${surface.id}"`;
+    nonEmpty(surface.id, `${label} id`);
+    nonEmpty(surface.presenter, `${label} presenter`);
+    finite(surface.order, `${label} order`);
+    if (!['world-underlay', 'world-overlay', 'screen-overlay', 'modal'].includes(surface.layer)) {
+      fail(`${label} has invalid layer "${surface.layer}"`);
+    }
+    if (!['pass-through', 'surface', 'modal'].includes(surface.input)) {
+      fail(`${label} has invalid input policy "${surface.input}"`);
+    }
+    if ((surface.layer === 'modal') !== (surface.input === 'modal')) {
+      fail(`${label} must use modal layer and modal input policy together`);
+    }
+    if (surface.input === 'pass-through' && Object.keys(surface.events).length > 0) {
+      fail(`${label} cannot declare events while input is pass-through`);
+    }
+    for (const [eventName, interaction] of Object.entries(surface.events)) {
+      nonEmpty(eventName, `${label} event name`);
+      nonEmpty(interaction, `${label} interaction`);
     }
   }
 }

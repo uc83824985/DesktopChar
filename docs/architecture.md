@@ -80,6 +80,7 @@ config -> contracts
 ### Open-LLM-VTuber-Web (`d176e7d`)
 
 - Electron 明确拆分 `main`、`preload`、`renderer`；窗口透明、置顶、鼠标穿透由主进程管理。
+- Scene UI 以框架无关 Surface 与世界绘制项共享 revision；应用 presenter 只消费状态并回传事件，设计见 [桌面 UI 引擎层](desktop-ui-engine.md)。
 - WebSocket handler 负责协议分发，audio task queue 保证分句顺序，Live2D hook 负责模型表现。
 - 当前实现会直接访问 Live2D 的 `_wavFileHandler` 等私有成员；本项目改为 `LipSyncSource` 与 `Live2DRenderer` 公共接口，避免 UI 与 SDK 版本绑定。
 

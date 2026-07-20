@@ -1,4 +1,5 @@
 import { resolveSceneActors } from './relations.ts';
+import { buildSceneUiSurfaces } from './ui-frame.ts';
 import type {
   SceneDrawItem,
   SceneInteractionPolicy,
@@ -52,6 +53,7 @@ export function buildSceneRenderFrame(snapshot: SceneSnapshot): SceneRenderFrame
     revision: snapshot.revision,
     actors: resolvedActors,
     drawItems,
+    uiSurfaces: buildSceneUiSurfaces(snapshot),
     orderEdges: edges,
     passes: [
       {
