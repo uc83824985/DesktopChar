@@ -5,7 +5,9 @@
   "type": "module",
   "scripts": {
     "start": "vite apps/desktop --config apps/desktop/vite.config.ts --open",
-    "desktop": "npm run build && electron apps/desktop/electron/main.mjs",
+    "desktop": "npm run build:native && npm run build && electron apps/desktop/electron/main.mjs",
+    "build:native": "node scripts/build-native.mjs",
+    "test:native": "npm run build:native && node scripts/test-native.mjs",
     "dev": "vite apps/desktop --config apps/desktop/vite.config.ts",
     "build": "vite build apps/desktop --config apps/desktop/vite.config.ts",
     "preview": "vite preview apps/desktop --config apps/desktop/vite.config.ts --open",
@@ -15,11 +17,12 @@
     "diagnose:tts": "node --experimental-strip-types scripts/tts-diagnostic.ts",
     "test": "node --experimental-strip-types --test packages/*/test/*.test.ts && npm run test:desktop",
     "typecheck": "tsc --noEmit",
-    "check": "npm run typecheck && npm test && npm run build"
+    "check": "npm run typecheck && npm test && npm run test:native && npm run build"
   },
   "devDependencies": {
     "@types/node": "^24.0.0",
     "electron": "^43.1.1",
+    "node-gyp": "^12.4.0",
     "playwright-core": "^1.61.1",
     "typescript": "^5.9.0",
     "vite": "^8.1.5"

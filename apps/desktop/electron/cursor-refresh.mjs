@@ -1,21 +1,26 @@
-export function refreshChromiumCursorAtScreenPoint(window, screenPoint) {
-  if (!window || window.isDestroyed() || !isPoint(screenPoint)) return false;
-  const bounds = window.getBounds();
-  const x = screenPoint.x - bounds.x;
-  const y = screenPoint.y - bounds.y;
-  if (x < 0 || y < 0 || x >= bounds.width || y >= bounds.height) return false;
-  window.webContents.sendInputEvent({
-    type: 'mouseMove',
-    x,
-    y,
-    globalX: screenPoint.x,
-    globalY: screenPoint.y,
-    movementX: 0,
-    movementY: 0,
-  });
-  return true;
+import { createRequire } from 'node:module';
+import path from 'node:path';
+import { fileURLToPath } from 'node:url';
+
+const require = createRequire(import.meta.url);
+const directory = path.dirname(fileURLToPath(import.meta.url));
+
+export function createNativeCursorRefresh(options = {}) {
+  const platform = options.platform ?? process.platform;
+  if (platform !== 'win32') return unavailable('not-windows');
+  try {
+    const addon = options.loadAddon?.() ?? require(path.resolve(directory, '../../../native/cursor-refresh/build/Release/cursor_refresh.node'));
+    if (typeof addon.refreshCursorAtCurrentPoint !== 'function') return unavailable('invalid-addon');
+    return {
+      available: true,
+      refresh() { return addon.refreshCursorAtCurrentPoint(); },
+    };
+  }
+  catch (error) {
+    return unavailable(error instanceof Error ? error.message : String(error));
+  }
 }
 
-function isPoint(value) {
-  return value && Number.isFinite(value.x) && Number.isFinite(value.y);
+function unavailable(reason) {
+  return { available: false, reason, refresh: () => ({ refreshed: false, error: -1 }) };
 }
