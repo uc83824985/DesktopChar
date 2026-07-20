@@ -96,6 +96,37 @@ test('watch continuously samples a stationary cursor as animated coverage change
   assert.deepEqual(backend.issued[2]!.point, { x: 7, y: 8 });
 });
 
+test('stationary cursor exits and re-enters selection as animated coverage moves away and back', () => {
+  const backend = new ControlledBackend();
+  const latch = new PixelCoverageLatch();
+  const results: PixelCoverageResult[] = [];
+  const selectedStates: boolean[] = [];
+  const transitions: boolean[] = [];
+  const point = { x: 21, y: 34 };
+  const picker = new AsyncPixelCoveragePicker(backend, {
+    onResult(result) {
+      results.push(result);
+      const decision = latch.update(result.covered);
+      selectedStates.push(decision.selected);
+      if (decision.changed) transitions.push(decision.selected);
+    },
+  });
+
+  assert.equal(picker.watch(point), 1);
+  picker.afterRender();
+  for (const alpha of [255, 0, 0, 0, 255]) {
+    backend.issued.at(-1)!.ticket.resolve([0, 0, 0, alpha] as PixelRgba);
+    picker.afterRender();
+  }
+
+  assert.deepEqual(results.map(result => result.covered), [true, false, false, false, true]);
+  assert.deepEqual(selectedStates, [true, true, true, false, true]);
+  assert.deepEqual(transitions, [true, false, true]);
+  assert.deepEqual(results.map(result => result.submittedFrame), [1, 2, 3, 4, 5]);
+  assert.equal(results.every(result => result.sequence === 1), true);
+  assert.deepEqual(backend.issued.map(read => read.point), Array.from({ length: 6 }, () => point));
+});
+
 test('watch pipelines every render frame and publishes completed reads in submission order', () => {
   const backend = new ControlledBackend();
   const results: PixelCoverageResult[] = [];
