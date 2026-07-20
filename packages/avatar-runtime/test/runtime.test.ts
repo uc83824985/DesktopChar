@@ -77,7 +77,10 @@ test('playback clock drives timeline, motion, and amplitude mouth frames', () =>
   const runtime = createRuntime(effects);
   runtime.dispatch({ type: 'plan.submitted', plan: threeSegmentPlan() });
   effects.resolveTts(0, {
+    delivery: 'artifact',
+    requestId: 'voice-0',
     uri: 'memory://voice',
+    mimeType: 'audio/wav',
     amplitude: [
       { atMs: 0, value: 0.1 },
       { atMs: 200, value: 0.8 },
@@ -91,6 +94,34 @@ test('playback clock drives timeline, motion, and amplitude mouth frames', () =>
   assert.deepEqual(effects.motions, ['nod-0']);
   assert.equal(runtime.getSnapshot().gesture.action, 'nod');
   assert.equal(effects.frames.at(-1)?.ParamMouthOpenY, 0.8);
+});
+
+test('stream playback levels drive mouth frames while buffering remains a player fact', () => {
+  const effects = new ControlledEffects();
+  const runtime = createRuntime(effects);
+  runtime.dispatch({ type: 'plan.submitted', plan: threeSegmentPlan() });
+  effects.resolveTts(0, {
+    delivery: 'stream', requestId: 'stream-0', uri: 'http://127.0.0.1/audio/stream-0',
+    mimeType: 'audio/pcm', codec: 'pcm_s16le', sampleRateHz: 24_000, channels: 1,
+  });
+  const generation = runtime.getSnapshot().generation;
+
+  effects.progress(100);
+  assert.equal(effects.frames.at(-1)?.ParamMouthOpenY, undefined);
+  runtime.dispatch({
+    type: 'playback.level', generation, segmentId: 'segment-0', positionMs: 100, value: 1.4,
+  });
+  assert.equal(effects.frames.at(-1)?.ParamMouthOpenY, 1);
+
+  runtime.dispatch({
+    type: 'playback.stalled', generation, segmentId: 'segment-0', positionMs: 120,
+  });
+  assert.equal(runtime.getSnapshot().state, 'speaking');
+  assert.equal(runtime.getSnapshot().playback.status, 'buffering');
+  runtime.dispatch({
+    type: 'playback.recovered', generation, segmentId: 'segment-0', positionMs: 120,
+  });
+  assert.equal(runtime.getSnapshot().playback.status, 'playing');
 });
 
 test('pause freezes timeline until playback resumes', () => {
@@ -242,7 +273,10 @@ test('unknown TTS results and duplicate playback completion cannot advance the p
     generation: 0,
     segmentId: 'not-in-plan',
     sequence: 0,
-    audio: { uri: 'memory://invalid' },
+    audio: {
+      delivery: 'artifact', requestId: 'invalid',
+      uri: 'memory://invalid', mimeType: 'audio/wav',
+    },
   });
   assert.deepEqual(effects.playedSegments, []);
 

@@ -1,5 +1,5 @@
 export type AvatarState = 'idle' | 'listening' | 'thinking' | 'speaking';
-export type PlaybackStatus = 'idle' | 'loading' | 'playing' | 'paused' | 'stopped';
+export type PlaybackStatus = 'idle' | 'loading' | 'buffering' | 'playing' | 'paused' | 'stopped';
 
 export type Emotion =
   | 'neutral'
@@ -58,12 +58,32 @@ export interface AmplitudeSample {
   value: number;
 }
 
-export interface AudioSource {
+export type AudioCodec = 'pcm_s16le' | 'pcm_f32le' | 'wav' | 'mp3' | 'ogg' | 'opus';
+
+interface AudioSourceBase {
+  requestId: string;
   uri: string;
+  mimeType: string;
   durationMs?: number;
   visemes?: VisemeTiming[];
   amplitude?: AmplitudeSample[];
 }
+
+export interface AudioArtifactSource extends AudioSourceBase {
+  delivery: 'artifact';
+  codec?: AudioCodec;
+  sampleRateHz?: number;
+  channels?: number;
+}
+
+export interface AudioStreamSource extends AudioSourceBase {
+  delivery: 'stream';
+  codec: AudioCodec;
+  sampleRateHz: number;
+  channels: number;
+}
+
+export type AudioSource = AudioArtifactSource | AudioStreamSource;
 
 export interface RuntimeError {
   code: string;
@@ -134,8 +154,12 @@ export type TtsEvent =
   | { type: 'tts.plan-completed'; generation: number; planId: string };
 
 export type PlaybackEvent =
+  | { type: 'playback.buffering'; generation: number; segmentId: string; positionMs: number; bufferedMs: number }
   | { type: 'playback.started'; generation: number; segmentId: string; positionMs: number }
   | { type: 'playback.progress'; generation: number; segmentId: string; positionMs: number }
+  | { type: 'playback.level'; generation: number; segmentId: string; positionMs: number; value: number }
+  | { type: 'playback.stalled'; generation: number; segmentId: string; positionMs: number }
+  | { type: 'playback.recovered'; generation: number; segmentId: string; positionMs: number }
   | { type: 'playback.paused'; generation: number; segmentId: string; positionMs: number }
   | { type: 'playback.resumed'; generation: number; segmentId: string; positionMs: number }
   | { type: 'playback.completed'; generation: number; segmentId: string; positionMs: number }

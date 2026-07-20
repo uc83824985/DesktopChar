@@ -107,7 +107,11 @@ export class AvatarRuntime {
     else if (acceptedEvent.type === 'playback.progress') {
       if (this.snapshot.playback.status === 'paused') return;
       this.applyTimeline(acceptedEvent.positionMs);
-      this.applyMouth(acceptedEvent.positionMs);
+      if (this.currentSource?.delivery === 'artifact') this.applyMouth(acceptedEvent.positionMs);
+    }
+    else if (acceptedEvent.type === 'playback.level') {
+      if (this.snapshot.playback.status === 'paused') return;
+      this.applyMouthValue(acceptedEvent.value);
     }
     else if (acceptedEvent.type === 'playback.paused') {
       this.timeline?.pause();
@@ -172,7 +176,12 @@ export class AvatarRuntime {
   }
 
   private playNextReadySegment(): void {
-    if (!this.plan || this.snapshot.playback.status === 'playing' || this.snapshot.playback.status === 'paused') {
+    if (
+      !this.plan
+      || this.snapshot.playback.status === 'buffering'
+      || this.snapshot.playback.status === 'playing'
+      || this.snapshot.playback.status === 'paused'
+    ) {
       return;
     }
     const segment = this.plan.segments[this.nextSegmentIndex];
@@ -232,7 +241,11 @@ export class AvatarRuntime {
 
   private applyMouth(positionMs: number): void {
     const mouthOpen = sampleAmplitude(this.currentSource?.amplitude, positionMs);
-    this.layers.mouth = { ParamMouthOpenY: { value: mouthOpen } };
+    this.applyMouthValue(mouthOpen);
+  }
+
+  private applyMouthValue(value: number): void {
+    this.layers.mouth = { ParamMouthOpenY: { value: Math.max(0, Math.min(1, value)) } };
     this.emitFrame();
   }
 

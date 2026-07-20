@@ -100,11 +100,41 @@ export function reduceAvatarSnapshot(
         effects: [],
       };
 
+    case 'playback.buffering':
+      return {
+        snapshot: {
+          ...snapshot,
+          playback: { status: 'buffering', positionMs: event.positionMs },
+        },
+        effects: [],
+      };
+
     case 'playback.progress':
       return {
         snapshot: {
           ...snapshot,
           playback: { ...snapshot.playback, positionMs: event.positionMs },
+        },
+        effects: [],
+      };
+
+    case 'playback.level':
+      return { snapshot, effects: [] };
+
+    case 'playback.stalled':
+      return {
+        snapshot: {
+          ...snapshot,
+          playback: { status: 'buffering', positionMs: event.positionMs },
+        },
+        effects: [],
+      };
+
+    case 'playback.recovered':
+      return {
+        snapshot: {
+          ...snapshot,
+          playback: { status: 'playing', positionMs: event.positionMs },
         },
         effects: [],
       };
@@ -152,7 +182,7 @@ export function reduceAvatarSnapshot(
       };
 
     case 'user.pause-requested':
-      return snapshot.playback.status === 'playing'
+      return snapshot.playback.status === 'playing' || snapshot.playback.status === 'buffering'
         ? { snapshot, effects: [{ type: 'audio.pause', generation: snapshot.generation }] }
         : { snapshot, effects: [] };
 

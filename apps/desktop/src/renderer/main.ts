@@ -85,13 +85,20 @@ function execute(effect: RuntimeEffect, dispatch: (event: AvatarEvent) => void):
     clearPlayback();
     const startedAt = performance.now();
     const durationMs = effect.source.durationMs ?? 1_800;
+    dispatch({ type: 'playback.buffering', generation: effect.generation, segmentId: effect.segmentId, positionMs: 0, bufferedMs: 200 });
     dispatch({ type: 'playback.started', generation: effect.generation, segmentId: effect.segmentId, positionMs: 0 });
     playbackTimer = setInterval(() => {
       const positionMs = performance.now() - startedAt;
       if (positionMs >= durationMs) {
         clearPlayback();
         dispatch({ type: 'playback.completed', generation: effect.generation, segmentId: effect.segmentId, positionMs: durationMs });
-      } else dispatch({ type: 'playback.progress', generation: effect.generation, segmentId: effect.segmentId, positionMs });
+      } else {
+        dispatch({ type: 'playback.progress', generation: effect.generation, segmentId: effect.segmentId, positionMs });
+        if (effect.source.delivery === 'stream') dispatch({
+          type: 'playback.level', generation: effect.generation, segmentId: effect.segmentId,
+          positionMs, value: sampleAmplitude(effect.source.amplitude, positionMs),
+        });
+      }
     }, 50);
   }
   else if (effect.type === 'audio.stop') clearPlayback();
@@ -106,6 +113,15 @@ function execute(effect: RuntimeEffect, dispatch: (event: AvatarEvent) => void):
 }
 
 function clearPlayback(): void { if (playbackTimer) clearInterval(playbackTimer); playbackTimer = undefined; }
+function sampleAmplitude(samples: Array<{ atMs: number; value: number }> | undefined, positionMs: number): number {
+  if (!samples?.length) return 0.25 + Math.abs(Math.sin(positionMs / 90)) * 0.5;
+  let value = samples[0]!.value;
+  for (const sample of samples) {
+    if (sample.atMs > positionMs) break;
+    value = sample.value;
+  }
+  return value;
+}
 function coreModel(target: Live2DModel): CubismCoreModel { return target.internalModel.coreModel as CubismCoreModel; }
 function fitModel(): void {
   if (!model) return;

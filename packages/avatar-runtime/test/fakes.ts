@@ -84,7 +84,12 @@ export class ControlledEffects implements RuntimeEffectExecutor {
       generation: pending.effect.generation,
       segmentId: pending.effect.segment.id,
       sequence,
-      audio: audio ?? { uri: `memory://${sequence}` },
+      audio: audio ?? {
+        delivery: 'artifact',
+        requestId: `fake-${sequence}`,
+        uri: `memory://${sequence}`,
+        mimeType: 'audio/wav',
+      },
     });
   }
 

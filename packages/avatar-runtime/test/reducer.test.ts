@@ -12,9 +12,22 @@ test('only playback.started moves the runtime into speaking', () => {
     generation: 0,
     segmentId: 'segment-1',
     sequence: 0,
-    audio: { uri: 'memory://segment-1' },
+    audio: {
+      delivery: 'artifact', requestId: 'segment-1',
+      uri: 'memory://segment-1', mimeType: 'audio/wav',
+    },
   });
   assert.equal(transition.snapshot.state, 'thinking');
+
+  transition = reduceAvatarSnapshot(transition.snapshot, {
+    type: 'playback.buffering',
+    generation: 0,
+    segmentId: 'segment-1',
+    positionMs: 0,
+    bufferedMs: 120,
+  });
+  assert.equal(transition.snapshot.state, 'thinking');
+  assert.equal(transition.snapshot.playback.status, 'buffering');
 
   transition = reduceAvatarSnapshot(transition.snapshot, {
     type: 'playback.started',
@@ -23,6 +36,25 @@ test('only playback.started moves the runtime into speaking', () => {
     positionMs: 0,
   });
   assert.equal(transition.snapshot.state, 'speaking');
+});
+
+test('stream stalls and recovery only update playback state', () => {
+  let snapshot = reduceAvatarSnapshot(createInitialSnapshot(), { type: 'plan.submitted', plan }).snapshot;
+  snapshot = reduceAvatarSnapshot(snapshot, {
+    type: 'playback.started', generation: 0, segmentId: 'segment-1', positionMs: 20,
+  }).snapshot;
+
+  snapshot = reduceAvatarSnapshot(snapshot, {
+    type: 'playback.stalled', generation: 0, segmentId: 'segment-1', positionMs: 80,
+  }).snapshot;
+  assert.equal(snapshot.state, 'speaking');
+  assert.deepEqual(snapshot.playback, { status: 'buffering', positionMs: 80 });
+
+  snapshot = reduceAvatarSnapshot(snapshot, {
+    type: 'playback.recovered', generation: 0, segmentId: 'segment-1', positionMs: 80,
+  }).snapshot;
+  assert.equal(snapshot.state, 'speaking');
+  assert.deepEqual(snapshot.playback, { status: 'playing', positionMs: 80 });
 });
 
 test('interrupt is idempotent and stale generation events are ignored', () => {

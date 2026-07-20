@@ -1,10 +1,15 @@
-import type { AmplitudeSample, AudioSource, VisemeTiming } from '../../contracts/src/index.ts';
+import type { AmplitudeSample, AudioCodec, AudioSource, VisemeTiming } from '../../contracts/src/index.ts';
 
-export type TtsAudioFormat = 'wav' | 'mp3' | 'ogg' | 'pcm';
+export type TtsAudioFormat = 'wav' | 'mp3' | 'ogg' | 'opus' | 'pcm_s16le' | 'pcm_f32le';
+export type TtsDeliveryPreference = 'stream-required' | 'stream-preferred' | 'artifact';
 
 export interface TtsSynthesisRequest {
+  requestId: string;
   text: string;
+  delivery?: TtsDeliveryPreference;
   voice?: string;
+  language?: string;
+  instruction?: string;
   rate?: number;
   format?: TtsAudioFormat;
   signal?: AbortSignal;
@@ -13,10 +18,14 @@ export interface TtsSynthesisRequest {
 export interface TtsCapabilities {
   provider: string;
   formats: TtsAudioFormat[];
+  deliveryModes: Array<'stream' | 'artifact'>;
   supportsVoices: boolean;
+  supportsLanguages: boolean;
+  supportsInstructions: boolean;
   supportsVisemes: boolean;
   supportsAmplitude: boolean;
   streaming: boolean;
+  cancellation: 'none' | 'request';
 }
 
 export interface TtsHealthReport {
@@ -27,7 +36,8 @@ export interface TtsHealthReport {
 }
 
 export interface TtsAdapter {
-  synthesize(request: TtsSynthesisRequest): Promise<AudioSource>;
+  prepare(request: TtsSynthesisRequest): Promise<AudioSource>;
+  cancel(requestId: string): Promise<void>;
   capabilities(): Promise<TtsCapabilities>;
   health(): Promise<TtsHealthReport>;
 }
@@ -35,6 +45,8 @@ export interface TtsAdapter {
 export interface McpToolDescriptor {
   name: string;
   description?: string;
+  inputSchema?: Record<string, unknown>;
+  outputSchema?: Record<string, unknown>;
 }
 
 export type McpContentBlock =
@@ -59,9 +71,14 @@ export interface McpClientPort {
 }
 
 export interface NormalizedTtsPayload {
+  requestId?: string;
+  delivery?: 'stream' | 'artifact';
   uri?: string;
   data?: string;
   mimeType?: string;
+  codec?: AudioCodec;
+  sampleRateHz?: number;
+  channels?: number;
   durationMs?: number;
   visemes?: VisemeTiming[];
   amplitude?: AmplitudeSample[];
