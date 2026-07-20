@@ -1,6 +1,6 @@
 import { ShaderSystem } from '@pixi/core';
 import { install as installCspShaderCompiler } from '@pixi/unsafe-eval';
-import { Application, Ticker } from 'pixi.js';
+import { Application, Renderer, Ticker } from 'pixi.js';
 import { Live2DModel, MotionPriority } from 'pixi-live2d-display/cubism4';
 import type { AvatarEvent, RuntimeEffect } from '../../../../packages/contracts/src/index.ts';
 import type { AmplitudeSample } from '../../../../packages/contracts/src/index.ts';
@@ -17,7 +17,12 @@ import {
 import type { KnownToneResponseTrace } from '../../../../packages/audio-runtime/src/index.ts';
 import { AvatarRuntime, DefaultAvatarPlanner, ParameterMixer } from '../../../../packages/avatar-runtime/src/index.ts';
 import { DEFAULT_TTS_CONFIG, MAO_CHARACTER_CONFIG } from '../../../../packages/config/src/index.ts';
-import { RuntimeParameterFrame } from '../../../../packages/live2d-renderer/src/index.ts';
+import {
+  AsyncPixelCoveragePicker,
+  RuntimeParameterFrame,
+  WebGLPixelReadbackBackend,
+} from '../../../../packages/live2d-renderer/src/index.ts';
+import type { PixelCoverageResult } from '../../../../packages/live2d-renderer/src/index.ts';
 import type { TtsAdapter } from '../../../../packages/tts-mcp-adapter/src/index.ts';
 import { JsonConsoleTtsLogger, MockTtsAdapter, TtsRuntimeEffectHandler } from '../../../../packages/tts-mcp-adapter/src/index.ts';
 import './style.css';
@@ -68,6 +73,8 @@ let toneAcceptance: ToneAcceptanceRun | null = null;
 let applyingToneTrace: ToneSyncTrace | null = null;
 let desktopBounds: { x: number; y: number; width: number; height: number } | undefined;
 let mousePassthrough: boolean | undefined;
+let pixelPicker: AsyncPixelCoveragePicker | undefined;
+let pixelSelection: PixelCoverageResult | undefined;
 let dragInteraction: {
   pointerId: number;
   hitArea: string;
@@ -368,6 +375,19 @@ function formatMs(value: number): string { return `${value.toFixed(1)}ms`; }
 
 function initializeDesktopInteraction(): void {
   if (!desktopShell) return;
+  const renderer = app.renderer as Renderer;
+  const readback = new WebGLPixelReadbackBackend(
+    renderer.gl as WebGLRenderingContext | WebGL2RenderingContext,
+    canvas,
+    { prepareReadback: () => renderer.framebuffer.bind() },
+  );
+  pixelPicker = new AsyncPixelCoveragePicker(readback, {
+    alphaThreshold: 1 / 255,
+    onResult: applyPixelSelection,
+    onError: handlePixelSelectionError,
+  });
+  document.body.dataset.pixelReadback = readback.readbackMode;
+  app.renderer.on('postrender', advancePixelPicking);
   desktopShell.onBoundsChanged(updateDesktopBounds);
   desktopShell.onCursorPoint(handleDesktopCursor);
   canvas.addEventListener('pointerdown', beginAvatarDrag);
@@ -375,10 +395,21 @@ function initializeDesktopInteraction(): void {
   canvas.addEventListener('pointerup', endAvatarDrag);
   canvas.addEventListener('pointercancel', endAvatarDrag);
   canvas.addEventListener('contextmenu', event => {
-    if (!model?.hitTest(event.clientX, event.clientY).length) return;
+    if (!selectedHitArea(event.clientX, event.clientY)) return;
     event.preventDefault();
     desktopShell.showContextMenu();
   });
+  canvas.addEventListener('webglcontextlost', () => {
+    pixelPicker?.invalidate();
+    pixelSelection = undefined;
+    document.body.dataset.pixelSelection = 'context-lost';
+    updateMousePassthrough(true);
+  });
+  window.addEventListener('beforeunload', () => {
+    app.renderer.off('postrender', advancePixelPicking);
+    pixelPicker?.dispose();
+    pixelPicker = undefined;
+  }, { once: true });
   void desktopShell.ready().then(state => {
     updateDesktopBounds(state.bounds);
     updateMousePassthrough(state.mousePassthrough);
@@ -399,13 +430,22 @@ function handleDesktopCursor(point: { x: number; y: number }): void {
   });
   if (dragInteraction) return;
   const inside = localX >= 0 && localY >= 0 && localX < desktopBounds.width && localY < desktopBounds.height;
-  const hit = inside && model.hitTest(localX, localY).length > 0;
-  updateMousePassthrough(!hit);
+  if (!inside) {
+    pixelPicker?.invalidate();
+    pixelSelection = undefined;
+    document.body.dataset.pixelSelection = 'outside';
+    updateMousePassthrough(true);
+    return;
+  }
+  pixelPicker?.request({ x: localX, y: localY });
+  if (!pixelSelection || pixelSelection.point.x !== localX || pixelSelection.point.y !== localY) {
+    document.body.dataset.pixelSelection = 'pending';
+  }
 }
 
 function beginAvatarDrag(event: PointerEvent): void {
   if (!desktopShell || !model || event.button !== 0) return;
-  const hitArea = model.hitTest(event.clientX, event.clientY)[0];
+  const hitArea = selectedHitArea(event.clientX, event.clientY);
   if (!hitArea) return;
   event.preventDefault();
   canvas.setPointerCapture(event.pointerId);
@@ -418,6 +458,7 @@ function beginAvatarDrag(event: PointerEvent): void {
     moved: false,
   };
   dragInteraction = interaction;
+  pixelPicker?.invalidate();
   document.body.dataset.dragState = 'pressed';
   void desktopShell.beginDrag(interaction.start).then(() => {
     if (dragInteraction !== interaction) return;
@@ -469,6 +510,32 @@ function updateMousePassthrough(passthrough: boolean): void {
   mousePassthrough = passthrough;
   document.body.dataset.pointerMode = passthrough ? 'passthrough' : 'interactive';
   desktopShell.setMousePassthrough(passthrough);
+}
+
+function advancePixelPicking(): void {
+  pixelPicker?.afterRender();
+}
+
+function applyPixelSelection(result: PixelCoverageResult): void {
+  pixelSelection = result;
+  document.body.dataset.pixelSelection = result.covered ? 'covered' : 'transparent';
+  document.body.dataset.pixelAlpha = result.rgba[3].toString();
+  document.body.dataset.pixelReadbackFrames = result.latencyFrames.toString();
+  if (!dragInteraction) updateMousePassthrough(!result.covered);
+}
+
+function handlePixelSelectionError(error: Error): void {
+  pixelSelection = undefined;
+  document.body.dataset.pixelSelection = 'failed';
+  document.body.dataset.pixelReadbackError = error.message;
+  if (!dragInteraction) updateMousePassthrough(true);
+  console.error('Pixel coverage readback failed', error);
+}
+
+function selectedHitArea(x: number, y: number): string | undefined {
+  const selection = pixelSelection;
+  if (!selection?.covered || Math.abs(selection.point.x - x) > 2 || Math.abs(selection.point.y - y) > 2) return undefined;
+  return model?.hitTest(x, y)[0] ?? 'VisiblePixel';
 }
 
 function afterRenderedFrames(count: number, callback: () => void): void {

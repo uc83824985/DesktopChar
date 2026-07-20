@@ -17,6 +17,7 @@ try {
   page.on('pageerror', error => errors.push(error.stack ?? error.message));
   await page.locator('body[data-ready="true"][data-shell="floating"]').waitFor({ timeout: 20_000 });
   await page.locator('body[data-gaze-follow="enabled"]').waitFor({ timeout: 2_000 });
+  await page.locator('body[data-pixel-selection]').waitFor({ timeout: 2_000 });
 
   const initial = await page.evaluate(() => window.desktopChar?.getWindowState());
   if (!initial || !initial.alwaysOnTop || initial.bounds.width > 500 || initial.bounds.height > 740) {
@@ -42,6 +43,8 @@ try {
     rootBackground: getComputedStyle(document.documentElement).backgroundColor,
     bodyBackground: getComputedStyle(document.body).backgroundColor,
     background: getComputedStyle(document.querySelector('main')).backgroundColor,
+    pixelReadback: document.body.dataset.pixelReadback,
+    pixelSelection: document.body.dataset.pixelSelection,
   }));
   const movedState = moved.state;
   if (!movedState || movedState.bounds.x !== initial.bounds.x - 36 || movedState.bounds.y !== initial.bounds.y - 28) {
@@ -56,8 +59,14 @@ try {
     || moved.background !== 'rgba(0, 0, 0, 0)') {
     throw new Error(`Floating renderer is not transparent: ${JSON.stringify(moved)}`);
   }
+  if (!['async-pbo', 'sync-one-pixel'].includes(moved.pixelReadback)) {
+    throw new Error(`Pixel coverage adapter is not active: ${JSON.stringify(moved)}`);
+  }
+  if (!['outside', 'pending', 'covered', 'transparent'].includes(moved.pixelSelection)) {
+    throw new Error(`Pixel coverage state is not updating: ${JSON.stringify(moved)}`);
+  }
   if (errors.length) throw new Error(`Desktop renderer errors:\n${errors.join('\n')}`);
-  console.log(`Electron floating smoke passed (${movedState.bounds.width}x${movedState.bounds.height} at ${movedState.bounds.x},${movedState.bounds.y}).`);
+  console.log(`Electron floating smoke passed (${movedState.bounds.width}x${movedState.bounds.height} at ${movedState.bounds.x},${movedState.bounds.y}; pixel readback ${moved.pixelReadback}).`);
 }
 finally {
   await application.close();
