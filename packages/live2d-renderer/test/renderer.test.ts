@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
-import { FakeLive2DCore, Live2DRenderer } from '../src/index.ts';
+import { FakeLive2DCore, Live2DRenderer, RuntimeParameterFrame } from '../src/index.ts';
 import type { CoreModelDescriptor, Live2DCoreModel, Live2DCoreModelPort } from '../src/index.ts';
 
 const descriptor: CoreModelDescriptor = {
@@ -62,4 +62,20 @@ test('rejects invalid viewport dimensions', async () => {
   const renderer = new Live2DRenderer(new FakeLive2DCore({ mao: descriptor }));
   await renderer.load({ id: 'mao', modelJsonUrl: '/mao' });
   assert.throws(() => renderer.resize(0, 600), RangeError);
+});
+
+test('reapplies the latest Runtime frame after Live2D motion parameters', () => {
+  const values = new Map<string, number>();
+  const target = {
+    setParameterValueById(id: string, value: number): void { values.set(id, value); },
+  };
+  const frame = new RuntimeParameterFrame({ aliases: { ParamMouthOpenY: 'ParamA' } });
+  frame.replace({ ParamMouthOpenY: 0.75, ParamEyeBallX: -0.4 });
+
+  target.setParameterValueById('ParamA', 0);
+  target.setParameterValueById('ParamEyeBallX', 1);
+  frame.apply(target);
+
+  assert.deepEqual([...values], [['ParamA', 0.75], ['ParamEyeBallX', -0.4]]);
+  assert.deepEqual(frame.current(), { ParamMouthOpenY: 0.75, ParamEyeBallX: -0.4 });
 });

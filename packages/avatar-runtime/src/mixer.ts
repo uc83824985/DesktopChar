@@ -47,9 +47,9 @@ export class ParameterMixer {
     const result: ParameterFrame = {};
     const orderedLayers = [
       layers.base,
-      layers.gaze,
       layers.expression,
       layers.gesture,
+      layers.gaze,
       layers.mouth,
     ];
 

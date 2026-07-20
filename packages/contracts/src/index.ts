@@ -139,6 +139,8 @@ export type UserEvent =
   | { type: 'user.interrupt-requested' }
   | { type: 'user.pause-requested' }
   | { type: 'user.resume-requested' }
+  | { type: 'user.gaze-follow-enabled' }
+  | { type: 'user.gaze-follow-disabled' }
   | { type: 'user.look-target-changed'; x: number; y: number }
   | { type: 'user.avatar-clicked'; hitArea: string };
 

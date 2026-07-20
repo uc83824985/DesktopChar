@@ -71,7 +71,7 @@ export class AvatarRuntime {
       this.failedSequences.clear();
       this.timeline = null;
       this.currentSource = null;
-      this.layers = emptyLayers();
+      this.layers = performanceLayersWithGaze(this.layers.gaze);
       acceptedEvent = { type: 'plan.submitted', plan: normalized };
     }
 
@@ -123,7 +123,7 @@ export class AvatarRuntime {
       this.timeline?.cancel();
       this.timeline = null;
       this.currentSource = null;
-      this.layers.mouth = {};
+      this.layers.mouth = neutralMouthLayer();
       this.emitFrame();
       this.nextSegmentIndex++;
     }
@@ -131,7 +131,7 @@ export class AvatarRuntime {
       this.timeline?.cancel();
       this.timeline = null;
       this.currentSource = null;
-      this.layers.mouth = {};
+      this.layers.mouth = neutralMouthLayer();
       this.emitFrame();
       this.nextSegmentIndex++;
     }
@@ -142,13 +142,27 @@ export class AvatarRuntime {
       this.plan = null;
       this.readyAudio.clear();
       this.failedSequences.clear();
-      this.layers = emptyLayers();
+      this.layers = performanceLayersWithGaze(this.layers.gaze);
+      this.emitFrame();
     }
-    else if (acceptedEvent.type === 'user.look-target-changed' && this.snapshot.capabilities?.supportsGaze) {
-      this.layers.gaze = {
-        ParamAngleX: { value: acceptedEvent.x * 30 },
-        ParamAngleY: { value: acceptedEvent.y * 30 },
-      };
+    else if (
+      acceptedEvent.type === 'user.look-target-changed'
+      && this.snapshot.gaze.active
+      && this.snapshot.capabilities?.supportsGaze
+    ) {
+      this.layers.gaze = gazeLayer(acceptedEvent.x, acceptedEvent.y);
+      this.emitFrame();
+    }
+    else if (acceptedEvent.type === 'user.gaze-follow-enabled' && this.snapshot.capabilities?.supportsGaze) {
+      this.layers.gaze = gazeLayer(this.snapshot.gaze.x, this.snapshot.gaze.y);
+      this.emitFrame();
+    }
+    else if (acceptedEvent.type === 'user.gaze-follow-disabled') {
+      this.layers.gaze = {};
+      this.emitFrame();
+    }
+    else if (acceptedEvent.type === 'runtime.plan-completed') {
+      this.layers = performanceLayersWithGaze(this.layers.gaze);
       this.emitFrame();
     }
 
@@ -156,6 +170,11 @@ export class AvatarRuntime {
     this.snapshot = transition.snapshot;
     this.notify();
     this.executeAll(transition.effects);
+
+    if (acceptedEvent.type === 'renderer.ready' && this.snapshot.gaze.active) {
+      this.layers.gaze = gazeLayer(this.snapshot.gaze.x, this.snapshot.gaze.y);
+      this.emitFrame();
+    }
 
     if (
       acceptedEvent.type === 'plan.submitted'
@@ -326,7 +345,32 @@ export class AvatarRuntime {
 }
 
 function emptyLayers(): ParameterLayers {
-  return { base: {}, gaze: {}, expression: {}, gesture: {}, mouth: {} };
+  return performanceLayersWithGaze({});
+}
+
+function performanceLayersWithGaze(gaze: Record<string, ParameterValue>): ParameterLayers {
+  return {
+    base: {},
+    gaze: { ...gaze },
+    expression: { ParamMouthForm: { value: 0, weight: 1, blend: 'overwrite' } },
+    gesture: {},
+    mouth: neutralMouthLayer(),
+  };
+}
+
+function neutralMouthLayer(): Record<string, ParameterValue> {
+  return { ParamMouthOpenY: { value: 0, blend: 'overwrite' } };
+}
+
+function gazeLayer(x: number, y: number): Record<string, ParameterValue> {
+  const normalizedX = Math.max(-1, Math.min(1, x));
+  const normalizedY = Math.max(-1, Math.min(1, y));
+  return {
+    ParamAngleX: { value: normalizedX * 30, blend: 'overwrite' },
+    ParamAngleY: { value: normalizedY * 30, blend: 'overwrite' },
+    ParamEyeBallX: { value: normalizedX, blend: 'overwrite' },
+    ParamEyeBallY: { value: normalizedY, blend: 'overwrite' },
+  };
 }
 
 function emotionLayer(emotion: string, intensity: number): Record<string, ParameterValue> {

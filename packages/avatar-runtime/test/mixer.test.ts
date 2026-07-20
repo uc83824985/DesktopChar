@@ -17,7 +17,7 @@ test('mouth owns mouth-open even when gesture and expression write it', () => {
   assert.equal(frame.ParamMouthOpenY, 1);
 });
 
-test('mixer filters unsupported parameters and applies layer priority', () => {
+test('active gaze owns tracked parameters over expressions and gestures', () => {
   const frame = new ParameterMixer().mix({
     base: { ParamAngleX: { value: 1 }, Unsupported: { value: 9 } },
     gaze: { ParamAngleX: { value: 2 } },
@@ -25,5 +25,5 @@ test('mixer filters unsupported parameters and applies layer priority', () => {
     gesture: { ParamAngleX: { value: 4 } },
     mouth: {},
   }, capabilities);
-  assert.deepEqual(frame, { ParamAngleX: 4 });
+  assert.deepEqual(frame, { ParamAngleX: 2 });
 });

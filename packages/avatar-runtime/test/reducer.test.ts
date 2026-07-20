@@ -89,3 +89,23 @@ test('gaze input is capability-aware and clamped', () => {
   }).snapshot;
   assert.deepEqual(snapshot.gaze, { x: 1, y: -1, active: true });
 });
+
+test('gaze follow is persistent until explicitly disabled', () => {
+  let snapshot = reduceAvatarSnapshot(createInitialSnapshot(), {
+    type: 'renderer.ready', capabilities,
+  }).snapshot;
+  snapshot = reduceAvatarSnapshot(snapshot, {
+    type: 'user.look-target-changed', x: 0.5, y: -0.25,
+  }).snapshot;
+  snapshot = reduceAvatarSnapshot(snapshot, { type: 'user.interrupt-requested' }).snapshot;
+  assert.deepEqual(snapshot.gaze, { x: 0.5, y: -0.25, active: true });
+
+  snapshot = reduceAvatarSnapshot(snapshot, { type: 'user.gaze-follow-disabled' }).snapshot;
+  snapshot = reduceAvatarSnapshot(snapshot, {
+    type: 'user.look-target-changed', x: -0.75, y: 0.25,
+  }).snapshot;
+  assert.deepEqual(snapshot.gaze, { x: -0.75, y: 0.25, active: false });
+
+  snapshot = reduceAvatarSnapshot(snapshot, { type: 'user.gaze-follow-enabled' }).snapshot;
+  assert.equal(snapshot.gaze.active, true);
+});

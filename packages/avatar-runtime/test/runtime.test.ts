@@ -44,8 +44,38 @@ test('look events are projected through Runtime-owned renderer effects', () => {
   const effects = new ControlledEffects();
   const runtime = createRuntime(effects);
   runtime.dispatch({ type: 'user.look-target-changed', x: 0.5, y: -0.25 });
-  assert.deepEqual(effects.frames.at(-1), { ParamAngleX: 15, ParamAngleY: -7.5 });
+  assert.deepEqual(effects.frames.at(-1), {
+    ParamAngleX: 15,
+    ParamAngleY: -7.5,
+    ParamEyeBallX: 0.5,
+    ParamEyeBallY: -0.25,
+    ParamMouthForm: 0,
+    ParamMouthOpenY: 0,
+  });
   assert.deepEqual(runtime.getSnapshot().gaze, { x: 0.5, y: -0.25, active: true });
+});
+
+test('gaze follow remains Runtime-owned across plans and interrupt until explicitly disabled', () => {
+  const effects = new ControlledEffects();
+  const runtime = createRuntime(effects);
+  runtime.dispatch({ type: 'user.look-target-changed', x: -0.4, y: 0.6 });
+  runtime.dispatch({ type: 'plan.submitted', plan: threeSegmentPlan() });
+  assert.equal(runtime.getSnapshot().gaze.active, true);
+  assert.equal(effects.frames.at(-1)?.ParamEyeBallX, -0.4);
+
+  runtime.dispatch({ type: 'user.interrupt-requested' });
+  assert.deepEqual(runtime.getSnapshot().gaze, { x: -0.4, y: 0.6, active: true });
+  assert.equal(effects.frames.at(-1)?.ParamEyeBallY, 0.6);
+
+  runtime.dispatch({ type: 'user.gaze-follow-disabled' });
+  assert.equal(runtime.getSnapshot().gaze.active, false);
+  assert.equal(effects.frames.at(-1)?.ParamEyeBallX, undefined);
+  runtime.dispatch({ type: 'user.look-target-changed', x: 0.8, y: -0.2 });
+  assert.deepEqual(runtime.getSnapshot().gaze, { x: 0.8, y: -0.2, active: false });
+
+  runtime.dispatch({ type: 'user.gaze-follow-enabled' });
+  assert.deepEqual(runtime.getSnapshot().gaze, { x: 0.8, y: -0.2, active: true });
+  assert.equal(effects.frames.at(-1)?.ParamEyeBallX, 0.8);
 });
 
 test('out-of-order TTS completion still produces sequence-ordered playback', () => {
@@ -107,7 +137,7 @@ test('stream playback levels drive mouth frames while buffering remains a player
   const generation = runtime.getSnapshot().generation;
 
   effects.progress(100);
-  assert.equal(effects.frames.at(-1)?.ParamMouthOpenY, undefined);
+  assert.equal(effects.frames.at(-1)?.ParamMouthOpenY, 0);
   runtime.dispatch({
     type: 'playback.level', generation, segmentId: 'segment-0', positionMs: 100, value: 1.4,
   });
@@ -134,7 +164,7 @@ test('pause freezes timeline until playback resumes', () => {
   assert.equal(runtime.getSnapshot().playback.status, 'paused');
   effects.progress(500);
   assert.deepEqual(effects.motions, []);
-  assert.equal(effects.frames.at(-1)?.ParamMouthOpenY, undefined);
+  assert.equal(effects.frames.at(-1)?.ParamMouthOpenY, 0);
 
   runtime.dispatch({ type: 'user.resume-requested' });
   assert.equal(runtime.getSnapshot().playback.status, 'playing');

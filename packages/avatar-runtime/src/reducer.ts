@@ -43,7 +43,14 @@ export function reduceAvatarSnapshot(
 
   switch (event.type) {
     case 'renderer.ready':
-      return { snapshot: { ...snapshot, capabilities: event.capabilities }, effects: [] };
+      return {
+        snapshot: {
+          ...snapshot,
+          capabilities: event.capabilities,
+          gaze: { ...snapshot.gaze, active: event.capabilities.supportsGaze },
+        },
+        effects: [],
+      };
 
     case 'renderer.failed':
       return { snapshot: withError(snapshot, event.error), effects: [] };
@@ -198,9 +205,24 @@ export function reduceAvatarSnapshot(
           gaze: {
             x: Math.max(-1, Math.min(1, event.x)),
             y: Math.max(-1, Math.min(1, event.y)),
-            active: snapshot.capabilities?.supportsGaze ?? false,
+            active: snapshot.gaze.active && (snapshot.capabilities?.supportsGaze ?? false),
           },
         },
+        effects: [],
+      };
+
+    case 'user.gaze-follow-enabled':
+      return {
+        snapshot: {
+          ...snapshot,
+          gaze: { ...snapshot.gaze, active: snapshot.capabilities?.supportsGaze ?? false },
+        },
+        effects: [],
+      };
+
+    case 'user.gaze-follow-disabled':
+      return {
+        snapshot: { ...snapshot, gaze: { ...snapshot.gaze, active: false } },
         effects: [],
       };
 
@@ -217,7 +239,7 @@ export function reduceAvatarSnapshot(
           playback: { status: 'stopped', positionMs: 0 },
           emotion: { current: 'neutral', intensity: 0 },
           gesture: { actionId: null, action: null, queueLength: 0 },
-          gaze: { x: 0, y: 0, active: false },
+          gaze: snapshot.gaze,
           interrupted: false,
         },
         effects: [
@@ -293,10 +315,20 @@ export function reduceAvatarSnapshot(
     case 'plan.failed':
       return { snapshot: withError(snapshot, event.error), effects: [] };
 
+    case 'renderer.motion-completed':
+      return event.actionId === snapshot.gesture.actionId
+        ? {
+            snapshot: {
+              ...snapshot,
+              gesture: { actionId: null, action: null, queueLength: snapshot.gesture.queueLength },
+            },
+            effects: [],
+          }
+        : { snapshot, effects: [] };
+
     case 'plan.completed':
     case 'tts.plan-completed':
     case 'plan.segment-appended':
-    case 'renderer.motion-completed':
     case 'user.avatar-clicked':
       return { snapshot, effects: [] };
   }
