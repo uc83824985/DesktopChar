@@ -13,7 +13,15 @@ export interface DesktopPoint {
 export interface DesktopWindowState {
   bounds: DesktopRectangle;
   mousePassthrough: boolean;
+  pointerPresentation: PointerPresentation;
   alwaysOnTop: boolean;
+}
+
+export type DesktopCursorIntent = 'default' | 'pointer' | 'move';
+
+export interface PointerPresentation {
+  passthrough: boolean;
+  cursor: DesktopCursorIntent;
 }
 
 export interface DesktopCharApi {
@@ -23,7 +31,7 @@ export interface DesktopCharApi {
   beginDrag(point: DesktopPoint): Promise<DesktopWindowState>;
   dragTo(point: DesktopPoint): void;
   endDrag(): Promise<DesktopWindowState>;
-  setMousePassthrough(passthrough: boolean): void;
+  setPointerPresentation(presentation: PointerPresentation): void;
   showContextMenu(): void;
   publishAgentState(state: AgentRuntimeState): void;
   onAgentCommand(callback: (command: AgentCommand) => void): () => void;

@@ -5,7 +5,7 @@ const bridge = createNativeCursorRefresh();
 if (process.platform === 'win32') {
   assert.equal(bridge.available, true, `Koffi Win32 bridge unavailable: ${bridge.reason ?? 'unknown'}`);
   assert.equal(bridge.backend, 'koffi');
-  const result = bridge.refresh({ interactive: true });
+  const result = bridge.refresh({ cursor: 'pointer' });
   assert.equal(result.refreshed, true);
   assert.equal(result.cursorSet, true);
   assert.equal(typeof result.error, 'number');

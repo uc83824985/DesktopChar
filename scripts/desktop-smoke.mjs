@@ -35,20 +35,15 @@ try {
     api.dragTo({ x: start.x - 36, y: start.y - 28 });
     await new Promise(resolve => setTimeout(resolve, 120));
     await api.endDrag();
+    api.setPointerPresentation({ passthrough: true, cursor: 'default' });
+    await new Promise(resolve => setTimeout(resolve, 20));
   });
 
   const moved = await page.evaluate(async () => {
     const body = document.body;
-    const canvas = document.querySelector('#avatar');
     const modelScaleBeforeResize = body.dataset.modelScale;
     window.dispatchEvent(new Event('resize'));
     const modelScaleAfterResize = body.dataset.modelScale;
-    const selectionBeforeCursorCheck = body.dataset.pixelSelection;
-    body.dataset.pixelSelection = 'covered';
-    const selectedCursor = getComputedStyle(canvas).cursor;
-    body.dataset.pixelSelection = 'transparent';
-    const transparentCursor = getComputedStyle(canvas).cursor;
-    body.dataset.pixelSelection = selectionBeforeCursorCheck;
     return {
       state: await window.desktopChar?.getWindowState(),
       reportedBounds: body.dataset.windowBounds,
@@ -60,8 +55,7 @@ try {
       pixelSelection: body.dataset.pixelSelection,
       modelScaleBeforeResize,
       modelScaleAfterResize,
-      selectedCursor,
-      transparentCursor,
+      cursorIntent: body.dataset.cursorIntent,
     };
   });
   const movedState = moved.state;
@@ -86,8 +80,8 @@ try {
   if (!moved.modelScaleBeforeResize || moved.modelScaleBeforeResize !== moved.modelScaleAfterResize) {
     throw new Error(`Avatar scale is not stable across resize: ${JSON.stringify(moved)}`);
   }
-  if (moved.selectedCursor !== 'grab' || moved.transparentCursor !== 'default') {
-    throw new Error(`Pixel selection does not change cursor feedback: ${JSON.stringify(moved)}`);
+  if (moved.cursorIntent !== 'default' || movedState.pointerPresentation?.cursor !== 'default') {
+    throw new Error(`Pointer presentation is not synchronized: ${JSON.stringify(moved)}`);
   }
   if (errors.length) throw new Error(`Desktop renderer errors:\n${errors.join('\n')}`);
   console.log(`Electron floating smoke passed (${movedState.bounds.width}x${movedState.bounds.height} at ${movedState.bounds.x},${movedState.bounds.y}; pixel readback ${moved.pixelReadback}).`);

@@ -27,6 +27,7 @@ import type { PixelCoverageResult } from '../../../../packages/live2d-renderer/s
 import type { TtsAdapter } from '../../../../packages/tts-mcp-adapter/src/index.ts';
 import { JsonConsoleTtsLogger, MockTtsAdapter, TtsRuntimeEffectHandler } from '../../../../packages/tts-mcp-adapter/src/index.ts';
 import './style.css';
+import type { PointerPresentation } from '../preload/desktop-api.d.ts';
 
 installCspShaderCompiler({ ShaderSystem });
 Live2DModel.registerTicker(Ticker);
@@ -73,7 +74,7 @@ let motionRequestToken = 0;
 let toneAcceptance: ToneAcceptanceRun | null = null;
 let applyingToneTrace: ToneSyncTrace | null = null;
 let desktopBounds: { x: number; y: number; width: number; height: number } | undefined;
-let mousePassthrough: boolean | undefined;
+let pointerPresentation: PointerPresentation | undefined;
 let pixelPicker: AsyncPixelCoveragePicker | undefined;
 let pixelSelection: PixelCoverageResult | undefined;
 let pixelCursorPoint: { x: number; y: number } | undefined;
@@ -423,7 +424,7 @@ function initializeDesktopInteraction(): void {
     pixelCursorPoint = undefined;
     pixelCoverageLatch.reset();
     document.body.dataset.pixelSelection = 'context-lost';
-    updateMousePassthrough(true);
+    updatePointerPresentation({ passthrough: true, cursor: 'default' });
   });
   window.addEventListener('beforeunload', () => {
     app.renderer.off('postrender', advancePixelPicking);
@@ -432,7 +433,10 @@ function initializeDesktopInteraction(): void {
   }, { once: true });
   void desktopShell.ready().then(state => {
     updateDesktopBounds(state.bounds);
-    updateMousePassthrough(state.mousePassthrough);
+    updatePointerPresentation(state.pointerPresentation ?? {
+      passthrough: state.mousePassthrough,
+      cursor: state.mousePassthrough ? 'default' : 'pointer',
+    });
     document.body.dataset.desktopShell = 'ready';
   }).catch(error => {
     document.body.dataset.desktopShell = 'failed';
@@ -458,7 +462,7 @@ function handleDesktopCursor(point: { x: number; y: number }): void {
     pixelCoverageLatch.reset();
     document.body.dataset.pixelSample = 'outside';
     document.body.dataset.pixelSelection = 'outside';
-    updateMousePassthrough(true);
+    updatePointerPresentation({ passthrough: true, cursor: 'default' });
     return;
   }
   pixelCursorPoint = { x: localX, y: localY };
@@ -483,6 +487,7 @@ function beginAvatarDrag(event: PointerEvent): void {
   dragInteraction = interaction;
   pixelPicker?.invalidate();
   document.body.dataset.dragState = 'pressed';
+  updatePointerPresentation({ passthrough: false, cursor: 'move' });
   void desktopShell.beginDrag(interaction.start).then(() => {
     if (dragInteraction !== interaction) return;
     interaction.ready = true;
@@ -492,6 +497,7 @@ function beginAvatarDrag(event: PointerEvent): void {
     dragInteraction = undefined;
     if (canvas.hasPointerCapture(interaction.pointerId)) canvas.releasePointerCapture(interaction.pointerId);
     document.body.dataset.dragState = 'failed';
+    updatePointerPresentation(selectionPresentation());
     console.error('Avatar drag initialization failed', error);
   });
 }
@@ -516,11 +522,13 @@ function endAvatarDrag(event: PointerEvent): void {
   dragInteraction = undefined;
   if (canvas.hasPointerCapture(event.pointerId)) canvas.releasePointerCapture(event.pointerId);
   document.body.dataset.dragState = interaction.moved ? 'moved' : 'clicked';
+  const presentation = selectionPresentation();
+  updatePointerPresentation(presentation, false);
   if (!interaction.moved) {
     document.body.dataset.lastAvatarClick = interaction.hitArea;
     runtime?.dispatch({ type: 'user.avatar-clicked', hitArea: interaction.hitArea });
   }
-  void desktopShell.endDrag();
+  void desktopShell.endDrag().then(() => publishPointerPresentation(pointerPresentation ?? presentation));
 }
 
 function updateDesktopBounds(bounds: { x: number; y: number; width: number; height: number }): void {
@@ -529,11 +537,26 @@ function updateDesktopBounds(bounds: { x: number; y: number; width: number; heig
   fitModel();
 }
 
-function updateMousePassthrough(passthrough: boolean): void {
-  if (!desktopShell || mousePassthrough === passthrough) return;
-  mousePassthrough = passthrough;
-  document.body.dataset.pointerMode = passthrough ? 'passthrough' : 'interactive';
-  desktopShell.setMousePassthrough(passthrough);
+function updatePointerPresentation(presentation: PointerPresentation, publish = true): void {
+  if (!desktopShell || samePointerPresentation(pointerPresentation, presentation)) return;
+  pointerPresentation = { ...presentation };
+  document.body.dataset.pointerMode = presentation.passthrough ? 'passthrough' : 'interactive';
+  document.body.dataset.cursorIntent = presentation.cursor;
+  if (publish) publishPointerPresentation(presentation);
+}
+
+function publishPointerPresentation(presentation: PointerPresentation): void {
+  desktopShell?.setPointerPresentation(presentation);
+}
+
+function selectionPresentation(): PointerPresentation {
+  return pixelCoverageLatch.selected
+    ? { passthrough: false, cursor: 'pointer' }
+    : { passthrough: true, cursor: 'default' };
+}
+
+function samePointerPresentation(a: PointerPresentation | undefined, b: PointerPresentation): boolean {
+  return a?.passthrough === b.passthrough && a.cursor === b.cursor;
 }
 
 function advancePixelPicking(): void {
@@ -566,7 +589,7 @@ function applyPixelSelection(result: PixelCoverageResult): void {
   document.body.dataset.pixelSubmittedFrame = result.submittedFrame.toString();
   document.body.dataset.pixelResolvedFrame = result.resolvedFrame.toString();
   document.body.dataset.pixelReadbackFrames = result.latencyFrames.toString();
-  if (!dragInteraction) updateMousePassthrough(!decision.selected);
+  if (!dragInteraction) updatePointerPresentation(selectionPresentation());
 }
 
 function handlePixelSelectionError(error: Error): void {
@@ -574,7 +597,7 @@ function handlePixelSelectionError(error: Error): void {
   document.body.dataset.pixelSample = 'failed';
   document.body.dataset.pixelSelection = decision.selected ? 'covered' : 'transparent';
   document.body.dataset.pixelReadbackError = error.message;
-  if (!dragInteraction) updateMousePassthrough(!decision.selected);
+  if (!dragInteraction) updatePointerPresentation(selectionPresentation());
   console.error('Pixel coverage readback failed', error);
 }
 

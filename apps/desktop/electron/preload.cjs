@@ -8,7 +8,7 @@ const channels = {
   endDrag: 'avatar-window:end-drag',
   getState: 'avatar-window:get-state',
   ready: 'avatar-window:ready',
-  setMousePassthrough: 'avatar-window:set-mouse-passthrough',
+  setPointerPresentation: 'avatar-window:set-pointer-presentation',
   showContextMenu: 'avatar-window:show-context-menu',
   agentCommand: 'agent-http:command',
   agentState: 'agent-http:state',
@@ -21,7 +21,7 @@ contextBridge.exposeInMainWorld('desktopChar', {
   beginDrag: point => ipcRenderer.invoke(channels.beginDrag, point),
   dragTo: point => ipcRenderer.send(channels.dragTo, point),
   endDrag: () => ipcRenderer.invoke(channels.endDrag),
-  setMousePassthrough: passthrough => ipcRenderer.send(channels.setMousePassthrough, passthrough),
+  setPointerPresentation: presentation => ipcRenderer.send(channels.setPointerPresentation, presentation),
   showContextMenu: () => ipcRenderer.send(channels.showContextMenu),
   publishAgentState: state => ipcRenderer.send(channels.agentState, state),
   onAgentCommand(callback) {

@@ -20,9 +20,8 @@ test('delegates cursor refresh to the native Windows bridge', () => {
   } });
   assert.equal(bridge.available, true);
   assert.equal(bridge.backend, 'koffi');
-  assert.deepEqual(bridge.refresh({ interactive: true }), {
-    refreshed: true, zeroMoveRequested: false, zeroMoveAccepted: false,
-    delivered: true, handled: false, cursorSet: true, hitTest: 1, error: 0,
+  assert.deepEqual(bridge.refresh({ cursor: 'pointer' }), {
+    refreshed: true, delivered: true, handled: false, cursorSet: true, hitTest: 1, error: 0,
   });
   assert.deepEqual(calls, [
     ['point', 125, 90],
@@ -54,28 +53,24 @@ test('restores the system arrow when switching back to passthrough', () => {
     address: () => 1n,
     getLastError: () => 0,
   } });
-  assert.equal(bridge.refresh({ interactive: false }).cursorSet, true);
+  assert.equal(bridge.refresh({ cursor: 'default' }).cursorSet, true);
   assert.deepEqual(cursorNames, [32512n]);
 });
 
-test('can request a system-level zero-displacement cursor move without setting its shape', () => {
-  const calls = [];
+test('maps dragging to the shared move cursor intent', () => {
+  const cursorNames = [];
   const bridge = createNativeCursorRefresh({ platform: 'win32', bindings: {
     getCursorPos(point) { point.x = 41; point.y = 73; return 1; },
-    setCursorPos(x, y) { calls.push(['setCursorPos', x, y]); return 1; },
     windowFromPoint: () => ({}),
     sendMessageTimeout(_target, message, _wParam, _lParam, _flags, _timeout, output) {
       output[0] = message === 0x0084 ? 1n : 0n;
       return 1n;
     },
-    loadCursor() { throw new Error('zero-move must not load a cursor'); },
-    setCursor() { throw new Error('zero-move must not set a cursor'); },
+    loadCursor(_instance, name) { cursorNames.push(name); return {}; },
+    setCursor() { return null; },
     address: () => 1n,
     getLastError: () => 0,
   } });
-  assert.deepEqual(bridge.refresh({ interactive: true, strategy: 'zero-move' }), {
-    refreshed: false, zeroMoveRequested: true, zeroMoveAccepted: true,
-    delivered: true, handled: false, cursorSet: false, hitTest: 1, error: 0,
-  });
-  assert.deepEqual(calls, [['setCursorPos', 41, 73]]);
+  assert.equal(bridge.refresh({ cursor: 'move' }).cursorSet, true);
+  assert.deepEqual(cursorNames, [32646n]);
 });

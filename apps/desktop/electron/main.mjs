@@ -22,7 +22,7 @@ const channels = {
   endDrag: 'avatar-window:end-drag',
   getState: 'avatar-window:get-state',
   ready: 'avatar-window:ready',
-  setMousePassthrough: 'avatar-window:set-mouse-passthrough',
+  setPointerPresentation: 'avatar-window:set-pointer-presentation',
   showContextMenu: 'avatar-window:show-context-menu',
   agentCommand: 'agent-http:command',
   agentState: 'agent-http:state',
@@ -36,11 +36,8 @@ protocol.registerSchemesAsPrivileged([{
 let avatarWindow = null;
 let cursorTimer;
 let dragState = null;
-let mousePassthrough = true;
+let pointerPresentation = { passthrough: true, cursor: 'default' };
 const nativeCursorRefresh = createNativeCursorRefresh();
-const cursorRefreshStrategy = process.env.DESKTOP_CHAR_CURSOR_REFRESH === 'zero-move'
-  ? 'zero-move'
-  : 'set-cursor';
 const agentServer = createAgentHttpServer({
   host: '127.0.0.1',
   port: parseAgentPort(process.env.DESKTOP_CHAR_AGENT_PORT),
@@ -112,7 +109,7 @@ function createAvatarWindow() {
     },
   });
   avatarWindow.setAlwaysOnTop(true);
-  setMousePassthrough(true);
+  applyPointerPresentation({ passthrough: true, cursor: 'default' });
   avatarWindow.webContents.setWindowOpenHandler(() => ({ action: 'deny' }));
   avatarWindow.webContents.on('will-navigate', event => event.preventDefault());
   avatarWindow.on('move', publishBounds);
@@ -141,7 +138,7 @@ function registerIpc() {
   ipcMain.handle(channels.beginDrag, (event, point) => {
     requireAvatarSender(event);
     if (!isScreenPoint(point)) throw new TypeError('Invalid drag start point');
-    setMousePassthrough(false);
+    applyPointerPresentation({ passthrough: false, cursor: 'move' });
     dragState = { startPointer: point, startBounds: avatarWindow.getBounds() };
     return windowState();
   });
@@ -161,9 +158,9 @@ function registerIpc() {
     dragState = null;
     return windowState();
   });
-  ipcMain.on(channels.setMousePassthrough, (event, passthrough) => {
+  ipcMain.on(channels.setPointerPresentation, (event, presentation) => {
     requireAvatarSender(event);
-    if (typeof passthrough === 'boolean' && !dragState) setMousePassthrough(passthrough);
+    if (isPointerPresentation(presentation) && !dragState) applyPointerPresentation(presentation);
   });
   ipcMain.on(channels.showContextMenu, event => {
     requireAvatarSender(event);
@@ -180,19 +177,25 @@ function registerIpc() {
   });
 }
 
-function setMousePassthrough(passthrough) {
-  const changed = mousePassthrough !== passthrough;
-  mousePassthrough = passthrough;
-  avatarWindow?.setIgnoreMouseEvents(passthrough, { forward: passthrough });
+function applyPointerPresentation(presentation) {
+  const changed = pointerPresentation.passthrough !== presentation.passthrough
+    || pointerPresentation.cursor !== presentation.cursor;
+  pointerPresentation = { ...presentation };
+  avatarWindow?.setIgnoreMouseEvents(presentation.passthrough, { forward: presentation.passthrough });
   if (changed && process.platform === 'win32') {
     setImmediate(() => {
-      const result = nativeCursorRefresh.refresh({
-        interactive: !passthrough,
-        strategy: cursorRefreshStrategy,
-      });
-      console.log(`[cursor-refresh] native available=${nativeCursorRefresh.available} passthrough=${passthrough}`, result);
+      const result = nativeCursorRefresh.refresh({ cursor: presentation.cursor });
+      console.log('[cursor-refresh]', { presentation, available: nativeCursorRefresh.available, ...result });
     });
   }
+}
+
+function isPointerPresentation(value) {
+  return Boolean(value)
+    && typeof value === 'object'
+    && typeof value.passthrough === 'boolean'
+    && ['default', 'pointer', 'move'].includes(value.cursor)
+    && (!value.passthrough || value.cursor === 'default');
 }
 
 function restoreDefaultPosition() {
@@ -210,7 +213,12 @@ function publishBounds() {
 
 function windowState() {
   if (!avatarWindow) throw new Error('Avatar window is not available');
-  return { bounds: avatarWindow.getBounds(), mousePassthrough, alwaysOnTop: avatarWindow.isAlwaysOnTop() };
+  return {
+    bounds: avatarWindow.getBounds(),
+    mousePassthrough: pointerPresentation.passthrough,
+    pointerPresentation: { ...pointerPresentation },
+    alwaysOnTop: avatarWindow.isAlwaysOnTop(),
+  };
 }
 
 function requireAvatarSender(event) {

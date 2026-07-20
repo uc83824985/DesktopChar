@@ -116,3 +116,9 @@ npm run test:desktop-smoke
 ```
 
 `npm run desktop` 会先构建再启动透明悬浮窗口。`body` 的 `data-pixel-readback` 会显示 `async-pbo` 或 `sync-readpixels`；`data-pixel-sample` 是最新原始样本，`data-pixel-selection` 是防抖后的确认状态，并额外记录 alpha、命中/透明连续计数、提交/完成帧号与 fence 延迟帧数。自动烟雾测试会验证窗口透明/置顶/尺寸、像素读取适配器已启用、初始穿透、拖动后原生 bounds，以及 renderer 收到的 bounds 是否一致。
+
+### PointerPresentation 单入口
+
+桌面交互以 `{ passthrough, cursor }` 作为不可拆分的 `PointerPresentation` 提交。Coverage、拖动和退出只调用 renderer 内同一个控制入口；preload 不再暴露独立的 `setMousePassthrough`。Electron main 校验组合后，同时应用窗口穿透和 Windows 光标刷新。CSS backend 与 Koffi backend 只消费相同的 `default | pointer | move` 语义，不各自判断像素选择状态。
+
+Windows 静止鼠标切换使用 `SetCursor` 立即应用同一语义对应的系统资源；不再使用零位移 `SetCursorPos`。后者是否产生新鼠标消息依赖焦点和历史输入状态，不能作为刷新协议。当前 `pointer` 在 CSS 与 Win32 都对应系统链接手形，`move` 对应系统移动光标，从而避免真实移动与静止动画覆盖显示两种不同资源。
