@@ -1,3 +1,5 @@
+import { ShaderSystem } from '@pixi/core';
+import { install as installCspShaderCompiler } from '@pixi/unsafe-eval';
 import { Application, Ticker } from 'pixi.js';
 import { Live2DModel, MotionPriority } from 'pixi-live2d-display/cubism4';
 import type { AvatarEvent, RuntimeEffect } from '../../../../packages/contracts/src/index.ts';
@@ -14,13 +16,16 @@ import {
 } from '../../../../packages/audio-runtime/src/index.ts';
 import type { KnownToneResponseTrace } from '../../../../packages/audio-runtime/src/index.ts';
 import { AvatarRuntime, DefaultAvatarPlanner, ParameterMixer } from '../../../../packages/avatar-runtime/src/index.ts';
-import { DEFAULT_TTS_CONFIG } from '../../../../packages/config/src/index.ts';
+import { DEFAULT_TTS_CONFIG, MAO_CHARACTER_CONFIG } from '../../../../packages/config/src/index.ts';
 import { RuntimeParameterFrame } from '../../../../packages/live2d-renderer/src/index.ts';
 import type { TtsAdapter } from '../../../../packages/tts-mcp-adapter/src/index.ts';
 import { JsonConsoleTtsLogger, MockTtsAdapter, TtsRuntimeEffectHandler } from '../../../../packages/tts-mcp-adapter/src/index.ts';
 import './style.css';
 
+installCspShaderCompiler({ ShaderSystem });
 Live2DModel.registerTicker(Ticker);
+const desktopShell = window.desktopChar;
+if (desktopShell) document.body.dataset.shell = 'floating';
 const canvas = document.querySelector<HTMLCanvasElement>('#avatar')!;
 const status = document.querySelector<HTMLElement>('#status')!;
 const speak = document.querySelector<HTMLButtonElement>('#speak')!;
@@ -58,6 +63,16 @@ let motionTimer: ReturnType<typeof setTimeout> | undefined;
 let motionRequestToken = 0;
 let toneAcceptance: ToneAcceptanceRun | null = null;
 let applyingToneTrace: ToneSyncTrace | null = null;
+let desktopBounds: { x: number; y: number; width: number; height: number } | undefined;
+let mousePassthrough: boolean | undefined;
+let dragInteraction: {
+  pointerId: number;
+  hitArea: string;
+  start: { x: number; y: number };
+  latest: { x: number; y: number };
+  ready: boolean;
+  moved: boolean;
+} | undefined;
 const pendingToneTraces: ToneSyncTrace[] = [];
 const runtimeFrame = new RuntimeParameterFrame({
   aliases: { ParamMouthOpenY: 'ParamA', ParamMouthForm: 'ParamMouthUp' },
@@ -101,7 +116,7 @@ tonePlayer.subscribe(event => {
 });
 
 try {
-  model = await Live2DModel.from('/models/Mao/Mao.model3.json', { autoInteract: false });
+  model = await Live2DModel.from(MAO_CHARACTER_CONFIG.modelJsonUrl, { autoInteract: false });
   model.internalModel.on('beforeModelUpdate', applyRuntimeFrame);
   app.stage.addChild(model);
   fitModel();
@@ -116,6 +131,7 @@ try {
       ParamEyeBallX: { min: -1, max: 1 }, ParamEyeBallY: { min: -1, max: 1 },
     } }),
     effects: { execute },
+    gazeProfile: MAO_CHARACTER_CONFIG.gazeProfile,
   });
   runtime.dispatch({ type: 'renderer.ready', capabilities: {
     emotions: ['neutral', 'happy'], actions: ['nod'],
@@ -141,11 +157,12 @@ try {
       : 'Runtime 已就绪 · UI 仅发送事件，状态由 Runtime 持有';
   });
 
-  window.addEventListener('pointermove', event => runtime?.dispatch({
-    type: 'user.look-target-changed',
-    x: event.clientX / innerWidth * 2 - 1,
-    y: -(event.clientY / innerHeight * 2 - 1),
-  }));
+  if (desktopShell) initializeDesktopInteraction();
+  else window.addEventListener('pointermove', event => runtime?.dispatch({
+      type: 'user.look-target-changed',
+      x: event.clientX / innerWidth * 2 - 1,
+      y: -(event.clientY / innerHeight * 2 - 1),
+    }));
   speak.addEventListener('click', () => submitDemo(false));
   tone.addEventListener('click', submitToneAcceptance);
   motion.addEventListener('click', () => submitDemo(true));
@@ -346,6 +363,111 @@ function tonePhase(positionMs: number): string {
 
 function formatMs(value: number): string { return `${value.toFixed(1)}ms`; }
 
+function initializeDesktopInteraction(): void {
+  if (!desktopShell) return;
+  desktopShell.onBoundsChanged(updateDesktopBounds);
+  desktopShell.onCursorPoint(handleDesktopCursor);
+  canvas.addEventListener('pointerdown', beginAvatarDrag);
+  canvas.addEventListener('pointermove', moveAvatarDrag);
+  canvas.addEventListener('pointerup', endAvatarDrag);
+  canvas.addEventListener('pointercancel', endAvatarDrag);
+  canvas.addEventListener('contextmenu', event => {
+    if (!model?.hitTest(event.clientX, event.clientY).length) return;
+    event.preventDefault();
+    desktopShell.showContextMenu();
+  });
+  void desktopShell.ready().then(state => {
+    updateDesktopBounds(state.bounds);
+    updateMousePassthrough(state.mousePassthrough);
+  }).catch(error => {
+    document.body.dataset.desktopShell = 'failed';
+    console.error('Desktop shell initialization failed', error);
+  });
+}
+
+function handleDesktopCursor(point: { x: number; y: number }): void {
+  if (!desktopShell || !desktopBounds || !model || !runtime) return;
+  const localX = point.x - desktopBounds.x;
+  const localY = point.y - desktopBounds.y;
+  runtime.dispatch({
+    type: 'user.look-target-changed',
+    x: (point.x - (desktopBounds.x + desktopBounds.width / 2)) / (desktopBounds.width / 2),
+    y: -(point.y - (desktopBounds.y + desktopBounds.height / 2)) / (desktopBounds.height / 2),
+  });
+  if (dragInteraction) return;
+  const inside = localX >= 0 && localY >= 0 && localX < desktopBounds.width && localY < desktopBounds.height;
+  const hit = inside && model.hitTest(localX, localY).length > 0;
+  updateMousePassthrough(!hit);
+}
+
+function beginAvatarDrag(event: PointerEvent): void {
+  if (!desktopShell || !model || event.button !== 0) return;
+  const hitArea = model.hitTest(event.clientX, event.clientY)[0];
+  if (!hitArea) return;
+  event.preventDefault();
+  canvas.setPointerCapture(event.pointerId);
+  const interaction = {
+    pointerId: event.pointerId,
+    hitArea,
+    start: { x: event.screenX, y: event.screenY },
+    latest: { x: event.screenX, y: event.screenY },
+    ready: false,
+    moved: false,
+  };
+  dragInteraction = interaction;
+  document.body.dataset.dragState = 'pressed';
+  void desktopShell.beginDrag(interaction.start).then(() => {
+    if (dragInteraction !== interaction) return;
+    interaction.ready = true;
+    if (interaction.moved) desktopShell.dragTo(interaction.latest);
+  }).catch(error => {
+    if (dragInteraction !== interaction) return;
+    dragInteraction = undefined;
+    if (canvas.hasPointerCapture(interaction.pointerId)) canvas.releasePointerCapture(interaction.pointerId);
+    document.body.dataset.dragState = 'failed';
+    console.error('Avatar drag initialization failed', error);
+  });
+}
+
+function moveAvatarDrag(event: PointerEvent): void {
+  if (!desktopShell || !dragInteraction || event.pointerId !== dragInteraction.pointerId) return;
+  dragInteraction.latest = { x: event.screenX, y: event.screenY };
+  dragInteraction.moved ||= Math.hypot(
+    event.screenX - dragInteraction.start.x,
+    event.screenY - dragInteraction.start.y,
+  ) >= 5;
+  if (!dragInteraction.moved) return;
+  document.body.dataset.dragState = 'moving';
+  if (dragInteraction.ready) desktopShell.dragTo(dragInteraction.latest);
+}
+
+function endAvatarDrag(event: PointerEvent): void {
+  if (!desktopShell || !dragInteraction || event.pointerId !== dragInteraction.pointerId) return;
+  const interaction = dragInteraction;
+  interaction.latest = { x: event.screenX, y: event.screenY };
+  if (interaction.moved && interaction.ready) desktopShell.dragTo(interaction.latest);
+  dragInteraction = undefined;
+  if (canvas.hasPointerCapture(event.pointerId)) canvas.releasePointerCapture(event.pointerId);
+  document.body.dataset.dragState = interaction.moved ? 'moved' : 'clicked';
+  if (!interaction.moved) {
+    document.body.dataset.lastAvatarClick = interaction.hitArea;
+    runtime?.dispatch({ type: 'user.avatar-clicked', hitArea: interaction.hitArea });
+  }
+  void desktopShell.endDrag();
+}
+
+function updateDesktopBounds(bounds: { x: number; y: number; width: number; height: number }): void {
+  desktopBounds = bounds;
+  document.body.dataset.windowBounds = `${bounds.x},${bounds.y},${bounds.width},${bounds.height}`;
+}
+
+function updateMousePassthrough(passthrough: boolean): void {
+  if (!desktopShell || mousePassthrough === passthrough) return;
+  mousePassthrough = passthrough;
+  document.body.dataset.pointerMode = passthrough ? 'passthrough' : 'interactive';
+  desktopShell.setMousePassthrough(passthrough);
+}
+
 function afterRenderedFrames(count: number, callback: () => void): void {
   if (count <= 0) return callback();
   app.renderer.once('postrender', () => afterRenderedFrames(count - 1, callback));
@@ -374,6 +496,10 @@ function sampleAmplitude(samples: Array<{ atMs: number; value: number }> | undef
 function coreModel(target: Live2DModel): CubismCoreModel { return target.internalModel.coreModel as CubismCoreModel; }
 function fitModel(): void {
   if (!model) return;
-  const scale = Math.min(innerWidth / model.width * 0.7, innerHeight / model.height * 0.82);
-  model.scale.set(scale); model.anchor.set(0.5, 0.5); model.position.set(innerWidth * 0.68, innerHeight * 0.5);
+  const scale = desktopShell
+    ? Math.min(innerWidth / model.width * 0.92, innerHeight / model.height * 0.94)
+    : Math.min(innerWidth / model.width * 0.7, innerHeight / model.height * 0.82);
+  model.scale.set(scale);
+  model.anchor.set(0.5, 0.5);
+  model.position.set(innerWidth * (desktopShell ? 0.5 : 0.68), innerHeight * 0.5);
 }

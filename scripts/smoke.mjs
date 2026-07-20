@@ -6,6 +6,7 @@ const server = spawn(process.execPath, ['node_modules/vite/bin/vite.js', 'previe
   windowsHide: true,
 });
 let output = '';
+const errors = [];
 server.stdout.on('data', chunk => { output += chunk; });
 server.stderr.on('data', chunk => { output += chunk; });
 
@@ -14,7 +15,6 @@ try {
   await waitForServer('http://127.0.0.1:4173', 15_000);
   browser = await chromium.launch({ channel: 'msedge', headless: true });
   const page = await browser.newPage({ viewport: { width: 1280, height: 800 } });
-  const errors = [];
   page.on('console', message => {
     if (message.type() === 'error' && !message.text().includes('404')) errors.push(message.text());
   });
@@ -77,6 +77,7 @@ try {
 }
 catch (error) {
   console.error(output);
+  if (errors.length) console.error(`Browser errors before failure:\n${errors.join('\n')}`);
   throw error;
 }
 finally {

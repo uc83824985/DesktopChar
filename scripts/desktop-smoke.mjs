@@ -1,0 +1,59 @@
+import path from 'node:path';
+import { _electron as electron } from 'playwright-core';
+
+const root = process.cwd();
+const application = await electron.launch({
+  args: [path.join(root, 'apps/desktop/electron/main.mjs')],
+  cwd: root,
+  env: { ...process.env, DESKTOP_CHAR_DESKTOP_SMOKE: '1' },
+});
+
+try {
+  const page = await application.firstWindow({ timeout: 20_000 });
+  const errors = [];
+  page.on('console', message => {
+    if (message.type() === 'error' && !message.text().includes('404')) errors.push(message.text());
+  });
+  page.on('pageerror', error => errors.push(error.stack ?? error.message));
+  await page.locator('body[data-ready="true"][data-shell="floating"]').waitFor({ timeout: 20_000 });
+  await page.locator('body[data-gaze-follow="enabled"]').waitFor({ timeout: 2_000 });
+
+  const initial = await page.evaluate(() => window.desktopChar?.getWindowState());
+  if (!initial || !initial.alwaysOnTop || initial.bounds.width > 500 || initial.bounds.height > 740) {
+    throw new Error(`Unexpected floating window state: ${JSON.stringify(initial)}`);
+  }
+  if (!initial.mousePassthrough) throw new Error('Floating window must start in desktop passthrough mode');
+
+  await page.evaluate(async () => {
+    const api = window.desktopChar;
+    if (!api) throw new Error('Desktop preload bridge is missing');
+    const state = await api.getWindowState();
+    const start = { x: state.bounds.x + state.bounds.width / 2, y: state.bounds.y + state.bounds.height / 2 };
+    await api.beginDrag(start);
+    api.dragTo({ x: start.x - 36, y: start.y - 28 });
+    await new Promise(resolve => setTimeout(resolve, 120));
+    await api.endDrag();
+  });
+
+  const moved = await page.evaluate(async () => ({
+    state: await window.desktopChar?.getWindowState(),
+    reportedBounds: document.body.dataset.windowBounds,
+    panelDisplay: getComputedStyle(document.querySelector('.panel')).display,
+    background: getComputedStyle(document.querySelector('main')).backgroundColor,
+  }));
+  const movedState = moved.state;
+  if (!movedState || movedState.bounds.x !== initial.bounds.x - 36 || movedState.bounds.y !== initial.bounds.y - 28) {
+    throw new Error(`Avatar bounds did not follow drag: ${JSON.stringify({ initial, movedState })}`);
+  }
+  if (moved.reportedBounds !== `${movedState.bounds.x},${movedState.bounds.y},${movedState.bounds.width},${movedState.bounds.height}`) {
+    throw new Error(`Renderer bounds are not synchronized: ${JSON.stringify(moved)}`);
+  }
+  if (moved.panelDisplay !== 'none' || moved.background !== 'rgba(0, 0, 0, 0)') {
+    throw new Error(`Floating renderer is not transparent: ${JSON.stringify(moved)}`);
+  }
+  if (errors.length) throw new Error(`Desktop renderer errors:\n${errors.join('\n')}`);
+  console.log(`Electron floating smoke passed (${movedState.bounds.width}x${movedState.bounds.height} at ${movedState.bounds.x},${movedState.bounds.y}).`);
+}
+finally {
+  await application.close();
+}

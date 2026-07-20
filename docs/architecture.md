@@ -22,6 +22,8 @@ TTS MCP / Response Planner
          desktop renderer process
 ```
 
+Electron 壳层在领域链路之外：main 独占原生窗口位置、包围盒、置顶和鼠标穿透；preload 只提供受控 IPC；renderer 将点击转换为 Runtime Event，将拖动转换为窗口命令。透明悬浮窗口的交互取舍见 [透明桌面悬浮壳设计](desktop-shell.md)。
+
 ## 运行链路
 
 1. 上游提交由若干 `PerformanceSegment` 组成的表演计划。
@@ -56,6 +58,7 @@ config -> contracts
 - `live2d-renderer` 不选择情绪，不调度音频，不保存会话业务状态。
 - 原生 Live2D 每帧更新可以产生候选动作/物理值，但 Runtime 拥有的参数必须在 `beforeModelUpdate` 最终覆盖后才能提交给 Cubism。
 - UI 不读取 `_wavFileHandler`、`internalModel` 等第三方私有字段；这些兼容细节只能留在适配器内部。
+- Electron renderer 不直接修改窗口位置或全局状态；bounds 和鼠标穿透由 main 持有并通过白名单 IPC 更新。
 - 参考仓库不进入构建、打包和运行时依赖。
 
 ## 参考代码阅读结论
@@ -86,10 +89,11 @@ config -> contracts
 - 本项目因此把 MCP 作为控制面、HTTP 作为音频数据面，并要求真实 provider 在整句完成前产出字节；只对完整波形事后分片不能降低首包延迟。
 - 详细代码路径和落地映射见 [Qwen3-TTS 流式实现阅读记录](references/qwen3-tts.md)。
 
-## 首版实施顺序
+## 当前实施进度
 
-1. 完成 Electron 透明窗口和安全 preload 桥。
-2. 在 `live2d-renderer` 中验证模型加载、resize、hit test 和参数写入。
-3. 实现播放器时钟与音量包络口型，跑通 `speak()`。
-4. 实现四态状态机和 expression/gesture/gaze/mouth 分层 Mixer。
-5. 接入 segment Timeline、动作白名单、中断与 idle 回落。
+1. 已完成 Runtime 单一状态所有权、Planner、Timeline、分层 Mixer 和中断 generation。
+2. 已使用真实 Mao 验证模型加载、hit test、帧末参数写入、动作和持续 Gaze。
+3. 已完成流式优先 TTS Adapter、PCM 播放时钟、电平口型和先验提示音验收。
+4. 已完成角色级 GazeProfile，并对 Mao 的纵向非对称表现做运行时校准。
+5. 已完成 Electron 透明窗口、安全 preload、透明区穿透、角色点击/拖动和 bounds 同步。
+6. 后续接入真实 Agent/语音输入与可用的 TTS MCP/HTTP 服务；这些模块仍只通过 Event/Effect 端口连接。
