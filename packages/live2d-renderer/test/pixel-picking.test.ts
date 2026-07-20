@@ -2,6 +2,7 @@ import assert from 'node:assert/strict';
 import test from 'node:test';
 import {
   AsyncPixelCoveragePicker,
+  PixelCoverageLatch,
   WebGLPixelReadbackBackend,
   toFramebufferPixel,
   type PixelCoverageResult,
@@ -40,7 +41,7 @@ test('publishes only the newest cursor readback and derives coverage from alpha'
   const second = picker.request({ x: 30, y: 40 });
   backend.issued[0]!.ticket.resolve([255, 255, 255, 255]);
   picker.afterRender();
-  assert.deepEqual(results, []);
+  assert.equal(results.length, 0);
   assert.equal(backend.issued.length, 2);
 
   backend.issued[1]!.ticket.resolve([100, 80, 60, 127]);
@@ -74,6 +75,68 @@ test('coalesces a point while pending but resamples it after completion for anim
   assert.equal(picker.request({ x: 5, y: 6 }), 2);
   picker.afterRender();
   assert.equal(backend.issued.length, 2);
+});
+
+test('watch continuously samples a stationary cursor as animated coverage changes', () => {
+  const backend = new ControlledBackend();
+  const results: boolean[] = [];
+  const picker = new AsyncPixelCoveragePicker(backend, { onResult: result => results.push(result.covered) });
+
+  picker.watch({ x: 7, y: 8 });
+  picker.afterRender();
+  backend.issued[0]!.ticket.resolve([0, 0, 0, 255]);
+  picker.afterRender();
+  assert.deepEqual(results, [true]);
+  assert.equal(backend.issued.length, 2);
+
+  backend.issued[1]!.ticket.resolve([0, 0, 0, 0]);
+  picker.afterRender();
+  assert.deepEqual(results, [true, false]);
+  assert.equal(backend.issued.length, 3);
+  assert.deepEqual(backend.issued[2]!.point, { x: 7, y: 8 });
+});
+
+test('watch moving inside an actor eventually publishes the newest point despite late older fences', () => {
+  const backend = new ControlledBackend();
+  const results: PixelCoverageResult[] = [];
+  const picker = new AsyncPixelCoveragePicker(backend, { onResult: result => results.push(result) });
+
+  picker.watch({ x: 1, y: 1 });
+  picker.afterRender();
+  picker.watch({ x: 2, y: 2 });
+  picker.afterRender();
+  picker.watch({ x: 3, y: 3 });
+  backend.issued[0]!.ticket.resolve([0, 0, 0, 255]);
+  backend.issued[1]!.ticket.resolve([0, 0, 0, 255]);
+  picker.afterRender();
+  assert.equal(results.length, 0);
+  assert.equal(backend.issued.length, 3);
+
+  backend.issued[2]!.ticket.resolve([0, 0, 0, 255]);
+  picker.afterRender();
+  assert.deepEqual(results.map(result => result.point), [{ x: 3, y: 3 }]);
+  assert.equal(results[0]?.covered, true);
+});
+
+test('coverage latch selects promptly but ignores isolated transparent animation samples', () => {
+  const latch = new PixelCoverageLatch({ coveredSamplesToSelect: 2, transparentSamplesToClear: 3 });
+  assert.equal(latch.update(true).selected, false);
+  assert.deepEqual(latch.update(true), {
+    selected: true,
+    changed: true,
+    coveredStreak: 2,
+    transparentStreak: 0,
+  });
+  assert.equal(latch.update(false).selected, true);
+  assert.equal(latch.update(true).selected, true);
+  assert.equal(latch.update(false).selected, true);
+  assert.equal(latch.update(false).selected, true);
+  assert.deepEqual(latch.update(false), {
+    selected: false,
+    changed: true,
+    coveredStreak: 0,
+    transparentStreak: 3,
+  });
 });
 
 test('zero threshold still treats a fully transparent pixel as uncovered', () => {

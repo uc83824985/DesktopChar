@@ -36,6 +36,66 @@ export interface AsyncPixelCoveragePickerOptions {
   onError?(error: Error): void;
 }
 
+export interface PixelCoverageLatchOptions {
+  coveredSamplesToSelect?: number;
+  transparentSamplesToClear?: number;
+}
+
+export interface PixelCoverageLatchDecision {
+  selected: boolean;
+  changed: boolean;
+  coveredStreak: number;
+  transparentStreak: number;
+}
+
+/** Applies asymmetric debounce so a moving silhouette does not flicker selection. */
+export class PixelCoverageLatch {
+  private readonly coveredSamplesToSelect: number;
+  private readonly transparentSamplesToClear: number;
+  private coveredStreak = 0;
+  private transparentStreak = 0;
+  private value = false;
+
+  constructor(options: PixelCoverageLatchOptions = {}) {
+    this.coveredSamplesToSelect = positiveInteger(options.coveredSamplesToSelect ?? 2, 'coveredSamplesToSelect');
+    this.transparentSamplesToClear = positiveInteger(options.transparentSamplesToClear ?? 3, 'transparentSamplesToClear');
+  }
+
+  get selected(): boolean { return this.value; }
+
+  update(covered: boolean): PixelCoverageLatchDecision {
+    const previous = this.value;
+    if (covered) {
+      this.coveredStreak++;
+      this.transparentStreak = 0;
+      if (!this.value && this.coveredStreak >= this.coveredSamplesToSelect) this.value = true;
+    }
+    else {
+      this.transparentStreak++;
+      this.coveredStreak = 0;
+      if (this.value && this.transparentStreak >= this.transparentSamplesToClear) this.value = false;
+    }
+    return this.decision(previous !== this.value);
+  }
+
+  reset(selected = false): PixelCoverageLatchDecision {
+    const changed = this.value !== selected;
+    this.value = selected;
+    this.coveredStreak = 0;
+    this.transparentStreak = 0;
+    return this.decision(changed);
+  }
+
+  private decision(changed: boolean): PixelCoverageLatchDecision {
+    return {
+      selected: this.value,
+      changed,
+      coveredStreak: this.coveredStreak,
+      transparentStreak: this.transparentStreak,
+    };
+  }
+}
+
 interface QueuedRead {
   sequence: number;
   point: PixelPoint;
@@ -56,6 +116,7 @@ export class AsyncPixelCoveragePicker {
     & Omit<AsyncPixelCoveragePickerOptions, 'alphaThreshold' | 'maximumPendingReads'>;
   private readonly pending: PendingRead[] = [];
   private queued: QueuedRead | undefined;
+  private watched: QueuedRead | undefined;
   private sequence = 0;
   private frame = 0;
   private disposed = false;
@@ -74,12 +135,26 @@ export class AsyncPixelCoveragePicker {
   }
 
   request(point: PixelPoint): number {
+    return this.schedule(point, false);
+  }
+
+  /** Continuously resamples the latest point as render frames change beneath a stationary cursor. */
+  watch(point: PixelPoint): number {
+    return this.schedule(point, true);
+  }
+
+  private schedule(point: PixelPoint, continuous: boolean): number {
     this.requireActive();
     validatePoint(point);
     const active = this.queued ?? this.pending.find(read => read.sequence === this.sequence);
-    if (active && samePoint(active.point, point)) return active.sequence;
+    if (active && samePoint(active.point, point)) {
+      this.watched = continuous ? { sequence: active.sequence, point: { ...point } } : undefined;
+      return active.sequence;
+    }
     const sequence = ++this.sequence;
-    this.queued = { sequence, point: { ...point } };
+    const read = { sequence, point: { ...point } };
+    this.queued = read;
+    this.watched = continuous ? read : undefined;
     return sequence;
   }
 
@@ -87,6 +162,7 @@ export class AsyncPixelCoveragePicker {
     if (this.disposed) return;
     ++this.sequence;
     this.queued = undefined;
+    this.watched = undefined;
   }
 
   afterRender(): void {
@@ -100,6 +176,7 @@ export class AsyncPixelCoveragePicker {
     if (this.disposed) return;
     this.disposed = true;
     this.queued = undefined;
+    this.watched = undefined;
     for (const read of this.pending) read.ticket.dispose();
     this.pending.length = 0;
   }
@@ -112,20 +189,28 @@ export class AsyncPixelCoveragePicker {
       read.ticket.dispose();
       this.pending.splice(index, 1);
       if (result.status === 'failed') {
-        if (read.sequence === this.sequence) this.options.onError?.(result.error);
+        if (read.sequence === this.sequence) {
+          this.options.onError?.(result.error);
+          this.queueWatched(read.sequence);
+        }
         continue;
       }
       if (read.sequence !== this.sequence) continue;
       const alpha = result.rgba[3] / 255;
-      this.options.onResult({
-        sequence: read.sequence,
-        point: read.point,
-        rgba: result.rgba,
-        covered: result.rgba[3] > 0 && alpha >= this.options.alphaThreshold,
-        submittedFrame: read.submittedFrame,
-        resolvedFrame: this.frame,
-        latencyFrames: this.frame - read.submittedFrame,
-      });
+      try {
+        this.options.onResult({
+          sequence: read.sequence,
+          point: read.point,
+          rgba: result.rgba,
+          covered: result.rgba[3] > 0 && alpha >= this.options.alphaThreshold,
+          submittedFrame: read.submittedFrame,
+          resolvedFrame: this.frame,
+          latencyFrames: this.frame - read.submittedFrame,
+        });
+      }
+      finally {
+        this.queueWatched(read.sequence);
+      }
     }
   }
 
@@ -137,7 +222,10 @@ export class AsyncPixelCoveragePicker {
       this.pending.push({ ...read, submittedFrame: this.frame, ticket: this.backend.issue(read.point) });
     }
     catch (cause) {
-      if (read.sequence === this.sequence) this.options.onError?.(asError(cause));
+      if (read.sequence === this.sequence) {
+        this.options.onError?.(asError(cause));
+        this.queueWatched(read.sequence);
+      }
       return;
     }
     while (this.pending.length > this.options.maximumPendingReads) {
@@ -147,6 +235,11 @@ export class AsyncPixelCoveragePicker {
 
   private requireActive(): void {
     if (this.disposed) throw new Error('Pixel picker is disposed');
+  }
+
+  private queueWatched(sequence: number): void {
+    if (this.queued || this.watched?.sequence !== sequence || this.sequence !== sequence) return;
+    this.queued = { sequence, point: { ...this.watched.point } };
   }
 }
 
@@ -330,4 +423,9 @@ function samePoint(left: PixelPoint, right: PixelPoint): boolean {
 
 function asError(cause: unknown): Error {
   return cause instanceof Error ? cause : new Error(String(cause));
+}
+
+function positiveInteger(value: number, label: string): number {
+  if (!Number.isInteger(value) || value < 1) throw new RangeError(`${label} must be a positive integer`);
+  return value;
 }

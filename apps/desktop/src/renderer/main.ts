@@ -19,6 +19,7 @@ import { AvatarRuntime, DefaultAvatarPlanner, ParameterMixer } from '../../../..
 import { DEFAULT_TTS_CONFIG, MAO_CHARACTER_CONFIG } from '../../../../packages/config/src/index.ts';
 import {
   AsyncPixelCoveragePicker,
+  PixelCoverageLatch,
   RuntimeParameterFrame,
   WebGLPixelReadbackBackend,
 } from '../../../../packages/live2d-renderer/src/index.ts';
@@ -75,6 +76,7 @@ let desktopBounds: { x: number; y: number; width: number; height: number } | und
 let mousePassthrough: boolean | undefined;
 let pixelPicker: AsyncPixelCoveragePicker | undefined;
 let pixelSelection: PixelCoverageResult | undefined;
+let pixelCursorPoint: { x: number; y: number } | undefined;
 let dragInteraction: {
   pointerId: number;
   hitArea: string;
@@ -84,6 +86,7 @@ let dragInteraction: {
   moved: boolean;
 } | undefined;
 const pendingToneTraces: ToneSyncTrace[] = [];
+const pixelCoverageLatch = new PixelCoverageLatch({ coveredSamplesToSelect: 2, transparentSamplesToClear: 3 });
 const runtimeFrame = new RuntimeParameterFrame({
   aliases: { ParamMouthOpenY: 'ParamA', ParamMouthForm: 'ParamMouthUp' },
 });
@@ -402,6 +405,8 @@ function initializeDesktopInteraction(): void {
   canvas.addEventListener('webglcontextlost', () => {
     pixelPicker?.invalidate();
     pixelSelection = undefined;
+    pixelCursorPoint = undefined;
+    pixelCoverageLatch.reset();
     document.body.dataset.pixelSelection = 'context-lost';
     updateMousePassthrough(true);
   });
@@ -434,14 +439,16 @@ function handleDesktopCursor(point: { x: number; y: number }): void {
   if (!inside) {
     pixelPicker?.invalidate();
     pixelSelection = undefined;
+    pixelCursorPoint = undefined;
+    pixelCoverageLatch.reset();
+    document.body.dataset.pixelSample = 'outside';
     document.body.dataset.pixelSelection = 'outside';
     updateMousePassthrough(true);
     return;
   }
-  pixelPicker?.request({ x: localX, y: localY });
-  if (!pixelSelection || pixelSelection.point.x !== localX || pixelSelection.point.y !== localY) {
-    document.body.dataset.pixelSelection = 'pending';
-  }
+  pixelCursorPoint = { x: localX, y: localY };
+  pixelPicker?.watch(pixelCursorPoint);
+  if (!pixelSelection) document.body.dataset.pixelSelection = 'pending';
 }
 
 function beginAvatarDrag(event: PointerEvent): void {
@@ -520,23 +527,28 @@ function advancePixelPicking(): void {
 
 function applyPixelSelection(result: PixelCoverageResult): void {
   pixelSelection = result;
-  document.body.dataset.pixelSelection = result.covered ? 'covered' : 'transparent';
+  const decision = pixelCoverageLatch.update(result.covered);
+  document.body.dataset.pixelSample = result.covered ? 'covered' : 'transparent';
+  document.body.dataset.pixelSelection = decision.selected ? 'covered' : 'transparent';
+  document.body.dataset.pixelCoverageStreak = decision.coveredStreak.toString();
+  document.body.dataset.pixelTransparentStreak = decision.transparentStreak.toString();
   document.body.dataset.pixelAlpha = result.rgba[3].toString();
   document.body.dataset.pixelReadbackFrames = result.latencyFrames.toString();
-  if (!dragInteraction) updateMousePassthrough(!result.covered);
+  if (!dragInteraction) updateMousePassthrough(!decision.selected);
 }
 
 function handlePixelSelectionError(error: Error): void {
-  pixelSelection = undefined;
-  document.body.dataset.pixelSelection = 'failed';
+  const decision = pixelCoverageLatch.update(false);
+  document.body.dataset.pixelSample = 'failed';
+  document.body.dataset.pixelSelection = decision.selected ? 'covered' : 'transparent';
   document.body.dataset.pixelReadbackError = error.message;
-  if (!dragInteraction) updateMousePassthrough(true);
+  if (!dragInteraction) updateMousePassthrough(!decision.selected);
   console.error('Pixel coverage readback failed', error);
 }
 
 function selectedHitArea(x: number, y: number): string | undefined {
-  const selection = pixelSelection;
-  if (!selection?.covered || Math.abs(selection.point.x - x) > 2 || Math.abs(selection.point.y - y) > 2) return undefined;
+  const point = pixelCursorPoint;
+  if (!pixelCoverageLatch.selected || !point || Math.abs(point.x - x) > 2 || Math.abs(point.y - y) > 2) return undefined;
   return model?.hitTest(x, y)[0] ?? 'VisiblePixel';
 }
 
