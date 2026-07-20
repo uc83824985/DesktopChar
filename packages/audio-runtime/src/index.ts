@@ -22,3 +22,6 @@ export interface LipSyncSource {
   sample(positionMs: number): LipSyncFrame;
   reset(): void;
 }
+
+export * from './known-tone-fixture.ts';
+export * from './web-audio-pcm-player.ts';

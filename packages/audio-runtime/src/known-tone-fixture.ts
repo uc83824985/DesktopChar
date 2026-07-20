@@ -1,0 +1,184 @@
+import type { AmplitudeSample, AudioStreamSource } from '../../contracts/src/index.ts';
+
+export const KNOWN_TONE_STREAM_URI = 'fixture://desktop-char/known-tone/v1';
+export const KNOWN_TONE_SPEECH_TEXT = '[desktop-char:known-tone-v1]';
+export const KNOWN_TONE_SAMPLE_RATE_HZ = 24_000;
+export const KNOWN_TONE_CHANNELS = 1;
+export const KNOWN_TONE_DURATION_MS = 1_600;
+
+export interface KnownTonePulse {
+  startMs: number;
+  endMs: number;
+  frequencyHz: number;
+  amplitude: number;
+}
+
+export const KNOWN_TONE_PULSES: readonly KnownTonePulse[] = [
+  { startMs: 200, endMs: 400, frequencyHz: 660, amplitude: 0.25 },
+  { startMs: 600, endMs: 850, frequencyHz: 880, amplitude: 0.55 },
+  { startMs: 1_050, endMs: 1_400, frequencyHz: 1_100, amplitude: 0.85 },
+];
+
+export interface KnownToneStreamOptions {
+  chunkDurationMs?: number;
+  chunkDelayMs?: number;
+  signal?: AbortSignal;
+}
+
+export interface KnownToneAcceptanceOptions {
+  timingToleranceMs?: number;
+  levelTolerance?: number;
+  silenceLimit?: number;
+}
+
+export interface KnownToneAcceptanceResult {
+  passed: boolean;
+  issues: string[];
+  observedToneLevels: number[];
+  transitionErrorsMs: number[];
+  maximumSilenceLevel: number;
+}
+
+export function createKnownToneAudioSource(requestId: string): AudioStreamSource {
+  return {
+    delivery: 'stream', requestId, uri: KNOWN_TONE_STREAM_URI,
+    mimeType: 'audio/pcm', codec: 'pcm_s16le',
+    sampleRateHz: KNOWN_TONE_SAMPLE_RATE_HZ, channels: KNOWN_TONE_CHANNELS,
+    durationMs: KNOWN_TONE_DURATION_MS,
+  };
+}
+
+export async function* createKnownTonePcmStream(
+  options: KnownToneStreamOptions = {},
+): AsyncGenerator<Uint8Array> {
+  const chunkDurationMs = positive(options.chunkDurationMs ?? 20, 'chunkDurationMs');
+  const chunkDelayMs = nonNegative(options.chunkDelayMs ?? 0, 'chunkDelayMs');
+  const framesPerChunk = Math.max(1, Math.round(KNOWN_TONE_SAMPLE_RATE_HZ * chunkDurationMs / 1_000));
+  const totalFrames = Math.round(KNOWN_TONE_SAMPLE_RATE_HZ * KNOWN_TONE_DURATION_MS / 1_000);
+
+  for (let firstFrame = 0; firstFrame < totalFrames; firstFrame += framesPerChunk) {
+    throwIfAborted(options.signal);
+    if (firstFrame > 0 && chunkDelayMs > 0) await abortableDelay(chunkDelayMs, options.signal);
+    const frameCount = Math.min(framesPerChunk, totalFrames - firstFrame);
+    const bytes = new Uint8Array(frameCount * 2);
+    const view = new DataView(bytes.buffer);
+    for (let index = 0; index < frameCount; index++) {
+      const value = knownToneSample((firstFrame + index) / KNOWN_TONE_SAMPLE_RATE_HZ * 1_000);
+      view.setInt16(index * 2, Math.round(value * 32_767), true);
+    }
+    yield bytes;
+  }
+}
+
+export function measurePcmS16LeLevel(bytes: Uint8Array): number {
+  const sampleCount = Math.floor(bytes.byteLength / 2);
+  if (!sampleCount) return 0;
+  const view = new DataView(bytes.buffer, bytes.byteOffset, sampleCount * 2);
+  let sumSquares = 0;
+  for (let index = 0; index < sampleCount; index++) {
+    const value = view.getInt16(index * 2, true) / 32_768;
+    sumSquares += value * value;
+  }
+  return clamp01(Math.sqrt(sumSquares / sampleCount) * Math.SQRT2);
+}
+
+export function evaluateKnownToneAcceptance(
+  samples: readonly AmplitudeSample[],
+  options: KnownToneAcceptanceOptions = {},
+): KnownToneAcceptanceResult {
+  const timingToleranceMs = positive(options.timingToleranceMs ?? 90, 'timingToleranceMs');
+  const levelTolerance = positive(options.levelTolerance ?? 0.12, 'levelTolerance');
+  const silenceLimit = positive(options.silenceLimit ?? 0.08, 'silenceLimit');
+  const ordered = [...samples].sort((left, right) => left.atMs - right.atMs);
+  const issues: string[] = [];
+  const observedToneLevels: number[] = [];
+  const transitionErrorsMs: number[] = [];
+
+  for (const [index, pulse] of KNOWN_TONE_PULSES.entries()) {
+    const stable = valuesIn(ordered, pulse.startMs + 55, pulse.endMs - 55);
+    const observedLevel = median(stable.map(sample => sample.value));
+    observedToneLevels.push(observedLevel);
+    if (!stable.length || Math.abs(observedLevel - pulse.amplitude) > levelTolerance) {
+      issues.push(`tone ${index + 1} level ${observedLevel.toFixed(3)} does not match ${pulse.amplitude.toFixed(3)}`);
+    }
+
+    const threshold = Math.max(0.1, pulse.amplitude * 0.45);
+    const active = valuesIn(ordered, pulse.startMs - timingToleranceMs, pulse.endMs + timingToleranceMs)
+      .filter(sample => sample.value >= threshold);
+    if (!active.length) {
+      issues.push(`tone ${index + 1} has no active samples`);
+      transitionErrorsMs.push(Number.POSITIVE_INFINITY, Number.POSITIVE_INFINITY);
+      continue;
+    }
+    const startError = Math.abs(active[0]!.atMs - pulse.startMs);
+    const endError = Math.abs(active.at(-1)!.atMs - pulse.endMs);
+    transitionErrorsMs.push(startError, endError);
+    if (startError > timingToleranceMs) issues.push(`tone ${index + 1} starts ${startError.toFixed(1)} ms away from schedule`);
+    if (endError > timingToleranceMs) issues.push(`tone ${index + 1} ends ${endError.toFixed(1)} ms away from schedule`);
+  }
+
+  const silenceWindows = [
+    [50, 150], [450, 550], [900, 1_000], [1_450, 1_550],
+  ] as const;
+  const silenceValues = silenceWindows.flatMap(([startMs, endMs]) => (
+    valuesIn(ordered, startMs, endMs).map(sample => sample.value)
+  ));
+  const maximumSilenceLevel = silenceValues.length ? Math.max(...silenceValues) : Number.POSITIVE_INFINITY;
+  if (maximumSilenceLevel > silenceLimit) {
+    issues.push(`silence level ${maximumSilenceLevel.toFixed(3)} exceeds ${silenceLimit.toFixed(3)}`);
+  }
+  if (!silenceValues.length) issues.push('no silence samples were observed');
+
+  for (let index = 1; index < observedToneLevels.length; index++) {
+    if (observedToneLevels[index]! - observedToneLevels[index - 1]! < 0.12) {
+      issues.push(`tone ${index + 1} is not observably louder than tone ${index}`);
+    }
+  }
+
+  return { passed: issues.length === 0, issues, observedToneLevels, transitionErrorsMs, maximumSilenceLevel };
+}
+
+function knownToneSample(atMs: number): number {
+  const pulse = KNOWN_TONE_PULSES.find(candidate => atMs >= candidate.startMs && atMs < candidate.endMs);
+  if (!pulse) return 0;
+  const localMs = atMs - pulse.startMs;
+  const remainingMs = pulse.endMs - atMs;
+  const fade = Math.min(1, localMs / 12, remainingMs / 12);
+  return Math.sin(2 * Math.PI * pulse.frequencyHz * localMs / 1_000) * pulse.amplitude * fade;
+}
+
+function valuesIn(samples: readonly AmplitudeSample[], startMs: number, endMs: number): AmplitudeSample[] {
+  return samples.filter(sample => sample.atMs >= startMs && sample.atMs <= endMs);
+}
+
+function median(values: number[]): number {
+  if (!values.length) return 0;
+  const ordered = [...values].sort((left, right) => left - right);
+  const middle = Math.floor(ordered.length / 2);
+  return ordered.length % 2 ? ordered[middle]! : (ordered[middle - 1]! + ordered[middle]!) / 2;
+}
+
+function abortableDelay(delayMs: number, signal?: AbortSignal): Promise<void> {
+  throwIfAborted(signal);
+  return new Promise((resolve, reject) => {
+    const timer = setTimeout(resolve, delayMs);
+    signal?.addEventListener('abort', () => {
+      clearTimeout(timer);
+      reject(signal.reason ?? new DOMException('Aborted', 'AbortError'));
+    }, { once: true });
+  });
+}
+
+function throwIfAborted(signal?: AbortSignal): void {
+  if (signal?.aborted) throw signal.reason ?? new DOMException('Aborted', 'AbortError');
+}
+
+function clamp01(value: number): number { return Math.max(0, Math.min(1, value)); }
+function positive(value: number, name: string): number {
+  if (!Number.isFinite(value) || value <= 0) throw new RangeError(`${name} must be positive and finite`);
+  return value;
+}
+function nonNegative(value: number, name: string): number {
+  if (!Number.isFinite(value) || value < 0) throw new RangeError(`${name} must be non-negative and finite`);
+  return value;
+}

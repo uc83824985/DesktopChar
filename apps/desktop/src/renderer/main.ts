@@ -1,8 +1,18 @@
 import { Application, Ticker } from 'pixi.js';
 import { Live2DModel } from 'pixi-live2d-display/cubism4';
 import type { AvatarEvent, RuntimeEffect } from '../../../../packages/contracts/src/index.ts';
+import type { AmplitudeSample } from '../../../../packages/contracts/src/index.ts';
+import {
+  KNOWN_TONE_SPEECH_TEXT,
+  KNOWN_TONE_STREAM_URI,
+  WebAudioPcmStreamPlayer,
+  createKnownToneAudioSource,
+  createKnownTonePcmStream,
+  evaluateKnownToneAcceptance,
+} from '../../../../packages/audio-runtime/src/index.ts';
 import { AvatarRuntime, DefaultAvatarPlanner, ParameterMixer } from '../../../../packages/avatar-runtime/src/index.ts';
 import { DEFAULT_TTS_CONFIG } from '../../../../packages/config/src/index.ts';
+import type { TtsAdapter } from '../../../../packages/tts-mcp-adapter/src/index.ts';
 import { JsonConsoleTtsLogger, MockTtsAdapter, TtsRuntimeEffectHandler } from '../../../../packages/tts-mcp-adapter/src/index.ts';
 import './style.css';
 
@@ -10,18 +20,52 @@ Live2DModel.registerTicker(Ticker);
 const canvas = document.querySelector<HTMLCanvasElement>('#avatar')!;
 const status = document.querySelector<HTMLElement>('#status')!;
 const speak = document.querySelector<HTMLButtonElement>('#speak')!;
+const tone = document.querySelector<HTMLButtonElement>('#tone')!;
 const motion = document.querySelector<HTMLButtonElement>('#motion')!;
 const reset = document.querySelector<HTMLButtonElement>('#reset')!;
 const app = new Application({ view: canvas, resizeTo: window, backgroundAlpha: 0, antialias: true, autoDensity: true, resolution: Math.min(devicePixelRatio, 2) });
 
-type CubismCoreModel = { setParameterValueById(id: string, value: number): void };
+type CubismCoreModel = {
+  setParameterValueById(id: string, value: number): void;
+  getParameterValueById(id: string): number;
+};
 let model: Live2DModel | undefined;
 let runtime: AvatarRuntime | undefined;
 let playbackTimer: ReturnType<typeof setInterval> | undefined;
 let gestureUntil = 0;
 let gesturePhase = 0;
-const ttsAdapter = new MockTtsAdapter({ ...DEFAULT_TTS_CONFIG.mock, logger: new JsonConsoleTtsLogger() });
+let toneAcceptance: { segmentId: string; playerLevels: AmplitudeSample[]; modelLevels: AmplitudeSample[] } | null = null;
+let applyingToneLevelAtMs: number | null = null;
+const mockTtsAdapter = new MockTtsAdapter({ ...DEFAULT_TTS_CONFIG.mock, logger: new JsonConsoleTtsLogger() });
+const ttsAdapter: TtsAdapter = {
+  prepare: request => request.text === KNOWN_TONE_SPEECH_TEXT
+    ? Promise.resolve(createKnownToneAudioSource(request.requestId))
+    : mockTtsAdapter.prepare(request),
+  cancel: requestId => mockTtsAdapter.cancel(requestId),
+  capabilities: () => mockTtsAdapter.capabilities(),
+  health: () => mockTtsAdapter.health(),
+};
 const ttsEffects = new TtsRuntimeEffectHandler(ttsAdapter);
+const tonePlayer = new WebAudioPcmStreamPlayer({
+  initialBufferMs: 100, levelIntervalMs: 25, levelWindowMs: 20,
+  openStream(source, signal) {
+    if (source.uri !== KNOWN_TONE_STREAM_URI) throw new Error(`Unknown test stream: ${source.uri}`);
+    return createKnownTonePcmStream({ chunkDurationMs: 20, chunkDelayMs: 1, signal });
+  },
+});
+document.body.dataset.toneAcceptance = 'idle';
+tonePlayer.subscribe(event => {
+  const active = toneAcceptance?.segmentId === event.segmentId ? toneAcceptance : null;
+  if (active && event.type === 'playback.level') {
+    active.playerLevels.push({ atMs: event.positionMs, value: event.value });
+    applyingToneLevelAtMs = event.positionMs;
+    try { runtime?.dispatch(event); }
+    finally { applyingToneLevelAtMs = null; }
+  }
+  else runtime?.dispatch(event);
+  if (active && event.type === 'playback.completed') finishToneAcceptance(active);
+  else if (active && event.type === 'playback.interrupted') failToneAcceptance('acceptance playback was interrupted');
+});
 
 try {
   model = await Live2DModel.from('/models/Mao/Mao.model3.json', { autoInteract: false });
@@ -53,6 +97,7 @@ try {
     y: -(event.clientY / innerHeight * 2 - 1),
   }));
   speak.addEventListener('click', () => submitDemo(false));
+  tone.addEventListener('click', submitToneAcceptance);
   motion.addEventListener('click', () => submitDemo(true));
   reset.addEventListener('click', () => runtime?.dispatch({ type: 'user.interrupt-requested' }));
   app.ticker.add(delta => {
@@ -61,13 +106,25 @@ try {
     coreModel(model).setParameterValueById('ParamAngleZ', Math.sin(gesturePhase) * 10);
   });
 
-  for (const button of [speak, motion, reset]) button.disabled = false;
+  for (const button of [speak, tone, motion, reset]) button.disabled = false;
   document.body.dataset.ready = 'true';
 }
 catch (error) {
   status.textContent = `加载失败：${error instanceof Error ? error.message : String(error)}`;
   document.body.dataset.ready = 'false';
   console.error(error);
+}
+
+function submitToneAcceptance(): void {
+  if (!runtime || runtime.getSnapshot().state !== 'idle') return;
+  const suffix = Date.now();
+  const segmentId = `known-tone-${suffix}`;
+  toneAcceptance = { segmentId, playerLevels: [], modelLevels: [] };
+  document.body.dataset.toneAcceptance = 'running';
+  delete document.body.dataset.toneAcceptanceMetrics;
+  runtime.dispatch({ type: 'plan.submitted', plan: { id: `known-tone-plan-${suffix}`, segments: [{
+    id: segmentId, sequence: 0, displayText: '先验铃声口型同步验收', speechText: KNOWN_TONE_SPEECH_TEXT,
+  }] } });
 }
 
 function submitDemo(withAction: boolean): void {
@@ -82,6 +139,15 @@ function submitDemo(withAction: boolean): void {
 function execute(effect: RuntimeEffect, dispatch: (event: AvatarEvent) => void): void {
   if (ttsEffects.handle(effect, dispatch)) return;
   if (effect.type === 'audio.play') {
+    if (effect.source.uri === KNOWN_TONE_STREAM_URI) {
+      return void tonePlayer.play(effect.generation, effect.segmentId, effect.source).catch(error => {
+        failToneAcceptance(error instanceof Error ? error.message : String(error));
+        dispatch({
+          type: 'playback.failed', generation: effect.generation, segmentId: effect.segmentId,
+          error: { code: 'known-tone-playback-failed', message: error instanceof Error ? error.message : String(error), recoverable: true },
+        });
+      });
+    }
     clearPlayback();
     const startedAt = performance.now();
     const durationMs = effect.source.durationMs ?? 1_800;
@@ -101,15 +167,52 @@ function execute(effect: RuntimeEffect, dispatch: (event: AvatarEvent) => void):
       }
     }, 50);
   }
-  else if (effect.type === 'audio.stop') clearPlayback();
+  else if (effect.type === 'audio.pause') tonePlayer.pause(effect.generation);
+  else if (effect.type === 'audio.resume') tonePlayer.resume(effect.generation);
+  else if (effect.type === 'audio.stop') {
+    clearPlayback();
+    void tonePlayer.stop(effect.generation);
+  }
   else if (effect.type === 'renderer.apply-frame' && model) {
     const core = coreModel(model);
-    for (const [id, value] of Object.entries(effect.frame)) core.setParameterValueById(id === 'ParamMouthOpenY' ? 'ParamA' : id, value);
+    for (const [id, value] of Object.entries(effect.frame)) {
+      const modelParameter = id === 'ParamMouthOpenY' ? 'ParamA' : id;
+      core.setParameterValueById(modelParameter, value);
+      if (toneAcceptance && applyingToneLevelAtMs !== null && modelParameter === 'ParamA') {
+        toneAcceptance.modelLevels.push({
+          atMs: applyingToneLevelAtMs,
+          value: core.getParameterValueById(modelParameter),
+        });
+      }
+    }
   }
   else if (effect.type === 'renderer.play-motion') {
     gestureUntil = performance.now() + 1200;
     setTimeout(() => dispatch({ type: 'renderer.motion-completed', generation: effect.generation, actionId: effect.command.actionId }), 1200);
   }
+}
+
+function finishToneAcceptance(active: { segmentId: string; playerLevels: AmplitudeSample[]; modelLevels: AmplitudeSample[] }): void {
+  if (toneAcceptance !== active) return;
+  const player = evaluateKnownToneAcceptance(active.playerLevels);
+  const model = evaluateKnownToneAcceptance(active.modelLevels);
+  const passed = player.passed && model.passed;
+  const metrics = { passed, player, model };
+  document.body.dataset.toneAcceptance = passed ? 'passed' : 'failed';
+  document.body.dataset.toneAcceptanceMetrics = JSON.stringify(metrics);
+  toneAcceptance = null;
+  if (passed) {
+    const maximumTimingError = Math.max(...player.transitionErrorsMs, ...model.transitionErrorsMs);
+    status.textContent = `口型同步验收通过 · 最大时点误差 ${Math.round(maximumTimingError)} ms`;
+  }
+  else status.textContent = `口型同步验收失败：${[...player.issues, ...model.issues].join('；')}`;
+}
+
+function failToneAcceptance(message: string): void {
+  document.body.dataset.toneAcceptance = 'failed';
+  document.body.dataset.toneAcceptanceMetrics = JSON.stringify({ passed: false, issues: [message] });
+  toneAcceptance = null;
+  status.textContent = `口型同步验收失败：${message}`;
 }
 
 function clearPlayback(): void { if (playbackTimer) clearInterval(playbackTimer); playbackTimer = undefined; }
