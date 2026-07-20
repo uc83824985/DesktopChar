@@ -31,6 +31,16 @@ class ControlledBackend implements PixelReadbackBackend {
   }
 }
 
+class DelayedTicket implements PixelReadbackTicket {
+  private polls = 0;
+  private readonly readyAfterPolls: number;
+  private readonly rgba: PixelRgba;
+  disposed = false;
+  constructor(readyAfterPolls: number, rgba: PixelRgba) { this.readyAfterPolls = readyAfterPolls; this.rgba = rgba; }
+  poll(): PixelReadbackPoll { return ++this.polls >= this.readyAfterPolls ? { status: 'ready', rgba: this.rgba } : { status: 'pending' }; }
+  dispose(): void { this.disposed = true; }
+}
+
 test('publishes only the newest cursor readback and derives coverage from alpha', () => {
   const backend = new ControlledBackend();
   const results: PixelCoverageResult[] = [];
@@ -152,6 +162,27 @@ test('watch pipelines every render frame and publishes completed reads in submis
   assert.deepEqual(results.map(result => result.submittedFrame), [1, 2, 3]);
   assert.deepEqual(results.map(result => result.covered), [false, true, true]);
   assert.equal(backend.issued.length, 5);
+});
+
+test('stationary watch applies backpressure instead of starving fences slower than the pending limit', () => {
+  const tickets: DelayedTicket[] = [];
+  const results: PixelCoverageResult[] = [];
+  const backend: PixelReadbackBackend = { issue() {
+    const ticket = new DelayedTicket(4, [0, 0, 0, 255]);
+    tickets.push(ticket);
+    return ticket;
+  } };
+  const picker = new AsyncPixelCoveragePicker(backend, { maximumPendingReads: 3, onResult: result => results.push(result) });
+
+  picker.watch({ x: 9, y: 9 });
+  for (let frame = 0; frame < 8; frame++) picker.afterRender();
+
+  assert.equal(results.length > 0, true);
+  assert.equal(results[0]?.sequence, 1);
+  assert.equal(results[0]?.covered, true);
+  assert.equal(tickets[0]?.disposed, true);
+  assert.equal(picker.diagnostics().backpressuredFrames > 0, true);
+  assert.equal(picker.diagnostics().resolvedReads > 0, true);
 });
 
 test('watch moving inside an actor eventually publishes the newest point despite late older fences', () => {

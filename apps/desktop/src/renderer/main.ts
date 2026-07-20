@@ -77,6 +77,7 @@ let mousePassthrough: boolean | undefined;
 let pixelPicker: AsyncPixelCoveragePicker | undefined;
 let pixelSelection: PixelCoverageResult | undefined;
 let pixelCursorPoint: { x: number; y: number } | undefined;
+let lastPixelStallLoggedFrame = -1;
 let dragInteraction: {
   pointerId: number;
   hitArea: string;
@@ -537,6 +538,21 @@ function updateMousePassthrough(passthrough: boolean): void {
 
 function advancePixelPicking(): void {
   pixelPicker?.afterRender();
+  const diagnostics = pixelPicker?.diagnostics();
+  if (!diagnostics) return;
+  document.body.dataset.pixelPendingReads = diagnostics.pendingReads.toString();
+  document.body.dataset.pixelBackpressuredFrames = diagnostics.backpressuredFrames.toString();
+  const unresolvedFrames = diagnostics.frame - (diagnostics.lastResolvedFrame ?? 0);
+  if (
+    pixelCursorPoint
+    && diagnostics.watching
+    && diagnostics.pendingReads > 0
+    && unresolvedFrames >= 120
+    && diagnostics.frame - lastPixelStallLoggedFrame >= 120
+  ) {
+    lastPixelStallLoggedFrame = diagnostics.frame;
+    console.warn('[pixel-picking] stationary coverage has not resolved for 120 render frames', diagnostics);
+  }
 }
 
 function applyPixelSelection(result: PixelCoverageResult): void {

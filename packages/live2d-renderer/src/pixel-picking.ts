@@ -36,6 +36,18 @@ export interface AsyncPixelCoveragePickerOptions {
   onError?(error: Error): void;
 }
 
+export interface PixelCoveragePickerDiagnostics {
+  frame: number;
+  sequence: number;
+  pendingReads: number;
+  hasQueuedRead: boolean;
+  watching: boolean;
+  issuedReads: number;
+  resolvedReads: number;
+  backpressuredFrames: number;
+  lastResolvedFrame: number | null;
+}
+
 export interface PixelCoverageLatchOptions {
   coveredSamplesToSelect?: number;
   transparentSamplesToClear?: number;
@@ -119,6 +131,10 @@ export class AsyncPixelCoveragePicker {
   private watched: QueuedRead | undefined;
   private sequence = 0;
   private frame = 0;
+  private issuedReads = 0;
+  private resolvedReads = 0;
+  private backpressuredFrames = 0;
+  private lastResolvedFrame: number | null = null;
   private disposed = false;
 
   constructor(backend: PixelReadbackBackend, options: AsyncPixelCoveragePickerOptions) {
@@ -173,6 +189,20 @@ export class AsyncPixelCoveragePicker {
     this.issueQueued();
   }
 
+  diagnostics(): PixelCoveragePickerDiagnostics {
+    return {
+      frame: this.frame,
+      sequence: this.sequence,
+      pendingReads: this.pending.length,
+      hasQueuedRead: Boolean(this.queued),
+      watching: Boolean(this.watched),
+      issuedReads: this.issuedReads,
+      resolvedReads: this.resolvedReads,
+      backpressuredFrames: this.backpressuredFrames,
+      lastResolvedFrame: this.lastResolvedFrame,
+    };
+  }
+
   dispose(): void {
     if (this.disposed) return;
     this.disposed = true;
@@ -204,6 +234,8 @@ export class AsyncPixelCoveragePicker {
         continue;
       }
       if (!belongsToCurrentSequence) continue;
+      this.resolvedReads++;
+      this.lastResolvedFrame = this.frame;
       const alpha = result.rgba[3] / 255;
       this.options.onResult({
         sequence: read.sequence,
@@ -220,18 +252,20 @@ export class AsyncPixelCoveragePicker {
   private issueQueued(): void {
     const read = this.queued;
     if (!read) return;
+    if (this.pending.length >= this.options.maximumPendingReads) {
+      this.backpressuredFrames++;
+      return;
+    }
     this.queued = undefined;
     try {
       this.pending.push({ ...read, submittedFrame: this.frame, ticket: this.backend.issue(read.point) });
+      this.issuedReads++;
     }
     catch (cause) {
       if (read.sequence === this.sequence) {
         this.options.onError?.(asError(cause));
       }
       return;
-    }
-    while (this.pending.length > this.options.maximumPendingReads) {
-      this.pending.shift()!.ticket.dispose();
     }
   }
 
