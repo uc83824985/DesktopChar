@@ -38,7 +38,7 @@ test('known tone response timing requires every playback level to reach the mode
   assert.equal(accepted.maximumFrameResponseMs, 12);
 
   const delayed = onTime.map((trace, index) => index === 5
-    ? { ...trace, modelAppliedAtMs: trace.playbackObservedAtMs + 20 }
+    ? { ...trace, modelAppliedAtMs: trace.playbackObservedAtMs + 40 }
     : trace);
   assert.equal(evaluateKnownToneResponseTiming(delayed).passed, false);
 

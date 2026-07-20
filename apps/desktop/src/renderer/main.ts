@@ -1,5 +1,5 @@
-import { Application, Ticker, UPDATE_PRIORITY } from 'pixi.js';
-import { Live2DModel } from 'pixi-live2d-display/cubism4';
+import { Application, Ticker } from 'pixi.js';
+import { Live2DModel, MotionPriority } from 'pixi-live2d-display/cubism4';
 import type { AvatarEvent, RuntimeEffect } from '../../../../packages/contracts/src/index.ts';
 import type { AmplitudeSample } from '../../../../packages/contracts/src/index.ts';
 import {
@@ -15,6 +15,7 @@ import {
 import type { KnownToneResponseTrace } from '../../../../packages/audio-runtime/src/index.ts';
 import { AvatarRuntime, DefaultAvatarPlanner, ParameterMixer } from '../../../../packages/avatar-runtime/src/index.ts';
 import { DEFAULT_TTS_CONFIG } from '../../../../packages/config/src/index.ts';
+import { RuntimeParameterFrame } from '../../../../packages/live2d-renderer/src/index.ts';
 import type { TtsAdapter } from '../../../../packages/tts-mcp-adapter/src/index.ts';
 import { JsonConsoleTtsLogger, MockTtsAdapter, TtsRuntimeEffectHandler } from '../../../../packages/tts-mcp-adapter/src/index.ts';
 import './style.css';
@@ -25,6 +26,7 @@ const status = document.querySelector<HTMLElement>('#status')!;
 const speak = document.querySelector<HTMLButtonElement>('#speak')!;
 const tone = document.querySelector<HTMLButtonElement>('#tone')!;
 const motion = document.querySelector<HTMLButtonElement>('#motion')!;
+const gaze = document.querySelector<HTMLButtonElement>('#gaze')!;
 const reset = document.querySelector<HTMLButtonElement>('#reset')!;
 const toneDebug = document.querySelector<HTMLElement>('#tone-debug')!;
 const tonePlaybackPoint = document.querySelector<HTMLElement>('#tone-playback-point')!;
@@ -52,10 +54,14 @@ interface ToneAcceptanceRun {
 let model: Live2DModel | undefined;
 let runtime: AvatarRuntime | undefined;
 let playbackTimer: ReturnType<typeof setInterval> | undefined;
-let gestureUntil = 0;
-let gesturePhase = 0;
+let motionTimer: ReturnType<typeof setTimeout> | undefined;
+let motionRequestToken = 0;
 let toneAcceptance: ToneAcceptanceRun | null = null;
 let applyingToneTrace: ToneSyncTrace | null = null;
+const pendingToneTraces: ToneSyncTrace[] = [];
+const runtimeFrame = new RuntimeParameterFrame({
+  aliases: { ParamMouthOpenY: 'ParamA', ParamMouthForm: 'ParamMouthUp' },
+});
 const mockTtsAdapter = new MockTtsAdapter({ ...DEFAULT_TTS_CONFIG.mock, logger: new JsonConsoleTtsLogger() });
 const ttsAdapter: TtsAdapter = {
   prepare: request => request.text === KNOWN_TONE_SPEECH_TEXT
@@ -89,30 +95,47 @@ tonePlayer.subscribe(event => {
   }
   else runtime?.dispatch(event);
   if (active && event.type === 'playback.completed') {
-    app.ticker.addOnce(() => finishToneAcceptance(active), undefined, UPDATE_PRIORITY.UTILITY);
+    afterRenderedFrames(2, () => finishToneAcceptance(active));
   }
   else if (active && event.type === 'playback.interrupted') failToneAcceptance('acceptance playback was interrupted');
 });
 
 try {
   model = await Live2DModel.from('/models/Mao/Mao.model3.json', { autoInteract: false });
+  model.internalModel.on('beforeModelUpdate', applyRuntimeFrame);
   app.stage.addChild(model);
   fitModel();
   window.addEventListener('resize', fitModel);
 
   runtime = new AvatarRuntime({
     planner: new DefaultAvatarPlanner(),
-    mixer: new ParameterMixer({ ranges: { ParamA: { min: 0, max: 1 }, ParamAngleX: { min: -30, max: 30 }, ParamAngleY: { min: -30, max: 30 } } }),
+    mixer: new ParameterMixer({ ranges: {
+      ParamA: { min: 0, max: 1 }, ParamMouthOpenY: { min: 0, max: 1 },
+      ParamMouthForm: { min: -1, max: 1 },
+      ParamAngleX: { min: -30, max: 30 }, ParamAngleY: { min: -30, max: 30 },
+      ParamEyeBallX: { min: -1, max: 1 }, ParamEyeBallY: { min: -1, max: 1 },
+    } }),
     effects: { execute },
   });
   runtime.dispatch({ type: 'renderer.ready', capabilities: {
     emotions: ['neutral', 'happy'], actions: ['nod'],
-    parameters: ['ParamA', 'ParamMouthOpenY', 'ParamMouthForm', 'ParamAngleX', 'ParamAngleY'],
+    parameters: [
+      'ParamA', 'ParamMouthOpenY', 'ParamMouthForm',
+      'ParamAngleX', 'ParamAngleY', 'ParamEyeBallX', 'ParamEyeBallY',
+    ],
     supportsMouthForm: true, supportsGaze: true, supportsHitTest: true,
   } });
   const ttsHealth = await ttsAdapter.health();
   document.body.dataset.ttsHealth = ttsHealth.status;
   runtime.subscribe(snapshot => {
+    document.body.dataset.runtimeState = snapshot.state;
+    document.body.dataset.gazeFollow = snapshot.gaze.active ? 'enabled' : 'disabled';
+    const busy = snapshot.state !== 'idle';
+    for (const button of [speak, tone, motion]) button.disabled = busy;
+    reset.disabled = false;
+    gaze.disabled = !(snapshot.capabilities?.supportsGaze ?? false);
+    gaze.textContent = snapshot.gaze.active ? '眼部跟随：开' : '眼部跟随：关';
+    gaze.setAttribute('aria-pressed', String(snapshot.gaze.active));
     status.textContent = snapshot.state === 'speaking'
       ? `Runtime: speaking · ${Math.round(snapshot.playback.positionMs)} ms`
       : 'Runtime 已就绪 · UI 仅发送事件，状态由 Runtime 持有';
@@ -126,14 +149,11 @@ try {
   speak.addEventListener('click', () => submitDemo(false));
   tone.addEventListener('click', submitToneAcceptance);
   motion.addEventListener('click', () => submitDemo(true));
+  gaze.addEventListener('click', () => runtime?.dispatch({
+    type: runtime.getSnapshot().gaze.active ? 'user.gaze-follow-disabled' : 'user.gaze-follow-enabled',
+  }));
   reset.addEventListener('click', () => runtime?.dispatch({ type: 'user.interrupt-requested' }));
-  app.ticker.add(delta => {
-    if (!model || performance.now() >= gestureUntil) return;
-    gesturePhase += delta * 0.18;
-    coreModel(model).setParameterValueById('ParamAngleZ', Math.sin(gesturePhase) * 10);
-  });
 
-  for (const button of [speak, tone, motion, reset]) button.disabled = false;
   document.body.dataset.ready = 'true';
 }
 catch (error) {
@@ -150,6 +170,7 @@ function submitToneAcceptance(): void {
     segmentId, playerLevels: [], modelLevels: [], traces: [],
     lastLoggedBucket: -1, lastLoggedPhase: '',
   };
+  pendingToneTraces.length = 0;
   document.body.dataset.toneAcceptance = 'running';
   delete document.body.dataset.toneAcceptanceMetrics;
   toneDebug.hidden = false;
@@ -165,9 +186,10 @@ function submitToneAcceptance(): void {
 function submitDemo(withAction: boolean): void {
   if (!runtime || runtime.getSnapshot().state !== 'idle') return;
   runtime.dispatch({ type: 'plan.submitted', plan: { id: `demo-${Date.now()}`, segments: [{
-    id: `segment-${Date.now()}`, sequence: 0, displayText: '运行时演示', speechText: '运行时演示',
+    id: `segment-${Date.now()}`, sequence: 0, displayText: '运行时演示',
+    speechText: withAction ? '正在播放动作演示，请观察视线和身体动作。' : '运行时演示',
     emotion: { emotion: 'happy', intensity: 0.7, atMs: 100 },
-    actions: withAction ? [{ id: 'nod-demo', action: 'nod', atMs: 350 }] : [],
+    actions: withAction ? [{ id: 'nod-demo', action: 'nod', atMs: 200 }] : [],
   }] } });
 }
 
@@ -206,33 +228,67 @@ function execute(effect: RuntimeEffect, dispatch: (event: AvatarEvent) => void):
   else if (effect.type === 'audio.resume') tonePlayer.resume(effect.generation);
   else if (effect.type === 'audio.stop') {
     clearPlayback();
+    stopCurrentMotion('interrupted');
     void tonePlayer.stop(effect.generation);
   }
-  else if (effect.type === 'renderer.apply-frame' && model) {
-    const core = coreModel(model);
-    for (const [id, value] of Object.entries(effect.frame)) {
-      const modelParameter = id === 'ParamMouthOpenY' ? 'ParamA' : id;
-      core.setParameterValueById(modelParameter, value);
-      if (toneAcceptance && applyingToneTrace && modelParameter === 'ParamA') {
-        const active = toneAcceptance;
-        const trace = applyingToneTrace;
-        trace.modelAppliedAtMs = performance.now();
-        trace.modelValue = core.getParameterValueById(modelParameter);
-        active.modelLevels.push({ atMs: trace.atMs, value: trace.modelValue });
-        const modelDelayMs = trace.modelAppliedAtMs - trace.playbackObservedAtMs;
-        toneModelPoint.textContent = `ParamA=${trace.modelValue.toFixed(3)} · Δ ${formatMs(modelDelayMs)}`;
-        app.ticker.addOnce(() => {
-          trace.framePresentedAtMs = performance.now();
-          const frameDelayMs = trace.framePresentedAtMs - trace.playbackObservedAtMs;
-          toneFramePoint.textContent = `已完成 Pixi 帧 · Δ ${formatMs(frameDelayMs)}`;
-          logToneTrace(active, trace);
-        }, undefined, UPDATE_PRIORITY.UTILITY);
-      }
+  else if (effect.type === 'renderer.apply-frame') {
+    runtimeFrame.replace(effect.frame);
+    if (toneAcceptance && applyingToneTrace && effect.frame.ParamMouthOpenY !== undefined) {
+      pendingToneTraces.push(applyingToneTrace);
     }
   }
-  else if (effect.type === 'renderer.play-motion') {
-    gestureUntil = performance.now() + 1200;
-    setTimeout(() => dispatch({ type: 'renderer.motion-completed', generation: effect.generation, actionId: effect.command.actionId }), 1200);
+  else if (effect.type === 'renderer.play-motion' && model) {
+    const activeModel = model;
+    stopCurrentMotion('replaced');
+    const requestToken = ++motionRequestToken;
+    document.body.dataset.motionState = 'starting';
+    void activeModel.motion('TapBody', 0, MotionPriority.FORCE).then(started => {
+      if (requestToken !== motionRequestToken) {
+        if (started) activeModel.internalModel.motionManager.stopAllMotions();
+        return;
+      }
+      if (!started) throw new Error('Live2D TapBody motion did not start');
+      document.body.dataset.motionState = 'playing';
+      motionTimer = setTimeout(() => {
+        if (requestToken !== motionRequestToken) return;
+        activeModel.internalModel.motionManager.stopAllMotions();
+        motionTimer = undefined;
+        document.body.dataset.motionState = 'completed';
+        dispatch({ type: 'renderer.motion-completed', generation: effect.generation, actionId: effect.command.actionId });
+      }, 1_200);
+    }).catch(error => {
+      document.body.dataset.motionState = 'failed';
+      dispatch({
+        type: 'renderer.motion-failed', generation: effect.generation, actionId: effect.command.actionId,
+        error: { code: 'live2d-motion-failed', message: error instanceof Error ? error.message : String(error), recoverable: true },
+      });
+    });
+  }
+}
+
+function applyRuntimeFrame(): void {
+  if (!model) return;
+  const core = coreModel(model);
+  runtimeFrame.apply(core);
+  if (!pendingToneTraces.length) return;
+
+  const active = toneAcceptance;
+  const traces = pendingToneTraces.splice(0);
+  if (!active) return;
+  const modelValue = core.getParameterValueById('ParamA');
+  for (const trace of traces) {
+    trace.modelAppliedAtMs = performance.now();
+    trace.modelValue = modelValue;
+    active.modelLevels.push({ atMs: trace.atMs, value: modelValue });
+    const modelDelayMs = trace.modelAppliedAtMs - trace.playbackObservedAtMs;
+    toneModelPoint.textContent = `帧末 ParamA=${modelValue.toFixed(3)} · Δ ${formatMs(modelDelayMs)}`;
+    app.renderer.once('postrender', () => {
+      if (toneAcceptance !== active) return;
+      trace.framePresentedAtMs = performance.now();
+      const frameDelayMs = trace.framePresentedAtMs - trace.playbackObservedAtMs;
+      toneFramePoint.textContent = `已送入屏幕帧 · Δ ${formatMs(frameDelayMs)}`;
+      logToneTrace(active, trace);
+    });
   }
 }
 
@@ -258,6 +314,7 @@ function failToneAcceptance(message: string): void {
   document.body.dataset.toneAcceptance = 'failed';
   document.body.dataset.toneAcceptanceMetrics = JSON.stringify({ passed: false, issues: [message] });
   toneAcceptance = null;
+  pendingToneTraces.length = 0;
   status.textContent = `口型同步验收失败：${message}`;
   toneFramePoint.textContent = `失败 · ${message}`;
 }
@@ -288,6 +345,21 @@ function tonePhase(positionMs: number): string {
 }
 
 function formatMs(value: number): string { return `${value.toFixed(1)}ms`; }
+
+function afterRenderedFrames(count: number, callback: () => void): void {
+  if (count <= 0) return callback();
+  app.renderer.once('postrender', () => afterRenderedFrames(count - 1, callback));
+}
+
+function stopCurrentMotion(state: 'interrupted' | 'replaced'): void {
+  motionRequestToken++;
+  if (motionTimer) clearTimeout(motionTimer);
+  motionTimer = undefined;
+  model?.internalModel.motionManager.stopAllMotions();
+  if (document.body.dataset.motionState === 'playing' || document.body.dataset.motionState === 'starting') {
+    document.body.dataset.motionState = state;
+  }
+}
 
 function clearPlayback(): void { if (playbackTimer) clearInterval(playbackTimer); playbackTimer = undefined; }
 function sampleAmplitude(samples: Array<{ atMs: number; value: number }> | undefined, positionMs: number): number {

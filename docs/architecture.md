@@ -28,8 +28,8 @@ TTS MCP / Response Planner
 2. `tts-mcp-adapter` 把纯文本准备为流式优先的 `AudioSource`；MCP 返回流描述，音频字节由 HTTP 数据面增量传输。
 3. `audio-runtime` 消费流或整段音频，以真实缓冲、播放位置、实时电平和播放生命周期发出 `PlaybackEvent`。
 4. `avatar-runtime` 校验情绪和动作白名单，生成 cue，并按播放时钟推进 Timeline。
-5. Mixer 依次合成 Base、Gaze、Expression、Gesture、Mouth；Mouth 最后写入。
-6. `live2d-renderer` 把领域命令映射为具体 Pixi/Live2D API，不理解 LLM、TTS 或业务状态。
+5. Mixer 依次合成 Base、Expression、Gesture、Gaze、Mouth；启用跟随时 Gaze 持续拥有头部/眼球跟随参数，Mouth 始终最后写入嘴部开合。
+6. `live2d-renderer` 缓存最新完整 ParameterFrame，并在 Live2D `beforeModelUpdate` 应用，避免 motion、focus、physics 覆盖 Runtime 输出；它不理解 LLM、TTS 或业务状态。
 7. 中断时先停止播放器，再取消 Timeline，嘴型归零，最后平滑回到 neutral/idle。
 
 模块职责、事件模型、Effect 边界和状态所有权详见 [Avatar Runtime 模块设计](avatar-runtime.md)。当前代码中的 `setState`、`setEmotion`、`playAction` 等公开直控接口属于待替换的早期骨架，不作为后续实现契约。
@@ -54,6 +54,7 @@ config -> contracts
 - UI、播放器、TTS 和 Renderer 不得调用状态 setter；它们只向 Runtime 提交 `AvatarEvent`。
 - Runtime reducer 只计算 `Snapshot + Effects`，由外围 effect runner 执行音频、TTS 和渲染副作用。
 - `live2d-renderer` 不选择情绪，不调度音频，不保存会话业务状态。
+- 原生 Live2D 每帧更新可以产生候选动作/物理值，但 Runtime 拥有的参数必须在 `beforeModelUpdate` 最终覆盖后才能提交给 Cubism。
 - UI 不读取 `_wavFileHandler`、`internalModel` 等第三方私有字段；这些兼容细节只能留在适配器内部。
 - 参考仓库不进入构建、打包和运行时依赖。
 

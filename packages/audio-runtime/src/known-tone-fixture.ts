@@ -166,7 +166,7 @@ export function evaluateKnownToneResponseTiming(
   traces: readonly KnownToneResponseTrace[],
   options: KnownToneResponseTimingOptions = {},
 ): KnownToneResponseTimingResult {
-  const modelResponseLimitMs = positive(options.modelResponseLimitMs ?? 12, 'modelResponseLimitMs');
+  const modelResponseLimitMs = positive(options.modelResponseLimitMs ?? 34, 'modelResponseLimitMs');
   const frameResponseLimitMs = positive(options.frameResponseLimitMs ?? 50, 'frameResponseLimitMs');
   const issues: string[] = [];
   const modelLatencies = traces.flatMap(trace => trace.modelAppliedAtMs === undefined

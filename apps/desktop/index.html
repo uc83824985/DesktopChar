@@ -19,6 +19,7 @@
           <button id="speak" disabled>模拟说话</button>
           <button id="tone" disabled>口型同步验收</button>
           <button id="motion" disabled>播放动作</button>
+          <button id="gaze" disabled aria-pressed="false">眼部跟随：关</button>
           <button id="reset" disabled>恢复中立</button>
         </div>
         <section id="tone-debug" class="tone-debug" aria-label="口型同步实时响应" hidden>
@@ -30,7 +31,7 @@
           </dl>
           <ol id="tone-sync-log" class="tone-sync-log"></ol>
         </section>
-        <p class="hint">移动鼠标测试视线跟随。测试模型与 Cubism Core © Live2D Inc.，启动即表示同意仓库内所附许可。</p>
+        <p class="hint">眼部跟随默认开启；关闭前会跨说话与动作持续生效。测试模型与 Cubism Core © Live2D Inc.，启动即表示同意仓库内所附许可。</p>
       </section>
     </main>
     <script type="module" src="/src/renderer/main.ts"></script>

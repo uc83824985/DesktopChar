@@ -41,8 +41,26 @@ try {
   if (traceDisplay.hidden || traceDisplay.logEntries < 5 || !traceDisplay.model?.includes('ParamA')) {
     throw new Error(`Known-tone on-screen trace is incomplete: ${JSON.stringify(traceDisplay)}`);
   }
+  await page.locator('body[data-runtime-state="idle"]').waitFor({ timeout: 3_000 });
+  await page.locator('body[data-gaze-follow="enabled"]').waitFor({ timeout: 1_000 });
+
   await page.getByRole('button', { name: '模拟说话' }).click();
+  await page.locator('body[data-runtime-state="speaking"]').waitFor({ timeout: 2_000 });
+  await page.locator('body[data-runtime-state="idle"]').waitFor({ timeout: 3_000 });
+
   await page.getByRole('button', { name: '播放动作' }).click();
+  await page.locator('body[data-motion-state="playing"]').waitFor({ timeout: 3_000 });
+  await page.locator('body[data-gaze-follow="enabled"]').waitFor({ timeout: 1_000 });
+  await page.locator('body[data-motion-state="completed"]').waitFor({ timeout: 3_000 });
+  await page.locator('body[data-runtime-state="idle"]').waitFor({ timeout: 3_000 });
+
+  await page.getByRole('button', { name: '眼部跟随：开' }).click();
+  await page.locator('body[data-gaze-follow="disabled"]').waitFor({ timeout: 1_000 });
+  await page.mouse.move(1_100, 120);
+  await page.locator('body[data-gaze-follow="disabled"]').waitFor({ timeout: 1_000 });
+  await page.getByRole('button', { name: '眼部跟随：关' }).click();
+  await page.locator('body[data-gaze-follow="enabled"]').waitFor({ timeout: 1_000 });
+
   await page.getByRole('button', { name: '恢复中立' }).click();
   const canvas = await page.locator('#avatar').boundingBox();
   if (!canvas || canvas.width < 1 || canvas.height < 1) throw new Error('Avatar canvas has no visible area');

@@ -10,8 +10,9 @@
   -> 从已排程 PCM 计算 playback.level
   -> Avatar Runtime / Parameter Mixer
   -> renderer.apply-frame
-  -> Mao ParamA 写入并回读
-  -> Pixi 完成下一次渲染帧
+  -> 缓存最新 Runtime ParameterFrame
+  -> Live2D beforeModelUpdate 帧末写入 Mao ParamA 并回读
+  -> Pixi postrender 完成实际送屏
 ```
 
 它不使用 Mock 预计算的 amplitude 数组，因此 Runtime 无法绕过实际 PCM 数据“猜”出口型。只有播放器轨道、模型参数轨道和逐点响应时延都满足条件时，前台才显示通过。
@@ -42,10 +43,12 @@
 - 后一段提示音必须比前一段至少高 0.12；
 - 必须走完 `buffering -> started -> progress/level -> completed`。
 - 每一个 `playback.level` 都必须产生 Mao `ParamA` 写入和后续 Pixi 渲染帧记录；
-- 电平事件进入前台到模型参数写入的最大响应时间不超过 12ms；
+- 电平事件进入前台到下一次 Live2D 帧末参数写入的最大响应时间不超过 34ms；
 - 电平事件进入前台到 Pixi 完成下一次渲染帧的最大响应时间不超过 50ms。
 
-纯数据测试还会把正确电平轨道整体后移 180ms，并确认验收器拒绝该轨道；另有响应测试会注入 20ms 参数延迟和缺失渲染帧并确认失败，避免测试只检查“嘴有动”而不检查时点或响应完整性。
+纯数据测试还会把正确电平轨道整体后移 180ms，并确认验收器拒绝该轨道；另有响应测试会注入 40ms 参数延迟和缺失渲染帧并确认失败，避免测试只检查“嘴有动”而不检查时点或响应完整性。34ms 允许正常 60Hz 环境中最多约两个帧间隔，但仍会拒绝持续丢帧或事件未进入 Live2D 更新周期。
+
+不能在收到 `renderer.apply-frame` 时立刻写 Core 参数。`pixi-live2d-display` 随后还会执行 motion、expression、eye blink、focus、breath、physics 和 pose，它们会覆盖提前写入的值。前台使用 `beforeModelUpdate` 作为 Runtime 最终写入点：先让上述模型机制运行，再覆盖 Runtime 当前拥有的 mouth/gaze 参数，随后立即调用 Cubism `model.update()`。验收中的 `modelValue` 因而是实际参与本帧网格计算的值，而不是可被覆盖的同步回读值。
 
 ## 前台快速验证
 
@@ -82,10 +85,10 @@ body[data-tone-acceptance-metrics="..."]
 npm run test:smoke
 ```
 
-Smoke test 会在 Edge 中加载真实 Mao 模型、触发用户点击、实际创建 Web Audio 播放节点，并检查屏幕 trace、播放器轨道、模型参数轨道和响应时延。2026-07-20 的一次本轮验证结果为：时轴误差 21.3ms、最大模型参数响应 0.10ms、最大 Pixi 渲染帧响应 12.40ms；墙钟调度结果允许在阈值内随运行负载波动。
+Smoke test 会在 Edge 中加载真实 Mao 模型、触发用户点击、实际创建 Web Audio 播放节点，并检查屏幕 trace、播放器轨道、帧末模型参数轨道和响应时延；它还会验证模拟说话、真实 `TapBody` motion，以及眼部跟随在动作期间保持启用并可显式退出。2026-07-20 的一次本轮验证结果为：时轴误差 32.0ms、最大帧末模型参数响应 15.70ms、最大 Pixi 送屏响应 17.10ms；墙钟调度结果允许在阈值内随运行负载波动。
 
 ## 当前边界
 
 `WebAudioPcmStreamPlayer` 当前只承诺单声道 `pcm_s16le`，已覆盖分片拼接、首播缓冲、实际播放时钟、PCM 电平、暂停/恢复/停止和生命周期事件。测试 fixture 的生产速度明显快于播放速度，因此尚未以该用例覆盖长期背压、真实网络抖动和反复欠载恢复；这些应在接入真实 Qwen3-TTS HTTP 流时增加独立压力测试。
 
-这里的“播放端时点”来自 Web Audio `AudioContext.currentTime`，“屏幕帧”记录发生在优先级低于 Application renderer 的 Pixi ticker 回调中。它能测量应用内部的音频时钟到模型/渲染路径差异，但不包含操作系统音频缓冲、扬声器/DAC 声学延迟，也不包含显示器扫描输出延迟。
+这里的“播放端时点”来自 Web Audio `AudioContext.currentTime`，“模型参数”记录发生在 Live2D 的 `beforeModelUpdate`，“屏幕帧”记录来自 Pixi renderer 的 `postrender` 事件。它能测量应用内部的音频时钟到模型/渲染路径差异，但不包含操作系统音频缓冲、扬声器/DAC 声学延迟，也不包含显示器扫描输出延迟。
