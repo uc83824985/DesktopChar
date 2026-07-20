@@ -25,7 +25,10 @@ import './style.css';
 installCspShaderCompiler({ ShaderSystem });
 Live2DModel.registerTicker(Ticker);
 const desktopShell = window.desktopChar;
-if (desktopShell) document.body.dataset.shell = 'floating';
+if (desktopShell) {
+  document.documentElement.dataset.shell = 'floating';
+  document.body.dataset.shell = 'floating';
+}
 const canvas = document.querySelector<HTMLCanvasElement>('#avatar')!;
 const status = document.querySelector<HTMLElement>('#status')!;
 const speak = document.querySelector<HTMLButtonElement>('#speak')!;

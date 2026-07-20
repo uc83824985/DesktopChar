@@ -39,6 +39,8 @@ try {
     state: await window.desktopChar?.getWindowState(),
     reportedBounds: document.body.dataset.windowBounds,
     panelDisplay: getComputedStyle(document.querySelector('.panel')).display,
+    rootBackground: getComputedStyle(document.documentElement).backgroundColor,
+    bodyBackground: getComputedStyle(document.body).backgroundColor,
     background: getComputedStyle(document.querySelector('main')).backgroundColor,
   }));
   const movedState = moved.state;
@@ -48,7 +50,10 @@ try {
   if (moved.reportedBounds !== `${movedState.bounds.x},${movedState.bounds.y},${movedState.bounds.width},${movedState.bounds.height}`) {
     throw new Error(`Renderer bounds are not synchronized: ${JSON.stringify(moved)}`);
   }
-  if (moved.panelDisplay !== 'none' || moved.background !== 'rgba(0, 0, 0, 0)') {
+  if (moved.panelDisplay !== 'none'
+    || moved.rootBackground !== 'rgba(0, 0, 0, 0)'
+    || moved.bodyBackground !== 'rgba(0, 0, 0, 0)'
+    || moved.background !== 'rgba(0, 0, 0, 0)') {
     throw new Error(`Floating renderer is not transparent: ${JSON.stringify(moved)}`);
   }
   if (errors.length) throw new Error(`Desktop renderer errors:\n${errors.join('\n')}`);

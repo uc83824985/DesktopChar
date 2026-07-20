@@ -21,7 +21,7 @@ button:disabled { opacity: .38; cursor: wait; }
 .tone-sync-log:empty { display: none; }
 .hint { margin: 0; color: #8589a5; font-size: 12px; line-height: 1.6; }
 @media (max-width: 720px) { .panel { top: auto; right: 18px; bottom: 18px; left: 18px; width: auto; transform: none; padding: 20px; } h1 { font-size: 36px; } }
-body[data-shell="floating"], body[data-shell="floating"] main { background: transparent; }
+html[data-shell="floating"], body[data-shell="floating"], body[data-shell="floating"] main { background: transparent; }
 body[data-shell="floating"] .panel { display: none; }
 body[data-shell="floating"] #avatar { cursor: grab; }
 body[data-shell="floating"][data-drag-state="moving"] #avatar { cursor: grabbing; }
