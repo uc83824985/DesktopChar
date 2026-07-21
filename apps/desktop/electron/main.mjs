@@ -217,7 +217,7 @@ function createAvatarWindow() {
 }
 
 function createDesktopTray() {
-  const iconPath = path.join(directory, 'assets', 'desktop-char-tray-icon.png');
+  const iconPath = path.join(directory, 'assets', 'TrayIcon.png');
   const icon = nativeImage.createFromPath(iconPath).resize({ width: 16, height: 16, quality: 'best' });
   if (icon.isEmpty()) throw new Error('Desktop tray icon failed to load');
   desktopTray = new Tray(icon);
