@@ -27,6 +27,9 @@ try {
     || initial.bounds.width > 500 || initial.bounds.height > 740) {
     throw new Error(`Unexpected floating window state: ${JSON.stringify(initial)}`);
   }
+  if (!initial.tray.iconScaleFactors.includes(1.5)) {
+    throw new Error(`Tray icon must expose a native 24px representation at 150% DPI: ${JSON.stringify(initial.tray)}`);
+  }
   if (!initial.mousePassthrough) throw new Error('Floating window must start in desktop passthrough mode');
   if (initial.tts?.mode !== 'local' || !/^http:\/\/127\.0\.0\.1:\d+\/mcp$/.test(initial.tts?.mcpUrl ?? '')) {
     throw new Error(`Desktop local TTS must use a real loopback MCP endpoint: ${JSON.stringify(initial.tts)}`);

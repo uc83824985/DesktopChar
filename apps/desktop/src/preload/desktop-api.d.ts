@@ -16,7 +16,7 @@ export interface DesktopWindowState {
   pointerPresentation: PointerPresentation;
   alwaysOnTop: boolean;
   visible: boolean;
-  tray: { available: boolean };
+  tray: { available: boolean; iconScaleFactors: number[] };
   interaction: DesktopInteractionConfig;
   lipSync: DesktopLipSyncConfig;
   tts: DesktopTtsConfig;

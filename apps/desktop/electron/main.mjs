@@ -17,7 +17,11 @@ import { createAgentHttpServer, parseAgentPort } from './agent-http-server.mjs';
 import { createNativeCursorRefresh } from './cursor-refresh.mjs';
 import { createNativeWindowPosition } from './native-window-position.mjs';
 import { createLocalTtsMcpService } from '../../../local-tts-mcp/service.mjs';
-import { nextAvatarVisibility, trayVisibilityLabel } from './tray-policy.mjs';
+import {
+  nextAvatarVisibility,
+  trayIconRepresentations,
+  trayVisibilityLabel,
+} from './tray-policy.mjs';
 
 const directory = path.dirname(fileURLToPath(import.meta.url));
 const rendererRoot = path.resolve(directory, '../dist');
@@ -67,6 +71,7 @@ protocol.registerSchemesAsPrivileged([{
 
 let avatarWindow = null;
 let desktopTray = null;
+let trayIconScaleFactors = [];
 let avatarBounds = null;
 let cursorTimer;
 let cursorRefreshTimer;
@@ -218,8 +223,19 @@ function createAvatarWindow() {
 
 function createDesktopTray() {
   const iconPath = path.join(directory, 'assets', 'TrayIcon.png');
-  const icon = nativeImage.createFromPath(iconPath).resize({ width: 16, height: 16, quality: 'best' });
-  if (icon.isEmpty()) throw new Error('Desktop tray icon failed to load');
+  const source = nativeImage.createFromPath(iconPath);
+  if (source.isEmpty()) throw new Error('Desktop tray icon failed to load');
+  const icon = nativeImage.createEmpty();
+  for (const { scaleFactor, pixelSize } of trayIconRepresentations()) {
+    const representation = source.resize({
+      width: pixelSize,
+      height: pixelSize,
+      quality: 'best',
+    });
+    icon.addRepresentation({ scaleFactor, dataURL: representation.toDataURL() });
+  }
+  if (icon.isEmpty()) throw new Error('Desktop tray icon representations failed to build');
+  trayIconScaleFactors = icon.getScaleFactors();
   desktopTray = new Tray(icon);
   desktopTray.setToolTip('DesktopChar');
   desktopTray.on('click', () => setAvatarVisibility(nextAvatarVisibility(avatarWindow?.isVisible() ?? false)));
@@ -433,7 +449,7 @@ function windowState() {
     pointerPresentation: { ...pointerPresentation },
     alwaysOnTop: avatarWindow.isAlwaysOnTop(),
     visible: avatarWindow.isVisible(),
-    tray: { available: Boolean(desktopTray) },
+    tray: { available: Boolean(desktopTray), iconScaleFactors: [...trayIconScaleFactors] },
     interaction: { dragHoldDelayMs, dragWindowApi },
     lipSync: { gain: lipSyncGain },
     tts: {
