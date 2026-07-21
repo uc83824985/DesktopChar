@@ -2,7 +2,7 @@ import { ShaderSystem } from '@pixi/core';
 import { install as installCspShaderCompiler } from '@pixi/unsafe-eval';
 import { Application, Renderer, Ticker } from 'pixi.js';
 import { Live2DModel, MotionPriority } from 'pixi-live2d-display/cubism4';
-import type { AvatarEvent, RuntimeEffect } from '../../../../packages/contracts/src/index.ts';
+import type { AvatarEvent, RuntimeEffect, SpeechBubbleMode } from '../../../../packages/contracts/src/index.ts';
 import type { AmplitudeSample } from '../../../../packages/contracts/src/index.ts';
 import {
   KNOWN_TONE_PULSES,
@@ -15,15 +15,17 @@ import {
   evaluateKnownToneResponseTiming,
 } from '../../../../packages/audio-runtime/src/index.ts';
 import type { KnownToneResponseTrace } from '../../../../packages/audio-runtime/src/index.ts';
-import { AvatarRuntime, DefaultAvatarPlanner, ParameterMixer } from '../../../../packages/avatar-runtime/src/index.ts';
+import { AvatarRuntime, DefaultAvatarPlanner, ParameterMixer, projectSpeechBubble } from '../../../../packages/avatar-runtime/src/index.ts';
 import { DEFAULT_TTS_CONFIG, MAO_CHARACTER_CONFIG } from '../../../../packages/config/src/index.ts';
 import {
   AsyncPixelCoveragePicker,
+  HoldDragController,
   PixelCoverageLatch,
   RuntimeParameterFrame,
   WebGLPixelReadbackBackend,
 } from '../../../../packages/live2d-renderer/src/index.ts';
 import type { PixelCoverageResult } from '../../../../packages/live2d-renderer/src/index.ts';
+import { DomContextMenuHost, ImmediateUiRegistry } from '../../../../packages/scene-ui-dom/src/index.ts';
 import type { McpCallOptions, McpClientPort, TtsAdapter } from '../../../../packages/tts-mcp-adapter/src/index.ts';
 import { JsonConsoleTtsLogger, McpTtsAdapter, MockTtsAdapter, TtsRuntimeEffectHandler } from '../../../../packages/tts-mcp-adapter/src/index.ts';
 import './style.css';
@@ -37,6 +39,10 @@ if (desktopShell) {
   document.body.dataset.shell = 'floating';
 }
 const canvas = document.querySelector<HTMLCanvasElement>('#avatar')!;
+const speechBubble = document.querySelector<HTMLElement>('#speech-bubble')!;
+const speechBubbleLeading = document.querySelector<HTMLElement>('#speech-bubble-leading')!;
+const speechBubbleActive = document.querySelector<HTMLElement>('#speech-bubble-active')!;
+const speechBubbleTrailing = document.querySelector<HTMLElement>('#speech-bubble-trailing')!;
 const status = document.querySelector<HTMLElement>('#status')!;
 const speak = document.querySelector<HTMLButtonElement>('#speak')!;
 const tone = document.querySelector<HTMLButtonElement>('#tone')!;
@@ -78,17 +84,78 @@ let pointerPresentation: PointerPresentation | undefined;
 let pixelPicker: AsyncPixelCoveragePicker | undefined;
 let pixelSelection: PixelCoverageResult | undefined;
 let pixelCursorPoint: { x: number; y: number } | undefined;
-let lastPixelStallLoggedFrame = -1;
-let dragInteraction: {
-  pointerId: number;
-  hitArea: string;
-  start: { x: number; y: number };
-  latest: { x: number; y: number };
-  ready: boolean;
-  moved: boolean;
-} | undefined;
+let webglContextLosses = 0;
 const pendingToneTraces: ToneSyncTrace[] = [];
 const pixelCoverageLatch = new PixelCoverageLatch({ coveredSamplesToSelect: 1, transparentSamplesToClear: 3 });
+const dragGesture = new HoldDragController<string>({
+  holdDelayMs: 240,
+  callbacks: {
+    onPhaseChanged(phase) {
+      if (phase === 'pending') {
+        document.body.dataset.dragState = 'pending';
+      }
+      else if (phase === 'starting') {
+        document.body.dataset.dragState = 'starting';
+      }
+      else if (phase === 'dragging') document.body.dataset.dragState = 'armed';
+    },
+    async onHoldStarted(origin) {
+      if (!desktopShell) throw new Error('Desktop shell is unavailable');
+      updatePointerPresentation({ passthrough: false, cursor: 'move' }, false);
+      await desktopShell.beginDrag(origin);
+      // Do not mutate the transparent HWND bounds until Pixi has presented a
+      // complete frame after drag entry. This keeps the first move from racing
+      // the cursor/style transition and exposing an unpainted compositor frame.
+      await nextRenderedFrame();
+    },
+    onDragMoved(point) {
+      document.body.dataset.dragState = 'moving';
+      desktopShell?.dragTo(point);
+    },
+    async onDragFinished(result) {
+      document.body.dataset.dragState = result.cancelled ? 'cancelled' : result.moved ? 'moved' : 'held';
+      const presentation = selectionPresentation();
+      updatePointerPresentation(presentation, false);
+      await desktopShell?.endDrag();
+      publishPointerPresentation(pointerPresentation ?? presentation);
+    },
+    onClicked(hitArea) {
+      document.body.dataset.dragState = 'clicked';
+      document.body.dataset.lastAvatarClick = hitArea;
+      runtime?.dispatch({ type: 'user.avatar-clicked', hitArea });
+    },
+    onPendingCancelled() {
+      document.body.dataset.dragState = 'cancelled';
+    },
+    onError(error, pointerId) {
+      if (canvas.hasPointerCapture(pointerId)) canvas.releasePointerCapture(pointerId);
+      document.body.dataset.dragState = 'failed';
+      const presentation = selectionPresentation();
+      updatePointerPresentation(presentation, false);
+      void desktopShell?.endDrag()
+        .then(() => publishPointerPresentation(pointerPresentation ?? presentation))
+        .catch(() => publishPointerPresentation(pointerPresentation ?? presentation));
+      console.error('Avatar drag failed', error);
+    },
+  },
+});
+const immediateUi = new ImmediateUiRegistry();
+const contextMenuHost = new DomContextMenuHost(immediateUi, {
+  onVisibilityChanged(visible) {
+    document.body.dataset.contextMenu = visible ? 'open' : 'closed';
+    if (!desktopShell) return;
+    if (visible) {
+      pixelPicker?.invalidate();
+      pixelSelection = undefined;
+      pixelCursorPoint = undefined;
+      pixelCoverageLatch.reset();
+      updatePointerPresentation({ passthrough: false, cursor: 'default' });
+    }
+    else updatePointerPresentation(selectionPresentation());
+  },
+});
+document.body.dataset.contextMenu = 'closed';
+document.body.dataset.webglContextLosses = '0';
 const runtimeFrame = new RuntimeParameterFrame({
   aliases: { ParamMouthOpenY: 'ParamA', ParamMouthForm: 'ParamMouthUp' },
 });
@@ -174,6 +241,8 @@ try {
     status.textContent = snapshot.state === 'speaking'
       ? `Runtime: speaking · ${Math.round(snapshot.playback.positionMs)} ms`
       : 'Runtime 已就绪 · UI 仅发送事件，状态由 Runtime 持有';
+    renderSpeechBubble(snapshot);
+    contextMenuHost.refresh();
   });
   void ttsAdapter.health().then(report => {
     document.body.dataset.ttsHealth = report.status;
@@ -207,6 +276,19 @@ try {
     type: runtime.getSnapshot().gaze.active ? 'user.gaze-follow-disabled' : 'user.gaze-follow-enabled',
   }));
   reset.addEventListener('click', () => runtime?.dispatch({ type: 'user.interrupt-requested' }));
+  registerDevelopmentUi();
+  canvas.addEventListener('contextmenu', openAvatarContextMenu);
+  canvas.addEventListener('keydown', event => {
+    if (event.key !== 'ContextMenu' && !(event.shiftKey && event.key === 'F10')) return;
+    event.preventDefault();
+    contextMenuHost.open({
+      targetId: 'avatar',
+      clientX: Math.round(innerWidth / 2),
+      clientY: Math.round(innerHeight / 2),
+      data: { source: 'keyboard' },
+    });
+  });
+  window.addEventListener('beforeunload', () => contextMenuHost.dispose(), { once: true });
 
   document.body.dataset.ready = 'true';
 }
@@ -275,7 +357,7 @@ function execute(effect: RuntimeEffect, dispatch: (event: AvatarEvent) => void):
         });
       });
     }
-    if (effect.source.delivery === 'stream' && effect.source.codec === 'pcm_s16le') {
+    if (effect.source.delivery === 'stream' && effect.source.codec === 'pcm_s16le' && !effect.source.uri.startsWith('mock://')) {
       return void audioPlayer?.play(effect.generation, effect.segmentId, effect.source).catch(error => {
         dispatch({
           type: 'playback.failed', generation: effect.generation, segmentId: effect.segmentId,
@@ -425,6 +507,108 @@ function isPlaybackEvent(event: AvatarEvent): event is Extract<AvatarEvent, { ty
   return event.type.startsWith('playback.');
 }
 
+function submitBubbleDemo(mode: SpeechBubbleMode): void {
+  if (!runtime || runtime.getSnapshot().state !== 'idle') return;
+  const suffix = Date.now();
+  const displayText = mode === 'complete'
+    ? '完整显示：文本会立即完整出现。'
+    : mode === 'stream'
+      ? '流式显示：文本会跟随播放进度逐步出现。'
+      : 'KTV 高亮会按照播放时点逐段移动。';
+  runtime.dispatch({ type: 'plan.submitted', plan: { id: `bubble-${mode}-${suffix}`, segments: [{
+    id: `bubble-segment-${suffix}`,
+    sequence: 0,
+    displayText,
+    speechText: displayText,
+    bubble: mode === 'karaoke' ? {
+      mode,
+      cues: [
+        { text: 'KTV 高亮', atMs: 0, durationMs: 550 },
+        { text: '会按照播放时点', atMs: 550, durationMs: 650 },
+        { text: '逐段移动。', atMs: 1_200, durationMs: 700 },
+      ],
+    } : mode === 'stream' ? { mode, charactersPerSecond: 12 } : { mode },
+  }] } });
+}
+
+function registerDevelopmentUi(): void {
+  immediateUi.register({
+    id: 'avatar.runtime-settings',
+    target: 'avatar',
+    order: 10,
+    build: () => {
+      const snapshot = runtime?.getSnapshot();
+      return {
+        label: '角色设置',
+        items: [
+          {
+            type: 'checkbox', id: 'gaze-follow', label: '眼部跟随',
+            checked: snapshot?.gaze.active ?? false,
+            enabled: snapshot?.capabilities?.supportsGaze ?? false,
+            invoke: enabled => runtime?.dispatch({
+              type: enabled ? 'user.gaze-follow-enabled' : 'user.gaze-follow-disabled',
+            }),
+          },
+        ],
+      };
+    },
+  });
+  immediateUi.register({
+    id: 'avatar.bubble-diagnostics',
+    target: 'avatar',
+    order: 20,
+    build: () => {
+      const enabled = runtime?.getSnapshot().state === 'idle';
+      return {
+        label: '冒泡效果测试',
+        items: [
+          { type: 'action', id: 'complete', label: '完整显示', enabled, invoke: () => submitBubbleDemo('complete') },
+          { type: 'action', id: 'stream', label: '流式显示', enabled, invoke: () => submitBubbleDemo('stream') },
+          { type: 'action', id: 'karaoke', label: 'KTV 高亮', enabled, invoke: () => submitBubbleDemo('karaoke') },
+        ],
+      };
+    },
+  });
+  if (desktopShell) immediateUi.register({
+    id: 'desktop.window-settings',
+    target: '*',
+    order: 1_000,
+    build: () => ({
+      label: '桌面窗口',
+      items: [
+        { type: 'action', id: 'restore-position', label: '恢复默认位置', invoke: () => desktopShell.runWindowCommand('restore-default-position') },
+        { type: 'action', id: 'quit', label: '退出 DesktopChar', danger: true, invoke: () => desktopShell.runWindowCommand('quit') },
+      ],
+    }),
+  });
+}
+
+function openAvatarContextMenu(event: MouseEvent): void {
+  if (!model) return;
+  const hitArea = desktopShell
+    ? selectedHitArea(event.clientX, event.clientY)
+    : model.hitTest(event.clientX, event.clientY)[0];
+  if (!hitArea) return;
+  event.preventDefault();
+  contextMenuHost.open({
+    targetId: 'avatar',
+    clientX: event.clientX,
+    clientY: event.clientY,
+    data: { source: 'pointer', hitArea },
+  });
+}
+
+function renderSpeechBubble(snapshot: import('../../../../packages/contracts/src/index.ts').AvatarSnapshot): void {
+  const projection = projectSpeechBubble(snapshot, runtime?.getActiveSegment() ?? null);
+  speechBubble.hidden = !projection.visible;
+  speechBubble.dataset.mode = projection.mode;
+  speechBubbleLeading.textContent = projection.leadingText;
+  speechBubbleActive.textContent = projection.activeText;
+  speechBubbleActive.hidden = !projection.activeText;
+  speechBubbleTrailing.textContent = projection.trailingText;
+  document.body.dataset.speechBubble = projection.visible ? projection.mode : 'hidden';
+}
+
 function applyRuntimeFrame(): void {
   if (!model) return;
   const core = coreModel(model);
@@ -526,18 +710,19 @@ function initializeDesktopInteraction(initialState: Awaited<ReturnType<NonNullab
   canvas.addEventListener('pointermove', moveAvatarDrag);
   canvas.addEventListener('pointerup', endAvatarDrag);
   canvas.addEventListener('pointercancel', endAvatarDrag);
-  canvas.addEventListener('contextmenu', event => {
-    if (!selectedHitArea(event.clientX, event.clientY)) return;
-    event.preventDefault();
-    desktopShell.showContextMenu();
-  });
   canvas.addEventListener('webglcontextlost', () => {
+    webglContextLosses++;
+    document.body.dataset.webglContextLosses = webglContextLosses.toString();
     pixelPicker?.invalidate();
     pixelSelection = undefined;
     pixelCursorPoint = undefined;
     pixelCoverageLatch.reset();
     document.body.dataset.pixelSelection = 'context-lost';
     updatePointerPresentation({ passthrough: true, cursor: 'default' });
+    console.warn('[renderer] WebGL context lost', { dragState: document.body.dataset.dragState, webglContextLosses });
+  });
+  canvas.addEventListener('webglcontextrestored', () => {
+    console.info('[renderer] WebGL context restored', { webglContextLosses });
   });
   window.addEventListener('beforeunload', () => {
     app.renderer.off('postrender', advancePixelPicking);
@@ -545,6 +730,9 @@ function initializeDesktopInteraction(initialState: Awaited<ReturnType<NonNullab
     pixelPicker = undefined;
   }, { once: true });
   const applyReadyState = (state: Awaited<ReturnType<NonNullable<typeof desktopShell>['ready']>>) => {
+    dragGesture.setHoldDelayMs(state.interaction.dragHoldDelayMs);
+    document.body.dataset.dragHoldDelayMs = state.interaction.dragHoldDelayMs.toString();
+    document.body.dataset.dragWindowApi = state.interaction.dragWindowApi;
     updateDesktopBounds(state.bounds);
     updatePointerPresentation(state.pointerPresentation ?? {
       passthrough: state.mousePassthrough,
@@ -568,9 +756,10 @@ function handleDesktopCursor(point: { x: number; y: number }): void {
     x: (point.x - (desktopBounds.x + desktopBounds.width / 2)) / (desktopBounds.width / 2),
     y: -(point.y - (desktopBounds.y + desktopBounds.height / 2)) / (desktopBounds.height / 2),
   });
-  if (dragInteraction) return;
+  if (dragGesture.hasGesture) return;
   const inside = localX >= 0 && localY >= 0 && localX < desktopBounds.width && localY < desktopBounds.height;
   if (!inside) {
+    if (contextMenuHost.isOpen) return;
     pixelPicker?.invalidate();
     pixelSelection = undefined;
     pixelCursorPoint = undefined;
@@ -578,6 +767,11 @@ function handleDesktopCursor(point: { x: number; y: number }): void {
     document.body.dataset.pixelSample = 'outside';
     document.body.dataset.pixelSelection = 'outside';
     updatePointerPresentation({ passthrough: true, cursor: 'default' });
+    return;
+  }
+  if (contextMenuHost.isOpen) {
+    const cursor = contextMenuHost.containsClientPoint(localX, localY) ? 'pointer' : 'default';
+    updatePointerPresentation({ passthrough: false, cursor });
     return;
   }
   pixelCursorPoint = { x: localX, y: localY };
@@ -589,67 +783,30 @@ function beginAvatarDrag(event: PointerEvent): void {
   if (!desktopShell || !model || event.button !== 0) return;
   const hitArea = selectedHitArea(event.clientX, event.clientY);
   if (!hitArea) return;
+  if (!dragGesture.begin(event.pointerId, hitArea, { x: event.screenX, y: event.screenY })) return;
   event.preventDefault();
   canvas.setPointerCapture(event.pointerId);
-  const interaction = {
-    pointerId: event.pointerId,
-    hitArea,
-    start: { x: event.screenX, y: event.screenY },
-    latest: { x: event.screenX, y: event.screenY },
-    ready: false,
-    moved: false,
-  };
-  dragInteraction = interaction;
   pixelPicker?.invalidate();
-  document.body.dataset.dragState = 'pressed';
-  updatePointerPresentation({ passthrough: false, cursor: 'move' });
-  void desktopShell.beginDrag(interaction.start).then(() => {
-    if (dragInteraction !== interaction) return;
-    interaction.ready = true;
-    if (interaction.moved) desktopShell.dragTo(interaction.latest);
-  }).catch(error => {
-    if (dragInteraction !== interaction) return;
-    dragInteraction = undefined;
-    if (canvas.hasPointerCapture(interaction.pointerId)) canvas.releasePointerCapture(interaction.pointerId);
-    document.body.dataset.dragState = 'failed';
-    updatePointerPresentation(selectionPresentation());
-    console.error('Avatar drag initialization failed', error);
-  });
 }
 
 function moveAvatarDrag(event: PointerEvent): void {
-  if (!desktopShell || !dragInteraction || event.pointerId !== dragInteraction.pointerId) return;
-  dragInteraction.latest = { x: event.screenX, y: event.screenY };
-  dragInteraction.moved ||= Math.hypot(
-    event.screenX - dragInteraction.start.x,
-    event.screenY - dragInteraction.start.y,
-  ) >= 5;
-  if (!dragInteraction.moved) return;
-  document.body.dataset.dragState = 'moving';
-  if (dragInteraction.ready) desktopShell.dragTo(dragInteraction.latest);
+  dragGesture.move(event.pointerId, { x: event.screenX, y: event.screenY });
 }
 
 function endAvatarDrag(event: PointerEvent): void {
-  if (!desktopShell || !dragInteraction || event.pointerId !== dragInteraction.pointerId) return;
-  const interaction = dragInteraction;
-  interaction.latest = { x: event.screenX, y: event.screenY };
-  if (interaction.moved && interaction.ready) desktopShell.dragTo(interaction.latest);
-  dragInteraction = undefined;
+  if (!dragGesture.end(
+    event.pointerId,
+    { x: event.screenX, y: event.screenY },
+    event.type === 'pointercancel',
+  )) return;
   if (canvas.hasPointerCapture(event.pointerId)) canvas.releasePointerCapture(event.pointerId);
-  document.body.dataset.dragState = interaction.moved ? 'moved' : 'clicked';
-  const presentation = selectionPresentation();
-  updatePointerPresentation(presentation, false);
-  if (!interaction.moved) {
-    document.body.dataset.lastAvatarClick = interaction.hitArea;
-    runtime?.dispatch({ type: 'user.avatar-clicked', hitArea: interaction.hitArea });
-  }
-  void desktopShell.endDrag().then(() => publishPointerPresentation(pointerPresentation ?? presentation));
 }
 
 function updateDesktopBounds(bounds: { x: number; y: number; width: number; height: number }): void {
+  const sizeChanged = desktopBounds?.width !== bounds.width || desktopBounds.height !== bounds.height;
   desktopBounds = bounds;
   document.body.dataset.windowBounds = `${bounds.x},${bounds.y},${bounds.width},${bounds.height}`;
-  fitModel();
+  if (sizeChanged) fitModel();
 }
 
 function updatePointerPresentation(presentation: PointerPresentation, publish = true): void {
@@ -686,17 +843,6 @@ function advancePixelPicking(): void {
   if (!diagnostics) return;
   document.body.dataset.pixelPendingReads = diagnostics.pendingReads.toString();
   document.body.dataset.pixelBackpressuredFrames = diagnostics.backpressuredFrames.toString();
-  const unresolvedFrames = diagnostics.frame - (diagnostics.lastResolvedFrame ?? 0);
-  if (
-    pixelCursorPoint
-    && diagnostics.watching
-    && diagnostics.pendingReads > 0
-    && unresolvedFrames >= 120
-    && diagnostics.frame - lastPixelStallLoggedFrame >= 120
-  ) {
-    lastPixelStallLoggedFrame = diagnostics.frame;
-    console.warn('[pixel-picking] stationary coverage has not resolved for 120 render frames', diagnostics);
-  }
 }
 
 function applyPixelSelection(result: PixelCoverageResult): void {
@@ -710,7 +856,7 @@ function applyPixelSelection(result: PixelCoverageResult): void {
   document.body.dataset.pixelSubmittedFrame = result.submittedFrame.toString();
   document.body.dataset.pixelResolvedFrame = result.resolvedFrame.toString();
   document.body.dataset.pixelReadbackFrames = result.latencyFrames.toString();
-  if (!dragInteraction) updatePointerPresentation(selectionPresentation());
+  if (!dragGesture.hasGesture && !contextMenuHost.isOpen) updatePointerPresentation(selectionPresentation());
 }
 
 function handlePixelSelectionError(error: Error): void {
@@ -718,7 +864,7 @@ function handlePixelSelectionError(error: Error): void {
   document.body.dataset.pixelSample = 'failed';
   document.body.dataset.pixelSelection = decision.selected ? 'covered' : 'transparent';
   document.body.dataset.pixelReadbackError = error.message;
-  if (!dragInteraction) updatePointerPresentation(selectionPresentation());
+  if (!dragGesture.hasGesture && !contextMenuHost.isOpen) updatePointerPresentation(selectionPresentation());
   console.error('Pixel coverage readback failed', error);
 }
 
@@ -731,6 +877,10 @@ function selectedHitArea(x: number, y: number): string | undefined {
 function afterRenderedFrames(count: number, callback: () => void): void {
   if (count <= 0) return callback();
   app.renderer.once('postrender', () => afterRenderedFrames(count - 1, callback));
+}
+
+function nextRenderedFrame(): Promise<void> {
+  return new Promise(resolve => app.renderer.once('postrender', () => resolve()));
 }
 
 function stopCurrentMotion(state: 'interrupted' | 'replaced'): void {

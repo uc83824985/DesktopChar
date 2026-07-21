@@ -32,6 +32,20 @@ export interface ActionCue {
   policy?: ActionPolicy;
 }
 
+export type SpeechBubbleMode = 'stream' | 'karaoke' | 'complete';
+
+export interface SpeechBubbleCue {
+  text: string;
+  atMs: number;
+  durationMs?: number;
+}
+
+export interface SpeechBubbleConfig {
+  mode: SpeechBubbleMode;
+  cues?: SpeechBubbleCue[];
+  charactersPerSecond?: number;
+}
+
 export interface PerformanceSegment {
   id: string;
   sequence: number;
@@ -39,6 +53,7 @@ export interface PerformanceSegment {
   speechText: string;
   emotion?: EmotionCue;
   actions?: ActionCue[];
+  bubble?: SpeechBubbleConfig;
 }
 
 export interface PerformancePlan {

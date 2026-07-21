@@ -52,6 +52,11 @@ export class AvatarRuntime {
     return this.snapshot;
   }
 
+  getActiveSegment(): Readonly<PerformanceSegment> | null {
+    const segment = this.snapshot.segmentId ? this.segmentById(this.snapshot.segmentId) : undefined;
+    return segment ? structuredClone(segment) : null;
+  }
+
   subscribe(listener: (snapshot: AvatarSnapshot) => void): () => void {
     this.listeners.add(listener);
     listener(this.snapshot);
@@ -164,7 +169,10 @@ export class AvatarRuntime {
       this.emitFrame();
     }
     else if (acceptedEvent.type === 'user.gaze-follow-disabled') {
-      this.layers.gaze = {};
+      // Runtime owns the rendered parameter frame. Removing the gaze layer would
+      // leave the last authored eye/head values in Cubism until another motion
+      // happened to overwrite them, so disabling gaze must author neutral values.
+      this.layers.gaze = gazeLayer(0, 0, this.gazeProfile);
       this.emitFrame();
     }
     else if (acceptedEvent.type === 'runtime.plan-completed') {

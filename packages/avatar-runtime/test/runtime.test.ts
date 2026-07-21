@@ -69,9 +69,18 @@ test('gaze follow remains Runtime-owned across plans and interrupt until explici
 
   runtime.dispatch({ type: 'user.gaze-follow-disabled' });
   assert.equal(runtime.getSnapshot().gaze.active, false);
-  assert.equal(effects.frames.at(-1)?.ParamEyeBallX, undefined);
+  assert.deepEqual(effects.frames.at(-1), {
+    ParamAngleX: 0,
+    ParamAngleY: 0,
+    ParamEyeBallX: 0,
+    ParamEyeBallY: 0,
+    ParamMouthForm: 0,
+    ParamMouthOpenY: 0,
+  });
+  const disabledFrameCount = effects.frames.length;
   runtime.dispatch({ type: 'user.look-target-changed', x: 0.8, y: -0.2 });
   assert.deepEqual(runtime.getSnapshot().gaze, { x: 0.8, y: -0.2, active: false });
+  assert.equal(effects.frames.length, disabledFrameCount);
 
   runtime.dispatch({ type: 'user.gaze-follow-enabled' });
   assert.deepEqual(runtime.getSnapshot().gaze, { x: 0.8, y: -0.2, active: true });

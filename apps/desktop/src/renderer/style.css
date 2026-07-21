@@ -3,6 +3,21 @@
 body { margin: 0; overflow: hidden; }
 main { min-height: 100vh; background: radial-gradient(circle at 70% 45%, #49437a 0, #17182f 38%, #0b0d19 76%); }
 #avatar { position: fixed; inset: 0; width: 100%; height: 100%; touch-action: none; user-select: none; }
+.speech-bubble { position: fixed; z-index: 2; top: 5%; right: 5%; width: max-content; max-width: min(320px, 72vw); padding: 13px 16px; pointer-events: none; color: #242033; background: #fffffff2; border: 1px solid #ffffff; border-radius: 18px; box-shadow: 0 10px 30px #27213c30; font-size: 15px; line-height: 1.55; overflow-wrap: anywhere; transform-origin: 85% 100%; animation: speech-bubble-in 150ms ease-out; }
+.speech-bubble[hidden] { display: none; }
+.speech-bubble::after { content: ""; position: absolute; right: 24px; bottom: -10px; width: 18px; height: 18px; background: inherit; border-right: inherit; border-bottom: inherit; transform: rotate(45deg); }
+.speech-bubble p { position: relative; z-index: 1; margin: 0; white-space: pre-wrap; }
+.speech-bubble mark { color: #171126; background: #ffdf69; border-radius: 5px; padding: 1px 2px; box-shadow: 0 0 0 2px #ffdf6940; }
+@keyframes speech-bubble-in { from { opacity: 0; transform: translateY(4px) scale(.97); } }
+.scene-context-menu { position: fixed; z-index: 1000; min-width: 210px; max-width: min(300px, calc(100vw - 16px)); padding: 7px; overflow: hidden; color: #28243a; background: #fbfafff5; border: 1px solid #ffffff; border-radius: 13px; box-shadow: 0 16px 42px #15112652; backdrop-filter: blur(18px); user-select: none; animation: scene-context-menu-in 90ms ease-out; }
+.scene-context-menu__heading { padding: 6px 10px 4px; color: #77708f; font-size: 10px; font-weight: 800; letter-spacing: .08em; }
+.scene-context-menu__separator { height: 1px; margin: 6px 5px; background: #3b315f1f; }
+button.scene-context-menu__item { display: grid; grid-template-columns: 18px minmax(0, 1fr); width: 100%; padding: 8px 10px; border-radius: 8px; color: inherit; background: transparent; font-size: 13px; font-weight: 500; line-height: 1.3; text-align: left; }
+button.scene-context-menu__item:hover:not(:disabled), button.scene-context-menu__item:focus-visible { transform: none; color: #21183f; background: #ded7fa; outline: none; }
+button.scene-context-menu__item:disabled { opacity: .42; cursor: default; }
+button.scene-context-menu__item[data-danger="true"] { color: #a42d47; }
+.scene-context-menu__marker { color: #7155d9; font-weight: 900; }
+@keyframes scene-context-menu-in { from { opacity: 0; transform: translateY(-2px) scale(.985); } }
 .panel { position: fixed; z-index: 1; left: clamp(24px, 7vw, 110px); top: 50%; width: min(410px, 42vw); transform: translateY(-50%); padding: 32px; border: 1px solid #ffffff1f; border-radius: 24px; background: #111426ba; backdrop-filter: blur(18px); box-shadow: 0 24px 80px #0007; }
 .eyebrow { color: #9e9ae8; font-size: 11px; letter-spacing: .17em; }
 h1 { margin: 10px 0; font-size: clamp(40px, 6vw, 72px); line-height: .95; }

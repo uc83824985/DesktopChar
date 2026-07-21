@@ -50,6 +50,7 @@ export class DefaultAvatarPlanner implements AvatarPlanner {
       const actions = segment.actions
         ?.filter(cue => capabilities.actions.includes(cue.action))
         .slice(0, policy.maxActionsPerSegment);
+      validateSpeechBubble(segment);
 
       const normalized: PerformanceSegment = {
         id: segment.id,
@@ -59,9 +60,29 @@ export class DefaultAvatarPlanner implements AvatarPlanner {
       };
       if (emotion) normalized.emotion = emotion;
       if (actions?.length) normalized.actions = actions;
+      if (segment.bubble) normalized.bubble = structuredClone(segment.bubble);
       return normalized;
     });
 
     return { ...plan, segments: segments.sort((a, b) => a.sequence - b.sequence) };
   }
+}
+
+function validateSpeechBubble(segment: PerformanceSegment): void {
+  const bubble = segment.bubble;
+  if (!bubble) return;
+  if (!['stream', 'karaoke', 'complete'].includes(bubble.mode)) throw new Error(`Invalid speech bubble mode: ${bubble.mode}`);
+  if (bubble.charactersPerSecond !== undefined && (!Number.isFinite(bubble.charactersPerSecond) || bubble.charactersPerSecond <= 0)) {
+    throw new Error('Speech bubble charactersPerSecond must be positive');
+  }
+  if (!bubble.cues) return;
+  let previousAtMs = -1;
+  let combined = '';
+  for (const cue of bubble.cues) {
+    if (!cue.text || !Number.isFinite(cue.atMs) || cue.atMs < previousAtMs || cue.atMs < 0) throw new Error('Invalid speech bubble cue');
+    if (cue.durationMs !== undefined && (!Number.isFinite(cue.durationMs) || cue.durationMs <= 0)) throw new Error('Invalid speech bubble cue duration');
+    previousAtMs = cue.atMs;
+    combined += cue.text;
+  }
+  if (combined !== segment.displayText) throw new Error('Speech bubble cues must concatenate to displayText');
 }

@@ -19,12 +19,85 @@ try {
   await page.locator('body[data-desktop-shell="ready"]').waitFor({ timeout: 2_000 });
   await page.locator('body[data-gaze-follow="enabled"]').waitFor({ timeout: 2_000 });
   await page.locator('body[data-pixel-selection]').waitFor({ timeout: 2_000 });
+  await page.locator('body[data-drag-hold-delay-ms="240"]').waitFor({ timeout: 2_000 });
+  await page.locator('body[data-drag-window-api][data-webgl-context-losses="0"]').waitFor({ timeout: 2_000 });
 
   const initial = await page.evaluate(() => window.desktopChar?.getWindowState());
   if (!initial || !initial.alwaysOnTop || initial.bounds.width > 500 || initial.bounds.height > 740) {
     throw new Error(`Unexpected floating window state: ${JSON.stringify(initial)}`);
   }
   if (!initial.mousePassthrough) throw new Error('Floating window must start in desktop passthrough mode');
+  if (initial.interaction?.dragHoldDelayMs !== 240
+    || !['native-set-window-pos', 'setBounds'].includes(initial.interaction?.dragWindowApi)) {
+    throw new Error(`Unexpected drag interaction config: ${JSON.stringify(initial.interaction)}`);
+  }
+
+  const bubble = await page.evaluate(() => {
+    document.querySelector('#speak')?.click();
+    return { mode: document.body.dataset.speechBubble, text: document.querySelector('#speech-bubble')?.textContent?.trim() };
+  });
+  if (bubble.mode !== 'complete' || bubble.text !== '运行时演示') {
+    throw new Error(`Speech bubble presenter did not render Runtime text: ${JSON.stringify(bubble)}`);
+  }
+  await page.evaluate(() => document.querySelector('#reset')?.click());
+  await page.locator('body[data-speech-bubble="hidden"]').waitFor({ timeout: 2_000 });
+
+  await page.locator('#avatar').focus();
+  const keyboardMenuOpened = await page.evaluate(() => {
+    const canvas = document.querySelector('#avatar');
+    canvas?.dispatchEvent(new KeyboardEvent('keydown', { key: 'F10', shiftKey: true, bubbles: true }));
+    return document.body.dataset.contextMenu;
+  });
+  if (keyboardMenuOpened !== 'open') throw new Error(`Keyboard context menu did not open: ${keyboardMenuOpened}`);
+  await page.locator('body[data-context-menu="open"] .scene-context-menu[data-target-id="avatar"]').waitFor({ timeout: 2_000 });
+  const menu = await page.evaluate(() => ({
+    headings: [...document.querySelectorAll('.scene-context-menu__heading')].map(node => node.textContent),
+    gazeChecked: document.querySelector('[data-item-id="gaze-follow"]')?.getAttribute('aria-checked'),
+    bubbleItems: [...document.querySelectorAll('[data-item-id="complete"], [data-item-id="stream"], [data-item-id="karaoke"]')].map(node => node.textContent?.trim()),
+  }));
+  if (menu.gazeChecked !== 'true' || menu.bubbleItems.length !== 3
+    || !menu.headings.includes('角色设置') || !menu.headings.includes('桌面窗口')) {
+    throw new Error(`Immediate context-menu registrations are incomplete: ${JSON.stringify(menu)}`);
+  }
+  await page.locator('[data-item-id="gaze-follow"]').click();
+  await page.locator('body[data-context-menu="open"][data-gaze-follow="disabled"] [data-item-id="gaze-follow"][aria-checked="false"]').waitFor({ timeout: 2_000 });
+  await page.locator('[data-item-id="gaze-follow"]').click();
+  await page.locator('body[data-context-menu="open"][data-gaze-follow="enabled"] [data-item-id="gaze-follow"][aria-checked="true"]').waitFor({ timeout: 2_000 });
+  await page.locator('[data-item-id="stream"]').click();
+  await page.locator('body[data-context-menu="closed"][data-speech-bubble="stream"]').waitFor({ timeout: 2_000 });
+  const streamDecoration = await page.evaluate(() => getComputedStyle(
+    document.querySelector('#speech-bubble p'),
+    '::after',
+  ).content);
+  if (!['none', 'normal'].includes(streamDecoration)) {
+    throw new Error(`Stream bubble must not render a synthetic input caret: ${streamDecoration}`);
+  }
+  await page.waitForTimeout(180);
+  const earlyStreamText = await page.locator('#speech-bubble').textContent();
+  await page.waitForTimeout(320);
+  const laterStreamText = await page.locator('#speech-bubble').textContent();
+  if (!earlyStreamText || !laterStreamText || laterStreamText.length <= earlyStreamText.length) {
+    throw new Error(`Stream bubble did not advance with playback: ${JSON.stringify({ earlyStreamText, laterStreamText })}`);
+  }
+  await page.evaluate(() => document.querySelector('#avatar')?.dispatchEvent(
+    new KeyboardEvent('keydown', { key: 'ContextMenu', bubbles: true }),
+  ));
+  await page.locator('body[data-context-menu="open"] [data-item-id="complete"][aria-disabled="true"]').waitFor({ timeout: 2_000 });
+  await page.locator('body[data-runtime-state="idle"] [data-item-id="complete"][aria-disabled="false"]').waitFor({ timeout: 4_000 });
+  await page.locator('[data-item-id="karaoke"]').click();
+  await page.locator('body[data-speech-bubble="karaoke"] #speech-bubble-active').waitFor({ timeout: 2_000 });
+  const karaokeActive = await page.locator('#speech-bubble-active').textContent();
+  if (karaokeActive !== 'KTV 高亮') throw new Error(`Karaoke bubble did not expose its timed cue: ${karaokeActive}`);
+  await page.evaluate(() => document.querySelector('#avatar')?.dispatchEvent(
+    new KeyboardEvent('keydown', { key: 'ContextMenu', bubbles: true }),
+  ));
+  await page.locator('body[data-context-menu="open"] [data-item-id="gaze-follow"]').click();
+  await page.locator('body[data-context-menu="open"][data-gaze-follow="disabled"] [data-item-id="gaze-follow"][aria-checked="false"]').waitFor({ timeout: 2_000 });
+  await page.locator('[data-item-id="gaze-follow"]').click();
+  await page.locator('body[data-context-menu="open"][data-gaze-follow="enabled"] [data-item-id="gaze-follow"][aria-checked="true"]').waitFor({ timeout: 2_000 });
+  await page.keyboard.press('Escape');
+  await page.evaluate(() => document.querySelector('#reset')?.click());
+  await page.locator('body[data-speech-bubble="hidden"]').waitFor({ timeout: 2_000 });
 
   await page.evaluate(async () => {
     const api = window.desktopChar;

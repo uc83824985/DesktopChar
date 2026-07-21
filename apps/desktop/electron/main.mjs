@@ -1,21 +1,26 @@
-import { app, BrowserWindow, ipcMain, Menu, net, protocol, screen } from 'electron';
+import { app, BrowserWindow, ipcMain, net, protocol, screen } from 'electron';
 import { Client } from '@modelcontextprotocol/sdk/client/index.js';
 import { StreamableHTTPClientTransport } from '@modelcontextprotocol/sdk/client/streamableHttp.js';
 import path from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 import {
   DEFAULT_AVATAR_WINDOW_SIZE,
+  applyDragAvatarBounds,
+  describePointerPresentationChange,
   dragAvatarBounds,
   initialAvatarBounds,
   isScreenPoint,
+  parseDragHoldDelayMs,
   parseLoopbackDevUrl,
 } from './window-policy.mjs';
 import { createAgentHttpServer, parseAgentPort } from './agent-http-server.mjs';
 import { createNativeCursorRefresh } from './cursor-refresh.mjs';
+import { createNativeWindowPosition } from './native-window-position.mjs';
 
 const directory = path.dirname(fileURLToPath(import.meta.url));
 const rendererRoot = path.resolve(directory, '../dist');
 const devUrl = parseLoopbackDevUrl(process.env.DESKTOP_CHAR_DEV_URL);
+const dragHoldDelayMs = parseDragHoldDelayMs(process.env.DESKTOP_CHAR_DRAG_HOLD_DELAY_MS);
 const rawConsoleLog = console.log.bind(console);
 const rawConsoleError = console.error.bind(console);
 const channels = {
@@ -27,7 +32,7 @@ const channels = {
   getState: 'avatar-window:get-state',
   ready: 'avatar-window:ready',
   setPointerPresentation: 'avatar-window:set-pointer-presentation',
-  showContextMenu: 'avatar-window:show-context-menu',
+  windowCommand: 'avatar-window:command',
   agentCommand: 'agent-http:command',
   agentState: 'agent-http:state',
   mcpListTools: 'tts-mcp:list-tools',
@@ -59,12 +64,22 @@ protocol.registerSchemesAsPrivileged([{
 }]);
 
 let avatarWindow = null;
+let avatarBounds = null;
 let cursorTimer;
 let cursorRefreshTimer;
 let dragState = null;
 let pointerPresentation = { passthrough: true, cursor: 'default' };
+let pointerPresentationApplied = false;
 let mcpSession = null;
 const nativeCursorRefresh = createNativeCursorRefresh();
+const nativeWindowPosition = createNativeWindowPosition();
+const requestedDragWindowApi = process.env.DESKTOP_CHAR_DRAG_WINDOW_API ?? 'auto';
+if (!['auto', 'native', 'setBounds'].includes(requestedDragWindowApi)) {
+  throw new TypeError('DESKTOP_CHAR_DRAG_WINDOW_API must be auto, native, or setBounds');
+}
+const dragWindowApi = requestedDragWindowApi !== 'setBounds' && nativeWindowPosition.available
+  ? 'native-set-window-pos'
+  : 'setBounds';
 const ttsMode = process.env.DESKTOP_CHAR_TTS_MODE ?? 'mock';
 const ttsMcpUrl = process.env.DESKTOP_CHAR_TTS_MCP_URL ?? 'http://127.0.0.1:8766/mcp';
 const agentServer = createAgentHttpServer({
@@ -118,6 +133,7 @@ function registerRendererProtocol() {
 function createAvatarWindow() {
   const primary = screen.getPrimaryDisplay();
   const bounds = initialAvatarBounds(primary.workArea, DEFAULT_AVATAR_WINDOW_SIZE);
+  avatarBounds = { ...bounds };
   avatarWindow = new BrowserWindow({
     ...bounds,
     title: 'DesktopChar',
@@ -144,7 +160,7 @@ function createAvatarWindow() {
   avatarWindow.webContents.setWindowOpenHandler(() => ({ action: 'deny' }));
   avatarWindow.webContents.on('will-navigate', event => event.preventDefault());
   avatarWindow.webContents.on('console-message', (_event, level, message, line, sourceId) => {
-    safeLog('[renderer-console]', { level, message, line, sourceId });
+    if (level >= 3) safeError('[renderer-console-error]', { message, line, sourceId });
   });
   avatarWindow.webContents.on('did-fail-load', (_event, errorCode, errorDescription, validatedURL) => {
     safeError('[renderer-load-failed]', { errorCode, errorDescription, validatedURL });
@@ -178,20 +194,50 @@ function registerIpc() {
   ipcMain.handle(channels.beginDrag, (event, point) => {
     requireAvatarSender(event);
     if (!isScreenPoint(point)) throw new TypeError('Invalid drag start point');
-    applyPointerPresentation({ passthrough: false, cursor: 'move' });
-    dragState = { startPointer: point, startBounds: avatarWindow.getBounds() };
+    // Pointer capture and the renderer CSS cursor already own the drag cursor.
+    // A delayed native WM_SETCURSOR refresh here can race the first setBounds.
+    applyPointerPresentation({ passthrough: false, cursor: 'move' }, { refreshCursor: false });
+    avatarWindow.webContents.invalidate();
+    dragState = {
+      startPointer: point,
+      startBounds: { ...avatarBounds },
+      nativeWindowHandle: nativeWindowHandleAddress(avatarWindow.getNativeWindowHandle()),
+    };
     return windowState();
   });
   ipcMain.on(channels.dragTo, (event, point) => {
     requireAvatarSender(event);
     if (!dragState || !isScreenPoint(point)) return;
     const display = screen.getDisplayNearestPoint(point);
-    avatarWindow.setBounds(dragAvatarBounds(
+    const nextBounds = dragAvatarBounds(
       dragState.startBounds,
       dragState.startPointer,
       point,
       display.workArea,
-    ));
+    );
+    const currentBounds = avatarWindow.getBounds();
+    if (currentBounds.x === nextBounds.x && currentBounds.y === nextBounds.y) return;
+    const previousAvatarBounds = avatarBounds;
+    avatarBounds = { ...nextBounds };
+    let nativeResult;
+    let submitted;
+    let nativePoint;
+    if (dragWindowApi === 'native-set-window-pos') {
+      nativePoint = screen.dipToScreenPoint({ x: nextBounds.x, y: nextBounds.y });
+      nativeResult = nativeWindowPosition.move(dragState.nativeWindowHandle, nativePoint);
+      submitted = nativeResult.moved;
+      if (!submitted) {
+        safeError('[native-window-position] failed; falling back to setBounds', {
+          nativePoint, ...nativeResult,
+        });
+        submitted = applyDragAvatarBounds(avatarWindow, nextBounds);
+      }
+    }
+    else submitted = applyDragAvatarBounds(avatarWindow, nextBounds);
+    if (!submitted) {
+      avatarBounds = previousAvatarBounds;
+      return;
+    }
   });
   ipcMain.handle(channels.endDrag, event => {
     requireAvatarSender(event);
@@ -202,13 +248,10 @@ function registerIpc() {
     requireAvatarSender(event);
     if (isPointerPresentation(presentation) && !dragState) applyPointerPresentation(presentation);
   });
-  ipcMain.on(channels.showContextMenu, event => {
+  ipcMain.on(channels.windowCommand, (event, command) => {
     requireAvatarSender(event);
-    Menu.buildFromTemplate([
-      { label: '恢复默认位置', click: restoreDefaultPosition },
-      { type: 'separator' },
-      { label: '退出 DesktopChar', click: () => app.quit() },
-    ]).popup({ window: avatarWindow });
+    if (command === 'restore-default-position') restoreDefaultPosition();
+    else if (command === 'quit') app.quit();
   });
   ipcMain.on(channels.agentState, (event, state) => {
     requireAvatarSender(event);
@@ -252,13 +295,22 @@ async function closeMcpSession() {
   await session.client.close();
 }
 
-function applyPointerPresentation(presentation) {
-  const enteredInteractive = pointerPresentation.passthrough && !presentation.passthrough;
-  const changed = pointerPresentation.passthrough !== presentation.passthrough
-    || pointerPresentation.cursor !== presentation.cursor;
+function applyPointerPresentation(presentation, options = {}) {
+  const change = describePointerPresentationChange(
+    pointerPresentation,
+    presentation,
+    pointerPresentationApplied,
+  );
   pointerPresentation = { ...presentation };
-  avatarWindow?.setIgnoreMouseEvents(presentation.passthrough, { forward: presentation.passthrough });
-  if (changed && process.platform === 'win32') {
+  pointerPresentationApplied = true;
+  if (change.passthroughChanged) {
+    avatarWindow?.setIgnoreMouseEvents(presentation.passthrough, { forward: presentation.passthrough });
+  }
+  if (options.refreshCursor === false && cursorRefreshTimer) {
+    clearTimeout(cursorRefreshTimer);
+    cursorRefreshTimer = undefined;
+  }
+  if (change.refreshCursor && options.refreshCursor !== false && process.platform === 'win32') {
     if (cursorRefreshTimer) clearTimeout(cursorRefreshTimer);
     cursorRefreshTimer = setTimeout(() => {
       cursorRefreshTimer = undefined;
@@ -270,14 +322,11 @@ function applyPointerPresentation(presentation) {
       const result = nativeCursorRefresh.refresh({
         cursor: current.cursor,
         windowHandle,
-        refreshFrame: enteredInteractive && !current.passthrough,
-        nudgeCursor: enteredInteractive && !current.passthrough && !focused,
+        refreshFrame: change.enteredInteractive && !current.passthrough,
+        nudgeCursor: change.enteredInteractive && !current.passthrough && !focused,
       });
-      safeLog('[cursor-refresh]', {
-        presentation: current,
-        available: nativeCursorRefresh.available,
-        focused,
-        ...result,
+      if (!result.refreshed) safeError('[cursor-refresh] failed', {
+        presentation: current, available: nativeCursorRefresh.available, focused, ...result,
       });
     }, 16);
   }
@@ -298,23 +347,25 @@ function isPointerPresentation(value) {
 function restoreDefaultPosition() {
   if (!avatarWindow) return;
   const display = screen.getDisplayNearestPoint(screen.getCursorScreenPoint());
-  const { width, height } = avatarWindow.getBounds();
-  avatarWindow.setBounds(initialAvatarBounds(display.workArea, { width, height }));
+  const { width, height } = avatarBounds;
+  avatarBounds = initialAvatarBounds(display.workArea, { width, height });
+  avatarWindow.setBounds(avatarBounds);
   publishBounds();
 }
 
 function publishBounds() {
   if (!avatarWindow || avatarWindow.isDestroyed()) return;
-  avatarWindow.webContents.send(channels.boundsChanged, avatarWindow.getBounds());
+  avatarWindow.webContents.send(channels.boundsChanged, { ...avatarBounds });
 }
 
 function windowState() {
   if (!avatarWindow) throw new Error('Avatar window is not available');
   return {
-    bounds: avatarWindow.getBounds(),
+    bounds: { ...avatarBounds },
     mousePassthrough: pointerPresentation.passthrough,
     pointerPresentation: { ...pointerPresentation },
     alwaysOnTop: avatarWindow.isAlwaysOnTop(),
+    interaction: { dragHoldDelayMs, dragWindowApi },
     tts: {
       mode: ttsMode,
       mcpUrl: ttsMcpUrl,

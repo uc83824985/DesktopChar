@@ -181,6 +181,19 @@ Invoke-RestMethod `
 
 成功投递返回 HTTP 202 和 `planId`。角色非 `idle` 时返回 HTTP 409；Agent 应等待 `/v1/state` 回到 `idle`，或明确发起中断，不能盲目重试覆盖当前表演。
 
+每个 segment 可选声明 `bubble`，控制 `displayText` 的应用层聊天冒泡：
+
+```json
+{
+  "bubble": {
+    "mode": "stream",
+    "charactersPerSecond": 10
+  }
+}
+```
+
+支持 `complete`、`stream` 和 `karaoke`；精确分块/高亮可提供与 `displayText` 完全拼接一致的 `cues`。当前 HTTP 仍提交完整计划，`stream` 是播放时钟驱动的渐进显示，不是网络 token 流。完整契约见 [角色语音聊天冒泡](speech-bubble.md)。
+
 ```powershell
 Invoke-RestMethod -Method Post http://127.0.0.1:17373/v1/interrupt
 ```

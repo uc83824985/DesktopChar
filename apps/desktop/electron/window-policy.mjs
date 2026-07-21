@@ -1,5 +1,6 @@
 export const DEFAULT_AVATAR_WINDOW_SIZE = Object.freeze({ width: 460, height: 700 });
 export const DEFAULT_AVATAR_WINDOW_MARGIN = 24;
+export const DEFAULT_DRAG_HOLD_DELAY_MS = 240;
 
 export function initialAvatarBounds(workArea, size = DEFAULT_AVATAR_WINDOW_SIZE, margin = DEFAULT_AVATAR_WINDOW_MARGIN) {
   const fitted = fitSizeToWorkArea(size, workArea, margin);
@@ -19,6 +20,18 @@ export function dragAvatarBounds(startBounds, startPointer, currentPointer, work
     x: Math.round(startBounds.x + currentPointer.x - startPointer.x),
     y: Math.round(startBounds.y + currentPointer.y - startPointer.y),
   }, workArea);
+}
+
+/** Moves a fixed-size transparent window through its stable bounds path. */
+export function applyDragAvatarBounds(target, bounds) {
+  assertRectangle(bounds, 'bounds');
+  if (!target || typeof target.getBounds !== 'function' || typeof target.setBounds !== 'function') {
+    throw new TypeError('Drag target must expose getBounds and setBounds');
+  }
+  const current = target.getBounds();
+  if (current.x === bounds.x && current.y === bounds.y) return false;
+  target.setBounds(bounds, false);
+  return true;
 }
 
 export function clampBoundsToWorkArea(bounds, workArea) {
@@ -49,6 +62,27 @@ export function parseLoopbackDevUrl(value) {
     throw new TypeError('DESKTOP_CHAR_DEV_URL must be an HTTP loopback URL');
   }
   return url.toString();
+}
+
+export function parseDragHoldDelayMs(value) {
+  if (value === undefined || value === '') return DEFAULT_DRAG_HOLD_DELAY_MS;
+  const delayMs = Number(value);
+  if (!Number.isInteger(delayMs) || delayMs < 0 || delayMs >= 1_000) {
+    throw new TypeError('DESKTOP_CHAR_DRAG_HOLD_DELAY_MS must be an integer between 0 and 999');
+  }
+  return delayMs;
+}
+
+/** Separates a cursor-only update from a native mouse-passthrough mutation. */
+export function describePointerPresentationChange(previous, next, previouslyApplied) {
+  const passthroughChanged = !previouslyApplied || previous.passthrough !== next.passthrough;
+  const cursorChanged = previous.cursor !== next.cursor;
+  return {
+    passthroughChanged,
+    cursorChanged,
+    enteredInteractive: previouslyApplied && previous.passthrough && !next.passthrough,
+    refreshCursor: previouslyApplied && (passthroughChanged || cursorChanged),
+  };
 }
 
 function fitSizeToWorkArea(size, workArea, margin) {

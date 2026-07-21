@@ -15,6 +15,7 @@
     "test:native": "node scripts/run-koffi-electron-test.mjs",
     "test:desktop-smoke": "npm run build && node scripts/desktop-smoke.mjs",
     "diagnose:tts": "node --experimental-strip-types scripts/tts-diagnostic.ts",
+    "diagnose:drag": "npm run build && node scripts/drag-compositor-diagnostic.mjs",
     "test": "node --experimental-strip-types --test packages/*/test/*.test.ts && npm run test:desktop",
     "typecheck": "tsc --noEmit",
     "check": "npm run typecheck && npm test && npm run test:native && npm run build"

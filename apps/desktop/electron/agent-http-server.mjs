@@ -17,6 +17,11 @@ export function createAgentHttpServer(options) {
           protocolVersion: 1,
           input: ['performance-plan', 'interrupt'],
           feedback: ['runtime-snapshot'],
+          presentation: {
+            speechBubbleModes: ['complete', 'stream', 'karaoke'],
+            supportsAuthoredCues: true,
+            textInput: 'complete-plan',
+          },
           avatar: currentState.snapshot?.capabilities ?? null,
           tts: options.ttsContext ?? { mode: 'mock' },
         });
@@ -75,10 +80,33 @@ function validatePerformancePlan(value) {
     if (typeof segment.displayText !== 'string' || typeof segment.speechText !== 'string' || !segment.speechText.trim()) throw bad('invalid-segment', `segments[${index}] requires displayText and non-empty speechText`);
     if (segment.emotion !== undefined) validateEmotion(segment.emotion, index);
     if (segment.actions !== undefined) validateActions(segment.actions, index);
+    if (segment.bubble !== undefined) validateBubble(segment.bubble, segment.displayText, index);
     ids.add(segment.id); sequences.add(segment.sequence);
     return structuredClone(segment);
   });
   return { id: value.id, segments };
+}
+
+function validateBubble(value, displayText, segmentIndex) {
+  const modes = new Set(['stream', 'karaoke', 'complete']);
+  if (!isRecord(value) || !modes.has(value.mode)) throw bad('invalid-segment', `segments[${segmentIndex}].bubble.mode is invalid`);
+  if (value.charactersPerSecond !== undefined && (!Number.isFinite(value.charactersPerSecond) || value.charactersPerSecond <= 0)) {
+    throw bad('invalid-segment', `segments[${segmentIndex}].bubble.charactersPerSecond must be positive`);
+  }
+  if (value.cues === undefined) return;
+  if (!Array.isArray(value.cues)) throw bad('invalid-segment', `segments[${segmentIndex}].bubble.cues must be an array`);
+  let previousAtMs = -1;
+  let combined = '';
+  value.cues.forEach((cue, cueIndex) => {
+    if (!isRecord(cue) || typeof cue.text !== 'string' || !cue.text
+      || !Number.isFinite(cue.atMs) || cue.atMs < 0 || cue.atMs < previousAtMs
+      || (cue.durationMs !== undefined && (!Number.isFinite(cue.durationMs) || cue.durationMs <= 0))) {
+      throw bad('invalid-segment', `segments[${segmentIndex}].bubble.cues[${cueIndex}] is invalid`);
+    }
+    previousAtMs = cue.atMs;
+    combined += cue.text;
+  });
+  if (combined !== displayText) throw bad('invalid-segment', `segments[${segmentIndex}].bubble.cues must concatenate to displayText`);
 }
 
 function validateEmotion(value, segmentIndex) {

@@ -15,7 +15,13 @@ export interface DesktopWindowState {
   mousePassthrough: boolean;
   pointerPresentation: PointerPresentation;
   alwaysOnTop: boolean;
+  interaction: DesktopInteractionConfig;
   tts: DesktopTtsConfig;
+}
+
+export interface DesktopInteractionConfig {
+  dragHoldDelayMs: number;
+  dragWindowApi: 'native-set-window-pos' | 'setBounds';
 }
 
 export type DesktopCursorIntent = 'default' | 'pointer' | 'move';
@@ -33,7 +39,7 @@ export interface DesktopCharApi {
   dragTo(point: DesktopPoint): void;
   endDrag(): Promise<DesktopWindowState>;
   setPointerPresentation(presentation: PointerPresentation): void;
-  showContextMenu(): void;
+  runWindowCommand(command: DesktopWindowCommand): void;
   publishAgentState(state: AgentRuntimeState): void;
   listTtsMcpTools(): Promise<McpToolDescriptor[]>;
   callTtsMcpTool(name: string, args: Record<string, unknown>, options?: { timeoutMs?: number }): Promise<McpCallToolResult>;
@@ -41,6 +47,8 @@ export interface DesktopCharApi {
   onBoundsChanged(callback: (bounds: DesktopRectangle) => void): () => void;
   onCursorPoint(callback: (point: DesktopPoint) => void): () => void;
 }
+
+export type DesktopWindowCommand = 'restore-default-position' | 'quit';
 
 export type AgentCommand =
   | { type: 'performance.submit'; plan: import('../../../../packages/contracts/src/index.ts').PerformancePlan }
