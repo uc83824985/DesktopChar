@@ -90,7 +90,7 @@ PCM Player 以 Web Audio 输出时间线作为统一基准：
 
 流式模式只逐步追加实际文本，不绘制输入框式光标或紫色 caret；它表达的是角色已经开始输出的内容，不暗示用户仍可在冒泡中输入。
 
-本地测试语音由独立 `local-tts-mcp` 服务通过真实 Streamable HTTP MCP 返回 PCM URL，再由另一个 HTTP 请求分块送入与远端 MCP 相同的 `McpTtsAdapter` 和 `WebAudioPcmStreamPlayer`。声音、`playback.level`、嘴型和冒泡均由实际输出时间线推进；参考服务默认不附带时长和文本 cue，因此流式冒泡入口同时验证未知总时长时的字符速率降级。
+本地测试语音由独立 `local-tts-mcp` 服务通过真实 Streamable HTTP MCP 返回 PCM URL，再由另一个 HTTP 请求分块送入与远端 MCP 相同的 `McpTtsAdapter` 和 `WebAudioPcmStreamPlayer`。声音、`playback.level`、嘴型和冒泡均由实际输出时间线推进；参考服务现在返回 sample-aligned `duration_ms` 与 `text_cues`，用于前台精确验证提示音、文本和口型时点。未知总时长及无 cue 的字符速率降级继续由 Adapter/Runtime 单元测试覆盖。
 
 完整模式已纳入 Electron smoke：提交“本地语音测试”后先验证 TTS/缓冲期间冒泡隐藏，再验证 `playback.started` 后显示；播放完成后验证冒泡保持到关闭延迟结束。流式和 KTV 同时覆盖播放期推进。
 
