@@ -1,4 +1,4 @@
-import type { AvatarAction, Emotion, GazeProfile } from '../../contracts/src/index.ts';
+import type { AvatarAction, Emotion, GazeProfile, LipSyncProfile } from '../../contracts/src/index.ts';
 
 export interface CharacterConfig {
   id: string;
@@ -9,6 +9,7 @@ export interface CharacterConfig {
   expressionCooldownMs: number;
   idleReturnDelayMs: number;
   gazeProfile: GazeProfile;
+  lipSyncProfile: LipSyncProfile;
 }
 
 export const MAO_CHARACTER_CONFIG: CharacterConfig = {
@@ -25,6 +26,7 @@ export const MAO_CHARACTER_CONFIG: CharacterConfig = {
     eyeX: { negative: { limit: -1, exponent: 0.9 }, positive: { limit: 1, exponent: 0.9 }, deadZone: 0.01 },
     eyeY: { negative: { limit: -1, exponent: 0.9 }, positive: { limit: 1, exponent: 0.85 }, deadZone: 0.01 },
   },
+  lipSyncProfile: { gain: 2.5 },
 };
 
 export interface TtsConfig {
@@ -33,9 +35,9 @@ export interface TtsConfig {
     host: '127.0.0.1' | 'localhost' | '::1';
     port: number;
     delayMs: number;
+    defaultRate: number;
     durationPerCharacterMs: number;
     minimumDurationMs: number;
-    amplitudeIntervalMs: number;
     sampleRateHz: number;
     channels: number;
   };
@@ -52,7 +54,7 @@ export interface TtsConfig {
 
 export const DEFAULT_TTS_CONFIG: TtsConfig = {
   mode: 'local',
-  local: { host: '127.0.0.1', port: 8766, delayMs: 15, durationPerCharacterMs: 90, minimumDurationMs: 500, amplitudeIntervalMs: 50, sampleRateHz: 24_000, channels: 1 },
+  local: { host: '127.0.0.1', port: 8766, delayMs: 15, defaultRate: 1, durationPerCharacterMs: 232, minimumDurationMs: 500, sampleRateHz: 24_000, channels: 1 },
   mcp: { toolName: 'tts_open_stream', cancelToolName: 'tts_cancel_synthesis', timeoutMs: 30_000, requestIdArgument: 'request_id', textArgument: 'text', format: 'pcm_s16le' },
 };
 
@@ -74,9 +76,9 @@ export function loadTtsConfig(values: Record<string, string | undefined>): TtsCo
       host: loopbackHost(values.DESKTOP_CHAR_TTS_LOCAL_MCP_HOST),
       port: environmentPort(values.DESKTOP_CHAR_TTS_LOCAL_MCP_PORT, DEFAULT_TTS_CONFIG.local.port),
       delayMs: environmentNumber(values.DESKTOP_CHAR_TTS_LOCAL_DELAY_MS, DEFAULT_TTS_CONFIG.local.delayMs, 'DESKTOP_CHAR_TTS_LOCAL_DELAY_MS', true),
+      defaultRate: environmentRate(values.DESKTOP_CHAR_TTS_LOCAL_RATE, DEFAULT_TTS_CONFIG.local.defaultRate),
       durationPerCharacterMs: environmentNumber(values.DESKTOP_CHAR_TTS_LOCAL_CHAR_MS, DEFAULT_TTS_CONFIG.local.durationPerCharacterMs, 'DESKTOP_CHAR_TTS_LOCAL_CHAR_MS'),
       minimumDurationMs: environmentNumber(values.DESKTOP_CHAR_TTS_LOCAL_MIN_MS, DEFAULT_TTS_CONFIG.local.minimumDurationMs, 'DESKTOP_CHAR_TTS_LOCAL_MIN_MS'),
-      amplitudeIntervalMs: environmentNumber(values.DESKTOP_CHAR_TTS_LOCAL_AMPLITUDE_MS, DEFAULT_TTS_CONFIG.local.amplitudeIntervalMs, 'DESKTOP_CHAR_TTS_LOCAL_AMPLITUDE_MS'),
       sampleRateHz: environmentNumber(values.DESKTOP_CHAR_TTS_SAMPLE_RATE_HZ, DEFAULT_TTS_CONFIG.local.sampleRateHz, 'DESKTOP_CHAR_TTS_SAMPLE_RATE_HZ'),
       channels: environmentNumber(values.DESKTOP_CHAR_TTS_CHANNELS, DEFAULT_TTS_CONFIG.local.channels, 'DESKTOP_CHAR_TTS_CHANNELS'),
     },
@@ -109,5 +111,12 @@ function environmentPort(value: string | undefined, fallback: number): number {
   if (!Number.isInteger(parsed) || parsed < 0 || parsed > 65_535) {
     throw new Error('DESKTOP_CHAR_TTS_LOCAL_MCP_PORT must be an integer from 0 to 65535');
   }
+  return parsed;
+}
+
+function environmentRate(value: string | undefined, fallback: number): number {
+  if (value === undefined || value === '') return fallback;
+  const parsed = Number(value);
+  if (!Number.isFinite(parsed) || parsed < 0.5 || parsed > 2) throw new Error('DESKTOP_CHAR_TTS_LOCAL_RATE must be from 0.5 to 2');
   return parsed;
 }

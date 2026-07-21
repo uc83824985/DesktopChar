@@ -4,6 +4,7 @@ import type {
   AvatarEvent,
   AvatarSnapshot,
   GazeProfile,
+  LipSyncProfile,
   ParameterValue,
   PerformancePlan,
   PerformanceSegment,
@@ -28,6 +29,7 @@ export interface AvatarRuntimeOptions {
   effects: RuntimeEffectExecutor;
   policy?: RuntimePolicy;
   gazeProfile?: GazeProfile;
+  lipSyncProfile?: LipSyncProfile;
 }
 
 export class AvatarRuntime {
@@ -43,11 +45,16 @@ export class AvatarRuntime {
   private layers: ParameterLayers = emptyLayers();
   private readonly options: AvatarRuntimeOptions;
   private readonly gazeProfile: GazeProfile;
+  private readonly lipSyncProfile: LipSyncProfile;
 
   constructor(options: AvatarRuntimeOptions) {
     this.options = options;
     this.gazeProfile = options.gazeProfile ?? DEFAULT_GAZE_PROFILE;
     validateGazeProfile(this.gazeProfile);
+    this.lipSyncProfile = options.lipSyncProfile ?? { gain: 1 };
+    if (!Number.isFinite(this.lipSyncProfile.gain) || this.lipSyncProfile.gain <= 0) {
+      throw new RangeError('lipSyncProfile.gain must be positive and finite');
+    }
   }
 
   getSnapshot(): AvatarSnapshot {
@@ -282,7 +289,9 @@ export class AvatarRuntime {
   }
 
   private applyMouthValue(value: number): void {
-    this.layers.mouth = { ParamMouthOpenY: { value: Math.max(0, Math.min(1, value)) } };
+    this.layers.mouth = {
+      ParamMouthOpenY: { value: Math.max(0, Math.min(1, value * this.lipSyncProfile.gain)) },
+    };
     this.emitFrame();
   }
 

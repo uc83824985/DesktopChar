@@ -164,6 +164,10 @@ export interface GazeProfile {
   eyeY: GazeAxisProfile;
 }
 
+export interface LipSyncProfile {
+  gain: number;
+}
+
 export interface AvatarSnapshot {
   state: AvatarState;
   generation: number;

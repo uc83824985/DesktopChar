@@ -22,6 +22,17 @@ function createRuntime(effects: ControlledEffects): AvatarRuntime {
   return runtime;
 }
 
+function createRuntimeWithLipSyncGain(effects: ControlledEffects, gain: number): AvatarRuntime {
+  const runtime = new AvatarRuntime({
+    planner: new DefaultAvatarPlanner(),
+    mixer: new ParameterMixer({ ranges: { ParamMouthOpenY: { min: 0, max: 1 } } }),
+    effects,
+    lipSyncProfile: { gain },
+  });
+  runtime.dispatch({ type: 'renderer.ready', capabilities });
+  return runtime;
+}
+
 function threeSegmentPlan(): PerformancePlan {
   return {
     id: 'three',
@@ -161,6 +172,30 @@ test('stream playback levels drive mouth frames while buffering remains a player
     type: 'playback.recovered', generation, segmentId: 'segment-0', positionMs: 120,
   });
   assert.equal(runtime.getSnapshot().playback.status, 'playing');
+});
+
+test('Runtime applies character lip-sync gain to stream facts and clamps the mouth parameter', () => {
+  const effects = new ControlledEffects();
+  const runtime = createRuntimeWithLipSyncGain(effects, 2.5);
+  runtime.dispatch({ type: 'plan.submitted', plan: threeSegmentPlan() });
+  effects.resolveTts(0, {
+    delivery: 'stream', requestId: 'stream-gain', uri: 'http://127.0.0.1/audio/stream-gain',
+    mimeType: 'audio/pcm', codec: 'pcm_s16le', sampleRateHz: 24_000, channels: 1,
+  });
+  const generation = runtime.getSnapshot().generation;
+
+  runtime.dispatch({
+    type: 'playback.level', generation, segmentId: 'segment-0', positionMs: 100, value: 0.224,
+  });
+  assert.equal(effects.frames.at(-1)?.ParamMouthOpenY, 0.56);
+  runtime.dispatch({
+    type: 'playback.level', generation, segmentId: 'segment-0', positionMs: 125, value: 0.8,
+  });
+  assert.equal(effects.frames.at(-1)?.ParamMouthOpenY, 1);
+});
+
+test('Runtime rejects an invalid lip-sync profile', () => {
+  assert.throws(() => createRuntimeWithLipSyncGain(new ControlledEffects(), 0), /positive and finite/);
 });
 
 test('pause freezes timeline until playback resumes', () => {

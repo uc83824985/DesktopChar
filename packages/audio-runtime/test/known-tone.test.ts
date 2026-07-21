@@ -61,6 +61,16 @@ test('known tone acceptance detects correct playback timing and rejects a shifte
   assert.ok(shifted.issues.some(issue => issue.includes('schedule') || issue.includes('level')));
 });
 
+test('known tone acceptance can validate a Runtime-scaled mouth track independently from raw playback levels', async () => {
+  const pcm = await collectKnownTone();
+  const gained: AmplitudeSample[] = [];
+  for (let atMs = 25; atMs < KNOWN_TONE_DURATION_MS; atMs += 25) {
+    gained.push({ atMs, value: Math.min(1, levelBetween(pcm, atMs - 20, atMs) * 2.5) });
+  }
+  const accepted = evaluateKnownToneAcceptance(gained, { lipSyncGain: 2.5 });
+  assert.equal(accepted.passed, true, accepted.issues.join('; '));
+});
+
 async function collectKnownTone(): Promise<Uint8Array> {
   const chunks: Uint8Array[] = [];
   for await (const chunk of createKnownTonePcmStream({ chunkDurationMs: 20 })) chunks.push(chunk);

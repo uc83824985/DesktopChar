@@ -26,6 +26,7 @@ export interface KnownToneAcceptanceOptions {
   timingToleranceMs?: number;
   levelTolerance?: number;
   silenceLimit?: number;
+  lipSyncGain?: number;
 }
 
 export interface KnownToneAcceptanceResult {
@@ -101,6 +102,7 @@ export function evaluateKnownToneAcceptance(
   const timingToleranceMs = positive(options.timingToleranceMs ?? 90, 'timingToleranceMs');
   const levelTolerance = positive(options.levelTolerance ?? 0.12, 'levelTolerance');
   const silenceLimit = positive(options.silenceLimit ?? 0.08, 'silenceLimit');
+  const lipSyncGain = positive(options.lipSyncGain ?? 1, 'lipSyncGain');
   const ordered = [...samples].sort((left, right) => left.atMs - right.atMs);
   const issues: string[] = [];
   const observedToneLevels: number[] = [];
@@ -110,11 +112,12 @@ export function evaluateKnownToneAcceptance(
     const stable = valuesIn(ordered, pulse.startMs + 55, pulse.endMs - 55);
     const observedLevel = median(stable.map(sample => sample.value));
     observedToneLevels.push(observedLevel);
-    if (!stable.length || Math.abs(observedLevel - pulse.amplitude) > levelTolerance) {
-      issues.push(`tone ${index + 1} level ${observedLevel.toFixed(3)} does not match ${pulse.amplitude.toFixed(3)}`);
+    const expectedLevel = clamp01(pulse.amplitude * lipSyncGain);
+    if (!stable.length || Math.abs(observedLevel - expectedLevel) > levelTolerance) {
+      issues.push(`tone ${index + 1} level ${observedLevel.toFixed(3)} does not match ${expectedLevel.toFixed(3)}`);
     }
 
-    const threshold = Math.max(0.1, pulse.amplitude * 0.45);
+    const threshold = Math.max(0.1, expectedLevel * 0.45);
     const active = valuesIn(ordered, pulse.startMs - timingToleranceMs, pulse.endMs + timingToleranceMs)
       .filter(sample => sample.value >= threshold);
     if (!active.length) {
@@ -142,7 +145,9 @@ export function evaluateKnownToneAcceptance(
   if (!silenceValues.length) issues.push('no silence samples were observed');
 
   for (let index = 1; index < observedToneLevels.length; index++) {
-    if (observedToneLevels[index]! - observedToneLevels[index - 1]! < 0.12) {
+    const expectedDifference = clamp01(KNOWN_TONE_PULSES[index]!.amplitude * lipSyncGain)
+      - clamp01(KNOWN_TONE_PULSES[index - 1]!.amplitude * lipSyncGain);
+    if (expectedDifference >= 0.12 && observedToneLevels[index]! - observedToneLevels[index - 1]! < 0.12) {
       issues.push(`tone ${index + 1} is not observably louder than tone ${index}`);
     }
   }
