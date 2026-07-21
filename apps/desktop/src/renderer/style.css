@@ -6,7 +6,7 @@ main { min-height: 100vh; background: radial-gradient(circle at 70% 45%, #49437a
 .speech-bubble { position: fixed; z-index: 2; top: 5%; right: 5%; width: max-content; max-width: min(320px, 72vw); padding: 13px 16px; pointer-events: none; color: #242033; background: #fffffff2; border: 1px solid #ffffff; border-radius: 18px; box-shadow: 0 10px 30px #27213c30; font-size: 15px; line-height: 1.55; overflow-wrap: anywhere; transform-origin: 85% 100%; animation: speech-bubble-in 150ms ease-out; }
 .speech-bubble[hidden] { display: none; }
 .speech-bubble::after { content: ""; position: absolute; right: 24px; bottom: -10px; width: 18px; height: 18px; background: inherit; border-right: inherit; border-bottom: inherit; transform: rotate(45deg); }
-.speech-bubble p { position: relative; z-index: 1; margin: 0; line-break: strict; text-align: center; text-wrap: wrap; white-space: pre-wrap; word-break: normal; }
+.speech-bubble p { position: relative; z-index: 1; margin: 0; line-break: strict; text-align: left; text-wrap: wrap; white-space: pre-wrap; word-break: normal; }
 .speech-bubble[data-mode="stream"] #speech-bubble-trailing { visibility: hidden; }
 .speech-bubble mark { color: #171126; background: #ffdf69; border-radius: 5px; padding: 0; box-shadow: 0 0 0 2px #ffdf6940; }
 @keyframes speech-bubble-in { from { opacity: 0; transform: translateY(4px) scale(.97); } }

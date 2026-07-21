@@ -21,7 +21,11 @@ import {
   WebGLPixelReadbackBackend,
 } from '../../../../packages/live2d-renderer/src/index.ts';
 import type { PixelCoverageResult } from '../../../../packages/live2d-renderer/src/index.ts';
-import { DomContextMenuHost, ImmediateUiRegistry } from '../../../../packages/scene-ui-dom/src/index.ts';
+import {
+  DomContextMenuHost,
+  ImmediateUiRegistry,
+  formatChatBubbleFragment,
+} from '../../../../packages/scene-ui-dom/src/index.ts';
 import type { McpCallOptions, McpCallToolResult, McpClientPort, TtsAdapter } from '../../../../packages/tts-mcp-adapter/src/index.ts';
 import { JsonConsoleTtsLogger, McpTtsAdapter, TtsRuntimeEffectHandler } from '../../../../packages/tts-mcp-adapter/src/index.ts';
 import './style.css';
@@ -675,8 +679,8 @@ function submitBubbleDemo(mode: SpeechBubbleMode): void {
   const displayText = mode === 'complete'
     ? '完整显示：文本会立即完整出现。'
     : mode === 'stream'
-      ? '流式显示：文本会跟随播放进度逐步出现。'
-      : 'KTV 高亮会按照实际播放时点逐段移动，并始终保持完整文本的居中换行布局。';
+      ? '流式显示：文本会跟随播放进度逐步出现，并保持稳定的自动换行。'
+      : 'KTV 高亮会随播放时点移动。完整文本保持稳定换行布局。';
   runtime.dispatch({ type: 'plan.submitted', plan: { id: `bubble-${mode}-${suffix}`, segments: [{
     id: `bubble-segment-${suffix}`,
     sequence: 0,
@@ -686,10 +690,10 @@ function submitBubbleDemo(mode: SpeechBubbleMode): void {
       mode,
       cues: [
         { text: 'KTV 高亮', atMs: 0, durationMs: 550 },
-        { text: '会按照实际播放时点', atMs: 550, durationMs: 650 },
-        { text: '逐段移动，', atMs: 1_200, durationMs: 500 },
-        { text: '并始终保持完整文本的', atMs: 1_700, durationMs: 700 },
-        { text: '居中换行布局。', atMs: 2_400, durationMs: 700 },
+        { text: '会随播放时点', atMs: 550, durationMs: 650 },
+        { text: '移动。', atMs: 1_200, durationMs: 500 },
+        { text: '完整文本保持', atMs: 1_700, durationMs: 700 },
+        { text: '稳定换行布局。', atMs: 2_400, durationMs: 700 },
       ],
     } : mode === 'stream' ? { mode, charactersPerSecond: 12 } : { mode },
   }] } });
@@ -765,12 +769,18 @@ function openAvatarContextMenu(event: MouseEvent): void {
 
 function renderSpeechBubble(snapshot: import('../../../../packages/contracts/src/index.ts').AvatarSnapshot): void {
   const projection = projectSpeechBubble(snapshot.speechBubble);
+  const activeStart = projection.leadingText.length;
+  const trailingStart = activeStart + projection.activeText.length;
   speechBubble.hidden = !projection.visible;
   speechBubble.dataset.mode = projection.mode;
-  speechBubbleLeading.textContent = projection.leadingText;
-  speechBubbleActive.textContent = projection.activeText;
+  speechBubbleLeading.textContent = formatChatBubbleFragment(projection.fullText, 0, activeStart);
+  speechBubbleActive.textContent = formatChatBubbleFragment(projection.fullText, activeStart, trailingStart);
   speechBubbleActive.hidden = !projection.activeText;
-  speechBubbleTrailing.textContent = projection.trailingText;
+  speechBubbleTrailing.textContent = formatChatBubbleFragment(
+    projection.fullText,
+    trailingStart,
+    projection.fullText.length,
+  );
   document.body.dataset.speechBubble = projection.visible ? projection.mode : 'hidden';
 }
 

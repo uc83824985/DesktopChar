@@ -41,10 +41,20 @@ try {
 
   const bubbleBeforePlayback = await page.evaluate(() => {
     document.querySelector('#speak')?.click();
-    return { mode: document.body.dataset.speechBubble, text: document.querySelector('#speech-bubble')?.textContent?.trim() };
+    const paragraph = document.querySelector('#speech-bubble p');
+    return {
+      mode: document.body.dataset.speechBubble,
+      text: document.querySelector('#speech-bubble')?.textContent?.trim(),
+      structuralTextNodes: paragraph
+        ? [...paragraph.childNodes].filter(node => node.nodeType === Node.TEXT_NODE && node.textContent).length
+        : -1,
+    };
   });
   if (bubbleBeforePlayback.mode !== 'hidden') {
     throw new Error(`Speech bubble must wait for playback.started: ${JSON.stringify(bubbleBeforePlayback)}`);
+  }
+  if (bubbleBeforePlayback.structuralTextNodes !== 0) {
+    throw new Error(`Chat bubble template must not preserve source indentation as visible text: ${JSON.stringify(bubbleBeforePlayback)}`);
   }
   await page.locator('body[data-runtime-state="speaking"][data-speech-bubble="complete"]').waitFor({ timeout: 2_000 });
   const bubble = await page.evaluate(() => ({
@@ -99,10 +109,13 @@ try {
   if (!earlyStreamText || !laterStreamText || laterStreamText.length <= earlyStreamText.length) {
     throw new Error(`Stream bubble did not advance with playback: ${JSON.stringify({ earlyStreamText, laterStreamText })}`);
   }
-  if (earlyStreamLayout.textAlign !== 'center'
+  if (earlyStreamLayout.textAlign !== 'left'
     || earlyStreamLayout.contentHeight < earlyStreamLayout.lineHeight * 1.5
     || !sameRect(earlyStreamLayout.rect, laterStreamLayout.rect)) {
-    throw new Error(`Chat bubble must wrap, center, and keep its full-text layout while streaming: ${JSON.stringify({ earlyStreamLayout, laterStreamLayout })}`);
+    throw new Error(`Chat bubble must wrap with a stable left edge and keep its full-text layout while streaming: ${JSON.stringify({ earlyStreamLayout, laterStreamLayout })}`);
+  }
+  if (process.env.DESKTOP_CHAR_CHAT_BUBBLE_STREAM_SCREENSHOT) {
+    await page.screenshot({ path: process.env.DESKTOP_CHAR_CHAT_BUBBLE_STREAM_SCREENSHOT });
   }
   await page.evaluate(() => document.querySelector('#avatar')?.dispatchEvent(
     new KeyboardEvent('keydown', { key: 'ContextMenu', bubbles: true }),
@@ -113,6 +126,10 @@ try {
   await page.locator('body[data-speech-bubble="karaoke"] #speech-bubble-active').waitFor({ timeout: 2_000 });
   const karaokeActive = await page.locator('#speech-bubble-active').textContent();
   if (!karaokeActive) throw new Error(`Karaoke bubble did not expose its timed cue: ${karaokeActive}`);
+  const karaokeText = await page.locator('#speech-bubble').textContent();
+  if (!karaokeText?.includes('移动。\n完整文本')) {
+    throw new Error(`Chat bubble must start a new visual line after sentence punctuation: ${JSON.stringify(karaokeText)}`);
+  }
   if (process.env.DESKTOP_CHAR_CHAT_BUBBLE_SCREENSHOT) {
     await page.waitForTimeout(180);
     await page.screenshot({ path: process.env.DESKTOP_CHAR_CHAT_BUBBLE_SCREENSHOT });
