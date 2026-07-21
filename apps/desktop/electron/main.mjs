@@ -1,4 +1,4 @@
-import { app, BrowserWindow, ipcMain, net, protocol, screen } from 'electron';
+import { app, BrowserWindow, ipcMain, Menu, nativeImage, net, protocol, screen, Tray } from 'electron';
 import { Client } from '@modelcontextprotocol/sdk/client/index.js';
 import { StreamableHTTPClientTransport } from '@modelcontextprotocol/sdk/client/streamableHttp.js';
 import path from 'node:path';
@@ -17,6 +17,7 @@ import { createAgentHttpServer, parseAgentPort } from './agent-http-server.mjs';
 import { createNativeCursorRefresh } from './cursor-refresh.mjs';
 import { createNativeWindowPosition } from './native-window-position.mjs';
 import { createLocalTtsMcpService } from '../../../local-tts-mcp/service.mjs';
+import { nextAvatarVisibility, trayVisibilityLabel } from './tray-policy.mjs';
 
 const directory = path.dirname(fileURLToPath(import.meta.url));
 const rendererRoot = path.resolve(directory, '../dist');
@@ -65,6 +66,7 @@ protocol.registerSchemesAsPrivileged([{
 }]);
 
 let avatarWindow = null;
+let desktopTray = null;
 let avatarBounds = null;
 let cursorTimer;
 let cursorRefreshTimer;
@@ -84,12 +86,13 @@ const dragWindowApi = requestedDragWindowApi !== 'setBounds' && nativeWindowPosi
   : 'setBounds';
 const ttsMode = process.env.DESKTOP_CHAR_TTS_MODE ?? 'local';
 if (!['local', 'mcp'].includes(ttsMode)) throw new TypeError('DESKTOP_CHAR_TTS_MODE must be local or mcp');
+const lipSyncGain = environmentNumber('DESKTOP_CHAR_LIP_SYNC_GAIN', 2.5);
 let activeTtsMcpUrl = process.env.DESKTOP_CHAR_TTS_MCP_URL ?? 'http://127.0.0.1:8766/mcp';
 const localTtsConfig = Object.freeze({
   delayMs: environmentNumber('DESKTOP_CHAR_TTS_LOCAL_DELAY_MS', 15, true),
-  durationPerCharacterMs: environmentNumber('DESKTOP_CHAR_TTS_LOCAL_CHAR_MS', 90),
+  defaultRate: environmentRate('DESKTOP_CHAR_TTS_LOCAL_RATE', 1),
+  durationPerCharacterMs: environmentNumber('DESKTOP_CHAR_TTS_LOCAL_CHAR_MS', 232),
   minimumDurationMs: environmentNumber('DESKTOP_CHAR_TTS_LOCAL_MIN_MS', 500),
-  amplitudeIntervalMs: environmentNumber('DESKTOP_CHAR_TTS_LOCAL_AMPLITUDE_MS', 50),
   sampleRateHz: environmentNumber('DESKTOP_CHAR_TTS_SAMPLE_RATE_HZ', 24_000),
   channels: environmentNumber('DESKTOP_CHAR_TTS_CHANNELS', 1),
 });
@@ -111,7 +114,7 @@ const agentServer = createAgentHttpServer({
 const hasSingleInstanceLock = app.requestSingleInstanceLock();
 if (!hasSingleInstanceLock) app.quit();
 else {
-  app.on('second-instance', () => avatarWindow?.showInactive());
+  app.on('second-instance', () => setAvatarVisibility(true));
   app.whenReady().then(async () => {
     if (ttsMode === 'local') {
       localTtsService = createLocalTtsMcpService({
@@ -127,6 +130,7 @@ else {
     if (!devUrl) registerRendererProtocol();
     registerIpc();
     createAvatarWindow();
+    createDesktopTray();
     const address = await agentServer.listen();
     safeLog(`[agent-http] listening on http://127.0.0.1:${address.port}`);
   }).catch(error => {
@@ -139,6 +143,8 @@ app.on('window-all-closed', () => app.quit());
 app.on('before-quit', () => {
   if (cursorTimer) clearInterval(cursorTimer);
   if (cursorRefreshTimer) clearTimeout(cursorRefreshTimer);
+  desktopTray?.destroy();
+  desktopTray = null;
   void agentServer.close().catch(() => {});
   void closeMcpSession()
     .finally(() => localTtsService?.close())
@@ -199,6 +205,8 @@ function createAvatarWindow() {
   });
   avatarWindow.on('move', publishBounds);
   avatarWindow.on('resize', publishBounds);
+  avatarWindow.on('show', updateTrayMenu);
+  avatarWindow.on('hide', updateTrayMenu);
   avatarWindow.on('closed', () => { avatarWindow = null; });
   void avatarWindow.loadURL(devUrl ?? 'desktop-char://app/');
 
@@ -208,12 +216,69 @@ function createAvatarWindow() {
   }, 33);
 }
 
-function registerIpc() {
-  ipcMain.handle(channels.ready, event => {
-    requireAvatarSender(event);
+function createDesktopTray() {
+  const icon = createTrayIcon();
+  if (icon.isEmpty()) throw new Error('Desktop tray icon failed to load');
+  desktopTray = new Tray(icon);
+  desktopTray.setToolTip('DesktopChar');
+  desktopTray.on('click', () => setAvatarVisibility(nextAvatarVisibility(avatarWindow?.isVisible() ?? false)));
+  updateTrayMenu();
+}
+
+function createTrayIcon() {
+  const size = 16;
+  const bitmap = Buffer.alloc(size * size * 4);
+  for (let y = 1; y < size - 1; y++) {
+    for (let x = 1; x < size - 1; x++) {
+      const cornerDistance = Math.hypot(Math.max(0, 3 - x, x - 12), Math.max(0, 3 - y, y - 12));
+      if (cornerDistance > 2.5) continue;
+      setBitmapPixel(bitmap, size, x, y, 118, 87, 213, 255);
+    }
+  }
+  for (let y = 4; y <= 11; y++) setBitmapPixel(bitmap, size, 5, y, 255, 255, 255, 255);
+  for (let x = 5; x <= 9; x++) {
+    setBitmapPixel(bitmap, size, x, 4, 255, 255, 255, 255);
+    setBitmapPixel(bitmap, size, x, 11, 255, 255, 255, 255);
+  }
+  for (let y = 5; y <= 10; y++) setBitmapPixel(bitmap, size, 10, y, 255, 255, 255, 255);
+  return nativeImage.createFromBitmap(bitmap, { width: size, height: size, scaleFactor: 1 });
+}
+
+function setBitmapPixel(bitmap, width, x, y, red, green, blue, alpha) {
+  const offset = (y * width + x) * 4;
+  bitmap[offset] = blue;
+  bitmap[offset + 1] = green;
+  bitmap[offset + 2] = red;
+  bitmap[offset + 3] = alpha;
+}
+
+function updateTrayMenu() {
+  if (!desktopTray) return;
+  const avatarVisible = avatarWindow?.isVisible() ?? false;
+  desktopTray.setContextMenu(Menu.buildFromTemplate([
+    { label: trayVisibilityLabel(avatarVisible), click: () => setAvatarVisibility(!avatarVisible) },
+    { label: '恢复默认位置', click: restoreDefaultPosition },
+    { type: 'separator' },
+    { label: '退出 DesktopChar', click: () => app.quit() },
+  ]));
+}
+
+function setAvatarVisibility(visible) {
+  if (!avatarWindow || avatarWindow.isDestroyed()) return;
+  dragState = null;
+  if (visible) {
     avatarWindow.showInactive();
     avatarWindow.setAlwaysOnTop(true);
     publishBounds();
+  }
+  else avatarWindow.hide();
+  updateTrayMenu();
+}
+
+function registerIpc() {
+  ipcMain.handle(channels.ready, event => {
+    requireAvatarSender(event);
+    setAvatarVisibility(true);
     return windowState();
   });
   ipcMain.handle(channels.getState, event => {
@@ -280,6 +345,7 @@ function registerIpc() {
   ipcMain.on(channels.windowCommand, (event, command) => {
     requireAvatarSender(event);
     if (command === 'restore-default-position') restoreDefaultPosition();
+    else if (command === 'hide-avatar') setAvatarVisibility(false);
     else if (command === 'quit') app.quit();
   });
   ipcMain.on(channels.agentState, (event, state) => {
@@ -392,7 +458,10 @@ function windowState() {
     mousePassthrough: pointerPresentation.passthrough,
     pointerPresentation: { ...pointerPresentation },
     alwaysOnTop: avatarWindow.isAlwaysOnTop(),
+    visible: avatarWindow.isVisible(),
+    tray: { available: Boolean(desktopTray) },
     interaction: { dragHoldDelayMs, dragWindowApi },
+    lipSync: { gain: lipSyncGain },
     tts: {
       mode: ttsMode,
       mcpUrl: activeTtsMcpUrl,
@@ -436,6 +505,16 @@ function environmentPort(name, fallback) {
   const parsed = Number(value);
   if (!Number.isInteger(parsed) || parsed < 0 || parsed > 65_535) {
     throw new TypeError(`${name} must be an integer from 0 to 65535`);
+  }
+  return parsed;
+}
+
+function environmentRate(name, fallback) {
+  const value = process.env[name];
+  if (value === undefined || value === '') return fallback;
+  const parsed = Number(value);
+  if (!Number.isFinite(parsed) || parsed < 0.5 || parsed > 2) {
+    throw new TypeError(`${name} must be from 0.5 to 2`);
   }
   return parsed;
 }

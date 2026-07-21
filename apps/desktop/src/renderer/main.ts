@@ -62,6 +62,7 @@ interface ToneSyncTrace extends KnownToneResponseTrace {
 }
 interface ToneAcceptanceRun {
   segmentId: string;
+  lipSyncGain: number;
   playerLevels: AmplitudeSample[];
   modelLevels: AmplitudeSample[];
   traces: ToneSyncTrace[];
@@ -76,6 +77,7 @@ let motionRequestToken = 0;
 let toneAcceptance: ToneAcceptanceRun | null = null;
 let applyingToneTrace: ToneSyncTrace | null = null;
 let knownToneAvailable = false;
+let currentLipSyncGain = MAO_CHARACTER_CONFIG.lipSyncProfile.gain;
 let desktopBounds: { x: number; y: number; width: number; height: number } | undefined;
 let pointerPresentation: PointerPresentation | undefined;
 let pixelPicker: AsyncPixelCoveragePicker | undefined;
@@ -186,6 +188,7 @@ function handleTonePlaybackEvent(event: AvatarEvent): void {
 try {
   const shellState = desktopShell ? await desktopShell.ready() : undefined;
   const tts = createTtsComposition(shellState?.tts);
+  currentLipSyncGain = shellState?.lipSync.gain ?? MAO_CHARACTER_CONFIG.lipSyncProfile.gain;
   knownToneAvailable = tts.supportsKnownToneFixture;
   if (!knownToneAvailable) tone.title = '先验铃声验收仅由 local-tts-mcp 参考服务提供';
   ttsEffects = new TtsRuntimeEffectHandler(tts.adapter, {
@@ -213,6 +216,7 @@ try {
     } }),
     effects: { execute },
     gazeProfile: MAO_CHARACTER_CONFIG.gazeProfile,
+    lipSyncProfile: { gain: currentLipSyncGain },
   });
   runtime.dispatch({ type: 'renderer.ready', capabilities: {
     emotions: ['neutral', 'happy'], actions: ['nod'],
@@ -322,7 +326,7 @@ function submitToneAcceptance(): void {
   const segmentId = `known-tone-${suffix}`;
   knownToneSegments.add(segmentId);
   toneAcceptance = {
-    segmentId, playerLevels: [], modelLevels: [], traces: [],
+    segmentId, lipSyncGain: currentLipSyncGain, playerLevels: [], modelLevels: [], traces: [],
     lastLoggedBucket: -1, lastLoggedPhase: '',
   };
   pendingToneTraces.length = 0;
@@ -734,6 +738,7 @@ function registerDevelopmentUi(): void {
     build: () => ({
       label: '桌面窗口',
       items: [
+        { type: 'action', id: 'hide-avatar', label: '隐藏角色', invoke: () => desktopShell.runWindowCommand('hide-avatar') },
         { type: 'action', id: 'restore-position', label: '恢复默认位置', invoke: () => desktopShell.runWindowCommand('restore-default-position') },
         { type: 'action', id: 'quit', label: '退出 DesktopChar', danger: true, invoke: () => desktopShell.runWindowCommand('quit') },
       ],
@@ -796,7 +801,7 @@ function applyRuntimeFrame(): void {
 function finishToneAcceptance(active: ToneAcceptanceRun): void {
   if (toneAcceptance !== active) return;
   const player = evaluateKnownToneAcceptance(active.playerLevels);
-  const model = evaluateKnownToneAcceptance(active.modelLevels);
+  const model = evaluateKnownToneAcceptance(active.modelLevels, { lipSyncGain: active.lipSyncGain });
   const response = evaluateKnownToneResponseTiming(active.traces);
   const passed = player.passed && model.passed && response.passed;
   const metrics = { passed, player, model, response };

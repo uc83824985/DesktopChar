@@ -23,7 +23,8 @@ try {
   await page.locator('body[data-drag-window-api][data-webgl-context-losses="0"]').waitFor({ timeout: 2_000 });
 
   const initial = await page.evaluate(() => window.desktopChar?.getWindowState());
-  if (!initial || !initial.alwaysOnTop || initial.bounds.width > 500 || initial.bounds.height > 740) {
+  if (!initial || !initial.alwaysOnTop || !initial.visible || !initial.tray?.available
+    || initial.bounds.width > 500 || initial.bounds.height > 740) {
     throw new Error(`Unexpected floating window state: ${JSON.stringify(initial)}`);
   }
   if (!initial.mousePassthrough) throw new Error('Floating window must start in desktop passthrough mode');
@@ -65,8 +66,10 @@ try {
     headings: [...document.querySelectorAll('.scene-context-menu__heading')].map(node => node.textContent),
     gazeChecked: document.querySelector('[data-item-id="gaze-follow"]')?.getAttribute('aria-checked'),
     bubbleItems: [...document.querySelectorAll('[data-item-id="complete"], [data-item-id="stream"], [data-item-id="karaoke"]')].map(node => node.textContent?.trim()),
+    hideAvatar: document.querySelector('[data-item-id="hide-avatar"]')?.textContent?.trim(),
   }));
   if (menu.gazeChecked !== 'true' || menu.bubbleItems.length !== 3
+    || menu.hideAvatar !== '隐藏角色'
     || !menu.headings.includes('角色设置') || !menu.headings.includes('桌面窗口')) {
     throw new Error(`Immediate context-menu registrations are incomplete: ${JSON.stringify(menu)}`);
   }
@@ -94,7 +97,7 @@ try {
     new KeyboardEvent('keydown', { key: 'ContextMenu', bubbles: true }),
   ));
   await page.locator('body[data-context-menu="open"] [data-item-id="complete"][aria-disabled="true"]').waitFor({ timeout: 2_000 });
-  await page.locator('body[data-runtime-state="idle"] [data-item-id="complete"][aria-disabled="false"]').waitFor({ timeout: 4_000 });
+  await page.locator('body[data-runtime-state="idle"] [data-item-id="complete"][aria-disabled="false"]').waitFor({ timeout: 10_000 });
   await page.locator('[data-item-id="karaoke"]').click();
   await page.locator('body[data-speech-bubble="karaoke"] #speech-bubble-active').waitFor({ timeout: 2_000 });
   const karaokeActive = await page.locator('#speech-bubble-active').textContent();
@@ -109,6 +112,15 @@ try {
   await page.keyboard.press('Escape');
   await page.evaluate(() => document.querySelector('#reset')?.click());
   await page.locator('body[data-speech-bubble="hidden"]').waitFor({ timeout: 2_000 });
+
+  await page.evaluate(() => window.desktopChar?.runWindowCommand('hide-avatar'));
+  await waitForMainWindowVisibility(application, false);
+  const hidden = await page.evaluate(() => window.desktopChar?.getWindowState());
+  if (hidden?.visible !== false || hidden?.tray?.available !== true) {
+    throw new Error(`Tray-backed hide state is invalid: ${JSON.stringify(hidden)}`);
+  }
+  await application.evaluate(({ BrowserWindow }) => BrowserWindow.getAllWindows()[0]?.showInactive());
+  await waitForMainWindowVisibility(application, true);
 
   await page.evaluate(async () => {
     const api = window.desktopChar;
@@ -174,4 +186,14 @@ try {
 }
 finally {
   await application.close();
+}
+
+async function waitForMainWindowVisibility(application, expected) {
+  const deadline = Date.now() + 2_000;
+  while (Date.now() < deadline) {
+    const visible = await application.evaluate(({ BrowserWindow }) => BrowserWindow.getAllWindows()[0]?.isVisible());
+    if (visible === expected) return;
+    await new Promise(resolve => setTimeout(resolve, 25));
+  }
+  throw new Error(`Avatar window did not become ${expected ? 'visible' : 'hidden'}`);
 }

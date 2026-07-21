@@ -9,10 +9,10 @@
 - `packages/avatar-runtime`：状态机、Planner、Timeline 与 Parameter Mixer。
 - `packages/scene-runtime`：通用 Scene Actor、关系约束、原子事务、Behavior 路由与 2.5D 渲染计划。
 - `packages/live2d-renderer`：模型无关端口、生命周期和 Live2D 适配边界。
-- `packages/audio-runtime`：真实播放时钟接口。
+- `packages/audio-runtime`：真实播放时钟与原始 PCM 电平事实接口；角色级口型增益由 Runtime 应用。
 - `packages/tts-mcp-adapter`：TTS MCP 输出适配。
 - `packages/transport`、`packages/config`：传输和配置边界。
-- `local-tts-mcp`：可独立运行的真实 Streamable HTTP MCP/HTTP PCM 参考服务；仅合成模型由确定性测试生成器替代。
+- `local-tts-mcp`：可独立运行的真实 Streamable HTTP MCP/HTTP PCM 参考服务；默认固定音高 `jrpg-blip` 按字生成提示音、标点停顿及 sample-aligned 文本 cue，并保留确定性变化音调 `jrpg-blip-varied`。
 
 详细设计见 [架构文档](docs/architecture.md)、[Avatar Runtime](docs/avatar-runtime.md) 和 [Scene Engine 抽象](docs/scene-engine.md)。
 
@@ -45,7 +45,7 @@ npm start
 npm run desktop
 ```
 
-这会构建并启动透明置顶角色。最终渲染帧的透明像素保持点击穿透，所有实际可见像素均可左键点击或拖动；WebGL2 通过鼠标附近 `3×3` 像素的异步 PBO/fence 流水线更新选择状态。右键可恢复默认位置或退出。角色拖动直接移动原生窗口，窗口包围盒与显示位置同步更新。
+这会构建并启动透明置顶角色，同时在系统通知区域创建后台托盘。单击托盘图标可切换角色显示，托盘右键可显示/隐藏、恢复位置或退出；角色自身右键菜单也提供“隐藏角色”。隐藏不会销毁 Runtime 或中断 TTS。最终渲染帧的透明像素保持点击穿透，所有实际可见像素均可左键点击或拖动；WebGL2 通过鼠标附近 `3×3` 像素的异步 PBO/fence 流水线更新选择状态。角色拖动直接移动原生窗口，窗口包围盒与显示位置同步更新。
 
 ## 验证
 

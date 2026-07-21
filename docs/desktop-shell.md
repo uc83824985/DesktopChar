@@ -20,6 +20,14 @@ setIgnoreMouseEvents(true, forward)    可点击 / 可拖动角色
 
 窗口固定透明、置顶、无任务栏图标，默认位于主屏工作区右下角。拖动使用屏幕坐标计算新的位置，并将完整窗口限制在距离最近显示器的工作区内。Windows 默认通过 Koffi 调用位置专用的 `SetWindowPos`，其他平台或原生适配不可用时回退 `BrowserWindow.setBounds()`；坐标不变时不重复提交。main 持有 DIP 逻辑 bounds，避免原生像素与高 DPI 换算造成宽高在 460/461 间抖动，renderer 仅在逻辑宽高实际变化时重新 fit 模型。
 
+## 后台托盘与显隐生命周期
+
+Electron main 在系统通知区域创建常驻 `DesktopChar` 托盘入口。左键单击托盘图标切换角色窗口显示/隐藏；右键菜单根据当前状态显示“显示角色”或“隐藏角色”，同时提供“恢复默认位置”和“退出 DesktopChar”。角色自身的共享右键菜单也注册“隐藏角色”，隐藏后通过托盘恢复。
+
+隐藏只调用现有 `BrowserWindow.hide()`，不会关闭窗口、卸载 Renderer、重建 Avatar Runtime、断开 Agent/TTS MCP，或重置窗口 bounds；恢复使用 `showInactive()`，不抢占当前前台应用焦点，并重新确认置顶状态。`DesktopWindowState.visible` 和 `tray.available` 提供可测试事实。托盘图标由 main 创建小型 BGRA `NativeImage`，不依赖外部图标解码或 Renderer 资源。
+
+通知区图标是否直接展开在任务栏右下角或收进系统溢出面板由 Windows 用户设置决定，应用不强行修改系统托盘布局。
+
 ## 点击与拖动
 
 - 指针位置的最终帧像素透明：整个窗口临时进入鼠标穿透，点击落到原桌面应用。
@@ -147,7 +155,7 @@ Koffi 只用于 Electron 没有公开等价能力、且调用短小同步的 Win
 
 ## 进程与安全边界
 
-- main 独占窗口创建、bounds、置顶、鼠标穿透和恢复位置/退出等白名单桌面能力。
+- main 独占窗口创建、bounds、置顶、鼠标穿透、托盘生命周期和显示/隐藏/恢复位置/退出等白名单桌面能力。
 - preload 在 `contextIsolation + sandbox` 下只暴露固定 IPC，不暴露 Node 或原始 `ipcRenderer`。
 - renderer 只发送屏幕点、统一 PointerPresentation 和白名单窗口命令；共享 DOM 菜单只负责收集对象注册并发出这些意图，main 校验 IPC sender 和参数。
 - 正式构建通过安全的 `desktop-char://app/` 自定义协议读取本地产物。
