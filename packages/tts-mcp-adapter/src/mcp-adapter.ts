@@ -1,4 +1,4 @@
-import type { AmplitudeSample, AudioCodec, AudioSource, VisemeTiming } from '../../contracts/src/index.ts';
+import type { AmplitudeSample, AudioCodec, AudioSource, SpeechBubbleCue, VisemeTiming } from '../../contracts/src/index.ts';
 import { logEntry, silentTtsLogger, type TtsLogger } from './logging.ts';
 import {
   TtsAdapterError,
@@ -30,6 +30,7 @@ export interface McpTtsAdapterOptions {
   deliveryModes?: Array<'stream' | 'artifact'>;
   supportsVisemes?: boolean;
   supportsAmplitude?: boolean;
+  supportsTextCues?: boolean;
   logger?: TtsLogger;
 }
 
@@ -44,6 +45,7 @@ export class McpTtsAdapter implements TtsAdapter {
   private readonly deliveryModes: Array<'stream' | 'artifact'>;
   private readonly advertisesVisemes: boolean;
   private readonly advertisesAmplitude: boolean;
+  private readonly advertisesTextCues: boolean;
   private readonly logger: TtsLogger;
 
   constructor(options: McpTtsAdapterOptions) {
@@ -62,6 +64,7 @@ export class McpTtsAdapter implements TtsAdapter {
     this.deliveryModes = options.deliveryModes ?? ['stream', 'artifact'];
     this.advertisesVisemes = options.supportsVisemes ?? false;
     this.advertisesAmplitude = options.supportsAmplitude ?? true;
+    this.advertisesTextCues = options.supportsTextCues ?? false;
     this.logger = options.logger ?? silentTtsLogger;
   }
 
@@ -120,6 +123,7 @@ export class McpTtsAdapter implements TtsAdapter {
       provider: this.providerName, formats: [...this.advertisedFormats], deliveryModes: [...this.deliveryModes],
       supportsVoices: true, supportsLanguages: true, supportsInstructions: true,
       supportsVisemes: this.advertisesVisemes, supportsAmplitude: this.advertisesAmplitude,
+      supportsTextCues: this.advertisesTextCues,
       streaming: this.deliveryModes.includes('stream'), cancellation: this.cancelToolName ? 'request' : 'none',
     };
   }
@@ -166,11 +170,13 @@ function normalizeResult(result: McpCallToolResult, request: TtsSynthesisRequest
   const mimeType = payload.mimeType ?? mimeTypeOf(payload.codec, delivery);
   const visemes = normalizeVisemes(payload.visemes);
   const amplitude = normalizeAmplitude(payload.amplitude);
+  const textCues = normalizeTextCues(payload.textCues);
   const common = {
     delivery, requestId, uri, mimeType,
     ...(payload.durationMs !== undefined ? { durationMs: positive(payload.durationMs, 'durationMs') } : {}),
     ...(visemes ? { visemes } : {}),
     ...(amplitude ? { amplitude } : {}),
+    ...(textCues ? { textCues } : {}),
   };
   if (delivery === 'stream') {
     const codec = payload.codec ?? codecOf(mimeType);
@@ -218,6 +224,8 @@ function payloadFromRecord(value: Record<string, unknown>): NormalizedTtsPayload
   if (durationMs !== undefined) payload.durationMs = durationMs;
   if (Array.isArray(value.visemes)) payload.visemes = value.visemes as VisemeTiming[];
   if (Array.isArray(value.amplitude)) payload.amplitude = value.amplitude as AmplitudeSample[];
+  const textCues = value.textCues ?? value.text_cues;
+  if (Array.isArray(textCues)) payload.textCues = textCues as SpeechBubbleCue[];
   return payload;
 }
 
@@ -250,6 +258,21 @@ function normalizeAmplitude(value: AmplitudeSample[] | undefined): AmplitudeSamp
   return value.map((item, index) => {
     if (!isRecord(item)) throw new TtsAdapterError('tts-mcp-invalid-response', `amplitude[${index}] is invalid`);
     return { atMs: nonNegativeNumber(numberField(item, 'atMs', 'at_ms'), `amplitude[${index}].atMs`), value: clamp01(numberRequired(item.value, `amplitude[${index}].value`)) };
+  }).sort((a, b) => a.atMs - b.atMs);
+}
+
+function normalizeTextCues(value: SpeechBubbleCue[] | undefined): SpeechBubbleCue[] | undefined {
+  if (value === undefined) return undefined;
+  return value.map((item, index) => {
+    if (!isRecord(item) || typeof item.text !== 'string' || !item.text) {
+      throw new TtsAdapterError('tts-mcp-invalid-response', `textCues[${index}] is invalid`);
+    }
+    const durationMs = numberField(item, 'durationMs', 'duration_ms');
+    return {
+      text: item.text,
+      atMs: nonNegativeNumber(numberField(item, 'atMs', 'at_ms'), `textCues[${index}].atMs`),
+      ...(durationMs !== undefined ? { durationMs: positive(durationMs, `textCues[${index}].durationMs`) } : {}),
+    };
   }).sort((a, b) => a.atMs - b.atMs);
 }
 

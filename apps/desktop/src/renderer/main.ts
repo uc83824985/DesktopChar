@@ -6,15 +6,11 @@ import type { AvatarEvent, RuntimeEffect, SpeechBubbleMode } from '../../../../p
 import type { AmplitudeSample } from '../../../../packages/contracts/src/index.ts';
 import {
   KNOWN_TONE_PULSES,
-  KNOWN_TONE_SPEECH_TEXT,
-  KNOWN_TONE_STREAM_URI,
   WebAudioPcmStreamPlayer,
-  createKnownToneAudioSource,
-  createKnownTonePcmStream,
   evaluateKnownToneAcceptance,
   evaluateKnownToneResponseTiming,
 } from '../../../../packages/audio-runtime/src/index.ts';
-import type { KnownToneResponseTrace } from '../../../../packages/audio-runtime/src/index.ts';
+import type { KnownToneResponseTrace, PcmStreamResolver } from '../../../../packages/audio-runtime/src/index.ts';
 import { AvatarRuntime, DefaultAvatarPlanner, ParameterMixer, projectSpeechBubble } from '../../../../packages/avatar-runtime/src/index.ts';
 import { DEFAULT_TTS_CONFIG, MAO_CHARACTER_CONFIG } from '../../../../packages/config/src/index.ts';
 import {
@@ -26,8 +22,8 @@ import {
 } from '../../../../packages/live2d-renderer/src/index.ts';
 import type { PixelCoverageResult } from '../../../../packages/live2d-renderer/src/index.ts';
 import { DomContextMenuHost, ImmediateUiRegistry } from '../../../../packages/scene-ui-dom/src/index.ts';
-import type { McpCallOptions, McpClientPort, TtsAdapter } from '../../../../packages/tts-mcp-adapter/src/index.ts';
-import { JsonConsoleTtsLogger, McpTtsAdapter, MockTtsAdapter, TtsRuntimeEffectHandler } from '../../../../packages/tts-mcp-adapter/src/index.ts';
+import type { McpCallOptions, McpCallToolResult, McpClientPort, TtsAdapter } from '../../../../packages/tts-mcp-adapter/src/index.ts';
+import { JsonConsoleTtsLogger, McpTtsAdapter, TtsRuntimeEffectHandler } from '../../../../packages/tts-mcp-adapter/src/index.ts';
 import './style.css';
 import type { DesktopTtsConfig, PointerPresentation } from '../preload/desktop-api.d.ts';
 
@@ -79,6 +75,7 @@ let motionTimer: ReturnType<typeof setTimeout> | undefined;
 let motionRequestToken = 0;
 let toneAcceptance: ToneAcceptanceRun | null = null;
 let applyingToneTrace: ToneSyncTrace | null = null;
+let knownToneAvailable = false;
 let desktopBounds: { x: number; y: number; width: number; height: number } | undefined;
 let pointerPresentation: PointerPresentation | undefined;
 let pixelPicker: AsyncPixelCoveragePicker | undefined;
@@ -86,6 +83,7 @@ let pixelSelection: PixelCoverageResult | undefined;
 let pixelCursorPoint: { x: number; y: number } | undefined;
 let webglContextLosses = 0;
 const pendingToneTraces: ToneSyncTrace[] = [];
+const knownToneSegments = new Set<string>();
 const pixelCoverageLatch = new PixelCoverageLatch({ coveredSamplesToSelect: 1, transparentSamplesToClear: 3 });
 const dragGesture = new HoldDragController<string>({
   holdDelayMs: 240,
@@ -161,14 +159,7 @@ const runtimeFrame = new RuntimeParameterFrame({
 });
 let ttsEffects: TtsRuntimeEffectHandler | undefined;
 let audioPlayer: WebAudioPcmStreamPlayer | undefined;
-const tonePlayer = new WebAudioPcmStreamPlayer({
-  initialBufferMs: 100, levelIntervalMs: 25, levelWindowMs: 20,
-  openStream(source, signal) {
-    if (source.uri !== KNOWN_TONE_STREAM_URI) throw new Error(`Unknown test stream: ${source.uri}`);
-    return createKnownTonePcmStream({ chunkDurationMs: 20, chunkDelayMs: 1, signal });
-  },
-});
-tonePlayer.subscribe(handleTonePlaybackEvent);
+const speechBubbleDismissTimers = new Map<number, ReturnType<typeof setTimeout>>();
 document.body.dataset.toneAcceptance = 'idle';
 
 function handleTonePlaybackEvent(event: AvatarEvent): void {
@@ -194,13 +185,16 @@ function handleTonePlaybackEvent(event: AvatarEvent): void {
 
 try {
   const shellState = desktopShell ? await desktopShell.ready() : undefined;
-  const ttsAdapter = createTtsAdapter(shellState?.tts);
-  ttsEffects = new TtsRuntimeEffectHandler(ttsAdapter, {
+  const tts = createTtsComposition(shellState?.tts);
+  knownToneAvailable = tts.supportsKnownToneFixture;
+  if (!knownToneAvailable) tone.title = '先验铃声验收仅由 local-tts-mcp 参考服务提供';
+  ttsEffects = new TtsRuntimeEffectHandler(tts.adapter, {
     format: shellState?.tts.format ?? DEFAULT_TTS_CONFIG.mcp.format,
     ...(shellState?.tts.voice ? { voice: shellState.tts.voice } : {}),
   });
-  audioPlayer = createRuntimeAudioPlayer(event => runtime?.dispatch(event));
-  document.body.dataset.ttsMode = shellState?.tts.mode ?? 'mock';
+  audioPlayer = createRuntimeAudioPlayer(tts.openStream);
+  audioPlayer.subscribe(handleTonePlaybackEvent);
+  document.body.dataset.ttsMode = shellState?.tts.mode ?? 'local';
   document.body.dataset.ttsHealth = 'checking';
 
   model = await Live2DModel.from(MAO_CHARACTER_CONFIG.modelJsonUrl, { autoInteract: false });
@@ -233,7 +227,8 @@ try {
     document.body.dataset.runtimeState = snapshot.state;
     document.body.dataset.gazeFollow = snapshot.gaze.active ? 'enabled' : 'disabled';
     const busy = snapshot.state !== 'idle';
-    for (const button of [speak, tone, motion]) button.disabled = busy;
+    for (const button of [speak, motion]) button.disabled = busy;
+    tone.disabled = busy || !knownToneAvailable;
     reset.disabled = false;
     gaze.disabled = !(snapshot.capabilities?.supportsGaze ?? false);
     gaze.textContent = snapshot.gaze.active ? '眼部跟随：开' : '眼部跟随：关';
@@ -244,7 +239,7 @@ try {
     renderSpeechBubble(snapshot);
     contextMenuHost.refresh();
   });
-  void ttsAdapter.health().then(report => {
+  void tts.adapter.health().then(report => {
     document.body.dataset.ttsHealth = report.status;
   }).catch(error => {
     document.body.dataset.ttsHealth = 'unavailable';
@@ -288,7 +283,11 @@ try {
       data: { source: 'keyboard' },
     });
   });
-  window.addEventListener('beforeunload', () => contextMenuHost.dispose(), { once: true });
+  window.addEventListener('beforeunload', () => {
+    contextMenuHost.dispose();
+    for (const timer of speechBubbleDismissTimers.values()) clearTimeout(timer);
+    speechBubbleDismissTimers.clear();
+  }, { once: true });
 
   document.body.dataset.ready = 'true';
 }
@@ -300,6 +299,9 @@ catch (error) {
     segmentId: null,
     sequence: null,
     playback: { status: 'idle' as const, positionMs: 0 },
+    speechBubble: {
+      phase: 'hidden' as const, presentationId: 0, segmentId: null, displayText: '', positionMs: 0,
+    },
     emotion: { current: 'neutral' as const, intensity: 0 },
     gesture: { actionId: null, action: null, queueLength: 0 },
     gaze: { x: 0, y: 0, active: false },
@@ -315,9 +317,10 @@ catch (error) {
 }
 
 function submitToneAcceptance(): void {
-  if (!runtime || runtime.getSnapshot().state !== 'idle') return;
+  if (!knownToneAvailable || !runtime || runtime.getSnapshot().state !== 'idle') return;
   const suffix = Date.now();
   const segmentId = `known-tone-${suffix}`;
+  knownToneSegments.add(segmentId);
   toneAcceptance = {
     segmentId, playerLevels: [], modelLevels: [], traces: [],
     lastLoggedBucket: -1, lastLoggedPhase: '',
@@ -331,7 +334,7 @@ function submitToneAcceptance(): void {
   toneFramePoint.textContent = '正在等待下一屏幕帧';
   toneSyncLog.replaceChildren();
   runtime.dispatch({ type: 'plan.submitted', plan: { id: `known-tone-plan-${suffix}`, segments: [{
-    id: segmentId, sequence: 0, displayText: '先验铃声口型同步验收', speechText: KNOWN_TONE_SPEECH_TEXT,
+    id: segmentId, sequence: 0, displayText: '先验铃声口型同步验收', speechText: '口型同步测试。',
   }] } });
 }
 
@@ -347,18 +350,28 @@ function submitDemo(withAction: boolean): void {
 
 function execute(effect: RuntimeEffect, dispatch: (event: AvatarEvent) => void): void {
   if (ttsEffects?.handle(effect, dispatch)) return;
-  if (effect.type === 'audio.play') {
-    if (effect.source.uri === KNOWN_TONE_STREAM_URI) {
-      return void tonePlayer.play(effect.generation, effect.segmentId, effect.source).catch(error => {
-        failToneAcceptance(error instanceof Error ? error.message : String(error));
-        dispatch({
-          type: 'playback.failed', generation: effect.generation, segmentId: effect.segmentId,
-          error: { code: 'known-tone-playback-failed', message: error instanceof Error ? error.message : String(error), recoverable: true },
-        });
+  if (effect.type === 'speech-bubble.schedule-dismiss') {
+    const existing = speechBubbleDismissTimers.get(effect.presentationId);
+    if (existing) clearTimeout(existing);
+    const timer = setTimeout(() => {
+      speechBubbleDismissTimers.delete(effect.presentationId);
+      dispatch({
+        type: 'runtime.speech-bubble-dismissed',
+        generation: effect.generation,
+        presentationId: effect.presentationId,
       });
-    }
-    if (effect.source.delivery === 'stream' && effect.source.codec === 'pcm_s16le' && !effect.source.uri.startsWith('mock://')) {
+    }, effect.delayMs);
+    speechBubbleDismissTimers.set(effect.presentationId, timer);
+  }
+  else if (effect.type === 'speech-bubble.cancel-dismiss') {
+    const timer = speechBubbleDismissTimers.get(effect.presentationId);
+    if (timer) clearTimeout(timer);
+    speechBubbleDismissTimers.delete(effect.presentationId);
+  }
+  else if (effect.type === 'audio.play') {
+    if (effect.source.delivery === 'stream' && effect.source.codec === 'pcm_s16le') {
       return void audioPlayer?.play(effect.generation, effect.segmentId, effect.source).catch(error => {
+        if (knownToneSegments.has(effect.segmentId)) failToneAcceptance(error instanceof Error ? error.message : String(error));
         dispatch({
           type: 'playback.failed', generation: effect.generation, segmentId: effect.segmentId,
           error: { code: 'pcm-playback-failed', message: error instanceof Error ? error.message : String(error), recoverable: true },
@@ -385,17 +398,14 @@ function execute(effect: RuntimeEffect, dispatch: (event: AvatarEvent) => void):
     }, 50);
   }
   else if (effect.type === 'audio.pause') {
-    tonePlayer.pause(effect.generation);
     audioPlayer?.pause(effect.generation);
   }
   else if (effect.type === 'audio.resume') {
-    tonePlayer.resume(effect.generation);
     audioPlayer?.resume(effect.generation);
   }
   else if (effect.type === 'audio.stop') {
     clearPlayback();
     stopCurrentMotion('interrupted');
-    void tonePlayer.stop(effect.generation);
     void audioPlayer?.stop(effect.generation);
   }
   else if (effect.type === 'renderer.apply-frame') {
@@ -433,30 +443,178 @@ function execute(effect: RuntimeEffect, dispatch: (event: AvatarEvent) => void):
   }
 }
 
-function createTtsAdapter(config: DesktopTtsConfig | undefined): TtsAdapter {
+interface TtsComposition {
+  adapter: TtsAdapter;
+  openStream: PcmStreamResolver;
+  supportsKnownToneFixture: boolean;
+}
+
+function createTtsComposition(config: DesktopTtsConfig | undefined): TtsComposition {
   const logger = new JsonConsoleTtsLogger();
-  const baseAdapter: TtsAdapter = config?.mode === 'mcp' && desktopShell
-    ? new McpTtsAdapter({
-        client: createDesktopShellMcpClient(desktopShell),
-        toolName: config.mcpTool,
-        cancelToolName: config.mcpCancelTool,
-        timeoutMs: config.timeoutMs,
-        requestIdArgument: config.requestIdArgument,
-        textArgument: config.textArgument,
-        providerName: 'qwen3-tts-mcp',
-        formats: [config.format],
-        deliveryModes: ['stream'],
-        logger,
-      })
-    : new MockTtsAdapter({ ...DEFAULT_TTS_CONFIG.mock, logger });
+  const settings = config ?? browserTtsConfig();
+  const baseClient = desktopShell
+    ? createDesktopShellMcpClient(desktopShell)
+    : createBrowserMcpClient(settings.mcpUrl);
+  const supportsKnownToneFixture = settings.mode === 'local';
+  const client = supportsKnownToneFixture
+    ? createKnownToneFixtureMcpClient(baseClient, settings)
+    : baseClient;
+  const adapter = new McpTtsAdapter({
+    client,
+    toolName: settings.mcpTool,
+    cancelToolName: settings.mcpCancelTool,
+    timeoutMs: settings.timeoutMs,
+    requestIdArgument: settings.requestIdArgument,
+    textArgument: settings.textArgument,
+    providerName: settings.mode === 'local' ? 'desktop-char-local-tts' : 'qwen3-tts-mcp',
+    formats: [settings.format],
+    deliveryModes: ['stream'],
+    supportsAmplitude: false,
+    supportsTextCues: false,
+    logger,
+  });
   return {
-    prepare: request => request.text === KNOWN_TONE_SPEECH_TEXT
-      ? Promise.resolve(createKnownToneAudioSource(request.requestId))
-      : baseAdapter.prepare(request),
-    cancel: requestId => baseAdapter.cancel(requestId),
-    capabilities: () => baseAdapter.capabilities(),
-    health: () => baseAdapter.health(),
+    adapter,
+    openStream: (source, signal) => openHttpByteStream(source.uri, signal),
+    supportsKnownToneFixture,
   };
+}
+
+function createKnownToneFixtureMcpClient(
+  client: McpClientPort,
+  config: DesktopTtsConfig,
+): McpClientPort {
+  return {
+    listTools: options => client.listTools(options),
+    callTool(name, args, options) {
+      const requestId = args[config.requestIdArgument];
+      const segmentId = typeof requestId === 'string' ? segmentIdFromRequestId(requestId) : '';
+      return client.callTool(name, name === config.mcpTool && knownToneSegments.has(segmentId)
+        ? { ...args, test_fixture: 'known-tone-v1' }
+        : args, options);
+    },
+  };
+}
+
+function browserTtsConfig(): DesktopTtsConfig {
+  const configuredUrl = new URLSearchParams(location.search).get('ttsMcpUrl') ?? 'http://127.0.0.1:8766/mcp';
+  const url = new URL(configuredUrl);
+  if (url.protocol !== 'http:' || !['127.0.0.1', 'localhost', '::1'].includes(url.hostname)) {
+    throw new Error('Browser test TTS MCP URL must use a loopback HTTP origin');
+  }
+  return {
+    mode: 'local',
+    mcpUrl: url.href,
+    mcpTool: DEFAULT_TTS_CONFIG.mcp.toolName,
+    mcpCancelTool: DEFAULT_TTS_CONFIG.mcp.cancelToolName,
+    timeoutMs: DEFAULT_TTS_CONFIG.mcp.timeoutMs,
+    requestIdArgument: DEFAULT_TTS_CONFIG.mcp.requestIdArgument,
+    textArgument: DEFAULT_TTS_CONFIG.mcp.textArgument,
+    format: DEFAULT_TTS_CONFIG.mcp.format,
+  };
+}
+
+function createBrowserMcpClient(url: string): McpClientPort {
+  const transport = createBrowserStreamableHttpMcpClient(url);
+  return {
+    async listTools(options) {
+      const result = await transport.request('tools/list', {}, options?.timeoutMs ?? 30_000, options?.signal);
+      if (!isRecord(result) || !Array.isArray(result.tools)) throw new Error('MCP tools/list response is malformed');
+      return result.tools as Awaited<ReturnType<McpClientPort['listTools']>>;
+    },
+    async callTool(name, args, options) {
+      return await transport.request('tools/call', { name, arguments: args }, options.timeoutMs, options.signal) as unknown as McpCallToolResult;
+    },
+  };
+}
+
+function createBrowserStreamableHttpMcpClient(url: string) {
+  let sessionId: string | undefined;
+  let initialized: Promise<void> | undefined;
+  let nextId = 1;
+
+  async function request(method: string, params: Record<string, unknown>, timeoutMs: number, signal?: AbortSignal): Promise<Record<string, unknown>> {
+    await ensureInitialized(timeoutMs, signal);
+    const response = await post({ jsonrpc: '2.0', id: nextId++, method, params }, timeoutMs, signal);
+    if (!isRecord(response) || !isRecord(response.result)) throw new Error(`MCP ${method} response has no result`);
+    return response.result;
+  }
+
+  async function ensureInitialized(timeoutMs: number, signal?: AbortSignal): Promise<void> {
+    if (!initialized) initialized = (async () => {
+      const response = await post({
+        jsonrpc: '2.0', id: nextId++, method: 'initialize', params: {
+          protocolVersion: '2025-11-25',
+          capabilities: {},
+          clientInfo: { name: 'desktop-char-browser', version: '0.1.0' },
+        },
+      }, timeoutMs, signal);
+      if (!isRecord(response) || !isRecord(response.result)) throw new Error('MCP initialize response is malformed');
+      await post({ jsonrpc: '2.0', method: 'notifications/initialized' }, timeoutMs, signal, false);
+    })().catch(error => {
+      sessionId = undefined;
+      initialized = undefined;
+      throw error;
+    });
+    return initialized;
+  }
+
+  async function post(
+    message: Record<string, unknown>,
+    timeoutMs: number,
+    externalSignal?: AbortSignal,
+    expectsBody = true,
+  ): Promise<Record<string, unknown> | undefined> {
+    const controller = new AbortController();
+    const timer = setTimeout(() => controller.abort(new DOMException('MCP request timed out', 'TimeoutError')), timeoutMs);
+    const abort = () => controller.abort(externalSignal?.reason ?? new DOMException('MCP request aborted', 'AbortError'));
+    if (externalSignal?.aborted) abort();
+    else externalSignal?.addEventListener('abort', abort, { once: true });
+    try {
+      const response = await fetch(url, {
+        method: 'POST',
+        headers: {
+          'content-type': 'application/json',
+          accept: 'application/json, text/event-stream',
+          ...(sessionId ? { 'mcp-session-id': sessionId, 'mcp-protocol-version': '2025-11-25' } : {}),
+        },
+        body: JSON.stringify(message),
+        signal: controller.signal,
+        cache: 'no-store',
+      });
+      const initializedSessionId = response.headers.get('mcp-session-id');
+      if (initializedSessionId) sessionId = initializedSessionId;
+      if (!response.ok) throw new Error(`MCP HTTP ${response.status}: ${await response.text()}`);
+      if (!expectsBody || response.status === 202) return undefined;
+      const payload = await parseMcpHttpResponse(response);
+      if (isRecord(payload.error)) throw new Error(`MCP error: ${String(payload.error.message ?? 'unknown error')}`);
+      return payload;
+    }
+    finally {
+      clearTimeout(timer);
+      externalSignal?.removeEventListener('abort', abort);
+    }
+  }
+  return { request };
+}
+
+async function parseMcpHttpResponse(response: Response): Promise<Record<string, unknown>> {
+  const text = await response.text();
+  const data = response.headers.get('content-type')?.includes('text/event-stream')
+    ? text.split(/\r?\n/).find(line => line.startsWith('data:'))?.slice(5).trim()
+    : text;
+  const value: unknown = JSON.parse(data ?? 'null');
+  if (!isRecord(value)) throw new Error('MCP HTTP response is not a JSON-RPC object');
+  return value;
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return Boolean(value) && typeof value === 'object' && !Array.isArray(value);
+}
+
+function segmentIdFromRequestId(requestId: string): string {
+  const separator = requestId.indexOf(':');
+  return separator < 0 ? requestId : requestId.slice(separator + 1);
 }
 
 function createDesktopShellMcpClient(shell: NonNullable<typeof desktopShell>): McpClientPort {
@@ -472,17 +630,17 @@ function createDesktopShellMcpClient(shell: NonNullable<typeof desktopShell>): M
   };
 }
 
-function createRuntimeAudioPlayer(dispatch: (event: AvatarEvent) => void): WebAudioPcmStreamPlayer {
-  const player = new WebAudioPcmStreamPlayer({
+function createRuntimeAudioPlayer(openStream: PcmStreamResolver): WebAudioPcmStreamPlayer {
+  return new WebAudioPcmStreamPlayer({
     initialBufferMs: 100, levelIntervalMs: 25, levelWindowMs: 20,
-    async openStream(source, signal) {
-      const response = await fetch(source.uri, { signal, cache: 'no-store' });
-      if (!response.ok || !response.body) throw new Error(`PCM stream failed: HTTP ${response.status}`);
-      return readByteStream(response.body);
-    },
+    openStream,
   });
-  player.subscribe(event => dispatch(event));
-  return player;
+}
+
+async function openHttpByteStream(uri: string, signal: AbortSignal): Promise<AsyncIterable<Uint8Array>> {
+  const response = await fetch(uri, { signal, cache: 'no-store' });
+  if (!response.ok || !response.body) throw new Error(`PCM stream failed: HTTP ${response.status}`);
+  return readByteStream(response.body);
 }
 
 async function* readByteStream(stream: ReadableStream<Uint8Array>): AsyncIterable<Uint8Array> {
@@ -599,7 +757,7 @@ function openAvatarContextMenu(event: MouseEvent): void {
 }
 
 function renderSpeechBubble(snapshot: import('../../../../packages/contracts/src/index.ts').AvatarSnapshot): void {
-  const projection = projectSpeechBubble(snapshot, runtime?.getActiveSegment() ?? null);
+  const projection = projectSpeechBubble(snapshot.speechBubble);
   speechBubble.hidden = !projection.visible;
   speechBubble.dataset.mode = projection.mode;
   speechBubbleLeading.textContent = projection.leadingText;
@@ -644,6 +802,7 @@ function finishToneAcceptance(active: ToneAcceptanceRun): void {
   const metrics = { passed, player, model, response };
   document.body.dataset.toneAcceptance = passed ? 'passed' : 'failed';
   document.body.dataset.toneAcceptanceMetrics = JSON.stringify(metrics);
+  knownToneSegments.delete(active.segmentId);
   toneAcceptance = null;
   if (passed) {
     const maximumTimingError = Math.max(...player.transitionErrorsMs, ...model.transitionErrorsMs);
@@ -654,6 +813,7 @@ function finishToneAcceptance(active: ToneAcceptanceRun): void {
 }
 
 function failToneAcceptance(message: string): void {
+  if (toneAcceptance) knownToneSegments.delete(toneAcceptance.segmentId);
   document.body.dataset.toneAcceptance = 'failed';
   document.body.dataset.toneAcceptanceMetrics = JSON.stringify({ passed: false, issues: [message] });
   toneAcceptance = null;

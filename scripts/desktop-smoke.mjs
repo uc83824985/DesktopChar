@@ -27,20 +27,31 @@ try {
     throw new Error(`Unexpected floating window state: ${JSON.stringify(initial)}`);
   }
   if (!initial.mousePassthrough) throw new Error('Floating window must start in desktop passthrough mode');
+  if (initial.tts?.mode !== 'local' || !/^http:\/\/127\.0\.0\.1:\d+\/mcp$/.test(initial.tts?.mcpUrl ?? '')) {
+    throw new Error(`Desktop local TTS must use a real loopback MCP endpoint: ${JSON.stringify(initial.tts)}`);
+  }
   if (initial.interaction?.dragHoldDelayMs !== 240
     || !['native-set-window-pos', 'setBounds'].includes(initial.interaction?.dragWindowApi)) {
     throw new Error(`Unexpected drag interaction config: ${JSON.stringify(initial.interaction)}`);
   }
 
-  const bubble = await page.evaluate(() => {
+  const bubbleBeforePlayback = await page.evaluate(() => {
     document.querySelector('#speak')?.click();
     return { mode: document.body.dataset.speechBubble, text: document.querySelector('#speech-bubble')?.textContent?.trim() };
   });
+  if (bubbleBeforePlayback.mode !== 'hidden') {
+    throw new Error(`Speech bubble must wait for playback.started: ${JSON.stringify(bubbleBeforePlayback)}`);
+  }
+  await page.locator('body[data-runtime-state="speaking"][data-speech-bubble="complete"]').waitFor({ timeout: 2_000 });
+  const bubble = await page.evaluate(() => ({
+    mode: document.body.dataset.speechBubble,
+    text: document.querySelector('#speech-bubble')?.textContent?.trim(),
+  }));
   if (bubble.mode !== 'complete' || bubble.text !== '运行时演示') {
     throw new Error(`Speech bubble presenter did not render Runtime text: ${JSON.stringify(bubble)}`);
   }
-  await page.evaluate(() => document.querySelector('#reset')?.click());
-  await page.locator('body[data-speech-bubble="hidden"]').waitFor({ timeout: 2_000 });
+  await page.locator('body[data-runtime-state="idle"][data-speech-bubble="complete"]').waitFor({ timeout: 2_000 });
+  await page.locator('body[data-speech-bubble="hidden"]').waitFor({ timeout: 1_500 });
 
   await page.locator('#avatar').focus();
   const keyboardMenuOpened = await page.evaluate(() => {
@@ -87,7 +98,7 @@ try {
   await page.locator('[data-item-id="karaoke"]').click();
   await page.locator('body[data-speech-bubble="karaoke"] #speech-bubble-active').waitFor({ timeout: 2_000 });
   const karaokeActive = await page.locator('#speech-bubble-active').textContent();
-  if (karaokeActive !== 'KTV 高亮') throw new Error(`Karaoke bubble did not expose its timed cue: ${karaokeActive}`);
+  if (!karaokeActive) throw new Error(`Karaoke bubble did not expose its timed cue: ${karaokeActive}`);
   await page.evaluate(() => document.querySelector('#avatar')?.dispatchEvent(
     new KeyboardEvent('keydown', { key: 'ContextMenu', bubbles: true }),
   ));

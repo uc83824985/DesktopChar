@@ -7,8 +7,10 @@ test('Mao character profile compensates its stronger authored downward head defo
   assert.equal(MAO_CHARACTER_CONFIG.gazeProfile.headY.positive.limit, 30);
 });
 
-test('loads offline mock defaults and MCP binding variables', () => {
-  assert.equal(loadTtsConfig({}).mode, 'mock');
+test('loads local MCP defaults and remote MCP binding variables', () => {
+  const defaults = loadTtsConfig({});
+  assert.equal(defaults.mode, 'local');
+  assert.deepEqual({ host: defaults.local.host, port: defaults.local.port }, { host: '127.0.0.1', port: 8766 });
   const config = loadTtsConfig({
     DESKTOP_CHAR_TTS_MODE: 'mcp', DESKTOP_CHAR_TTS_MCP_TOOL: 'voice.generate',
     DESKTOP_CHAR_TTS_MCP_CANCEL_TOOL: 'voice.cancel',
@@ -23,8 +25,10 @@ test('loads offline mock defaults and MCP binding variables', () => {
 });
 
 test('rejects invalid TTS environment values', () => {
-  assert.throws(() => loadTtsConfig({ DESKTOP_CHAR_TTS_MODE: 'http' }), /mock or mcp/);
+  assert.throws(() => loadTtsConfig({ DESKTOP_CHAR_TTS_MODE: 'http' }), /local or mcp/);
   assert.throws(() => loadTtsConfig({ DESKTOP_CHAR_TTS_TIMEOUT_MS: '0' }), /positive/);
   assert.throws(() => loadTtsConfig({ DESKTOP_CHAR_TTS_FORMAT: 'aac' }), /pcm_s16le/);
-  assert.throws(() => loadTtsConfig({ DESKTOP_CHAR_TTS_MOCK_DELIVERY: 'chunks' }), /stream or artifact/);
+  assert.throws(() => loadTtsConfig({ DESKTOP_CHAR_TTS_LOCAL_DELAY_MS: '-1' }), /non-negative/);
+  assert.throws(() => loadTtsConfig({ DESKTOP_CHAR_TTS_LOCAL_MCP_HOST: '0.0.0.0' }), /loopback/);
+  assert.throws(() => loadTtsConfig({ DESKTOP_CHAR_TTS_LOCAL_MCP_PORT: '70000' }), /65535/);
 });

@@ -1,5 +1,9 @@
 import { spawn } from 'node:child_process';
 import { chromium } from 'playwright-core';
+import { createLocalTtsMcpService } from '../local-tts-mcp/service.mjs';
+
+const ttsService = createLocalTtsMcpService({ port: 0, delayMs: 0, chunkDelayMs: 1 });
+const ttsAddress = await ttsService.listen();
 
 const server = spawn(process.execPath, ['node_modules/vite/bin/vite.js', 'preview', 'apps/desktop', '--config', 'apps/desktop/vite.config.ts'], {
   stdio: ['ignore', 'pipe', 'pipe'],
@@ -19,7 +23,7 @@ try {
     if (message.type() === 'error' && !message.text().includes('404')) errors.push(message.text());
   });
   page.on('pageerror', error => errors.push(error.stack ?? error.message));
-  await page.goto('http://127.0.0.1:4173', { waitUntil: 'networkidle' });
+  await page.goto(`http://127.0.0.1:4173/?ttsMcpUrl=${encodeURIComponent(ttsAddress.mcpUrl)}`, { waitUntil: 'networkidle' });
   await page.locator('body[data-ready="true"]').waitFor({ timeout: 20_000 });
   await page.locator('body[data-tts-health="ready"]').waitFor({ timeout: 5_000 });
   await page.getByRole('button', { name: '口型同步验收' }).click();
@@ -44,7 +48,7 @@ try {
   await page.locator('body[data-runtime-state="idle"]').waitFor({ timeout: 3_000 });
   await page.locator('body[data-gaze-follow="enabled"]').waitFor({ timeout: 1_000 });
 
-  await page.getByRole('button', { name: '模拟说话' }).click();
+  await page.getByRole('button', { name: '本地语音测试' }).click();
   await page.locator('body[data-runtime-state="speaking"]').waitFor({ timeout: 2_000 });
   await page.locator('body[data-runtime-state="idle"]').waitFor({ timeout: 3_000 });
 
@@ -83,6 +87,7 @@ catch (error) {
 finally {
   await browser?.close();
   server.kill();
+  await ttsService.close();
 }
 
 async function waitForServer(url, timeoutMs) {

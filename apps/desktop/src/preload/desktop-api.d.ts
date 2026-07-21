@@ -60,7 +60,7 @@ export interface AgentRuntimeState {
 }
 
 export interface DesktopTtsConfig {
-  mode: 'mock' | 'mcp';
+  mode: 'local' | 'mcp';
   mcpUrl: string;
   mcpTool: string;
   mcpCancelTool: string;

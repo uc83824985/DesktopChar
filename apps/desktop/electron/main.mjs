@@ -16,6 +16,7 @@ import {
 import { createAgentHttpServer, parseAgentPort } from './agent-http-server.mjs';
 import { createNativeCursorRefresh } from './cursor-refresh.mjs';
 import { createNativeWindowPosition } from './native-window-position.mjs';
+import { createLocalTtsMcpService } from '../../../local-tts-mcp/service.mjs';
 
 const directory = path.dirname(fileURLToPath(import.meta.url));
 const rendererRoot = path.resolve(directory, '../dist');
@@ -71,6 +72,7 @@ let dragState = null;
 let pointerPresentation = { passthrough: true, cursor: 'default' };
 let pointerPresentationApplied = false;
 let mcpSession = null;
+let localTtsService = null;
 const nativeCursorRefresh = createNativeCursorRefresh();
 const nativeWindowPosition = createNativeWindowPosition();
 const requestedDragWindowApi = process.env.DESKTOP_CHAR_DRAG_WINDOW_API ?? 'auto';
@@ -80,18 +82,29 @@ if (!['auto', 'native', 'setBounds'].includes(requestedDragWindowApi)) {
 const dragWindowApi = requestedDragWindowApi !== 'setBounds' && nativeWindowPosition.available
   ? 'native-set-window-pos'
   : 'setBounds';
-const ttsMode = process.env.DESKTOP_CHAR_TTS_MODE ?? 'mock';
-const ttsMcpUrl = process.env.DESKTOP_CHAR_TTS_MCP_URL ?? 'http://127.0.0.1:8766/mcp';
+const ttsMode = process.env.DESKTOP_CHAR_TTS_MODE ?? 'local';
+if (!['local', 'mcp'].includes(ttsMode)) throw new TypeError('DESKTOP_CHAR_TTS_MODE must be local or mcp');
+let activeTtsMcpUrl = process.env.DESKTOP_CHAR_TTS_MCP_URL ?? 'http://127.0.0.1:8766/mcp';
+const localTtsConfig = Object.freeze({
+  delayMs: environmentNumber('DESKTOP_CHAR_TTS_LOCAL_DELAY_MS', 15, true),
+  durationPerCharacterMs: environmentNumber('DESKTOP_CHAR_TTS_LOCAL_CHAR_MS', 90),
+  minimumDurationMs: environmentNumber('DESKTOP_CHAR_TTS_LOCAL_MIN_MS', 500),
+  amplitudeIntervalMs: environmentNumber('DESKTOP_CHAR_TTS_LOCAL_AMPLITUDE_MS', 50),
+  sampleRateHz: environmentNumber('DESKTOP_CHAR_TTS_SAMPLE_RATE_HZ', 24_000),
+  channels: environmentNumber('DESKTOP_CHAR_TTS_CHANNELS', 1),
+});
+const ttsContext = {
+  requestedMode: ttsMode,
+  activeMode: 'mcp',
+  provider: ttsMode === 'local' ? 'desktop-char-local-tts' : 'external',
+  mcpTool: process.env.DESKTOP_CHAR_TTS_MCP_TOOL ?? 'tts_open_stream',
+  mcpCancelTool: process.env.DESKTOP_CHAR_TTS_MCP_CANCEL_TOOL ?? 'tts_cancel_synthesis',
+  transport: ttsMode === 'local' ? 'starting' : activeTtsMcpUrl,
+};
 const agentServer = createAgentHttpServer({
   host: '127.0.0.1',
   port: parseAgentPort(process.env.DESKTOP_CHAR_AGENT_PORT),
-  ttsContext: {
-    requestedMode: ttsMode,
-    activeMode: ttsMode === 'mcp' ? 'mcp' : 'mock',
-    mcpTool: process.env.DESKTOP_CHAR_TTS_MCP_TOOL ?? 'tts_open_stream',
-    mcpCancelTool: process.env.DESKTOP_CHAR_TTS_MCP_CANCEL_TOOL ?? 'tts_cancel_synthesis',
-    transport: ttsMode === 'mcp' ? ttsMcpUrl : 'mock',
-  },
+  ttsContext,
   onCommand(command) { avatarWindow?.webContents.send(channels.agentCommand, command); },
 });
 
@@ -100,11 +113,25 @@ if (!hasSingleInstanceLock) app.quit();
 else {
   app.on('second-instance', () => avatarWindow?.showInactive());
   app.whenReady().then(async () => {
+    if (ttsMode === 'local') {
+      localTtsService = createLocalTtsMcpService({
+        host: process.env.DESKTOP_CHAR_TTS_LOCAL_MCP_HOST ?? '127.0.0.1',
+        port: environmentPort('DESKTOP_CHAR_TTS_LOCAL_MCP_PORT', 0),
+        ...localTtsConfig,
+      });
+      const address = await localTtsService.listen();
+      activeTtsMcpUrl = address.mcpUrl;
+      ttsContext.transport = activeTtsMcpUrl;
+      safeLog(`[local-tts-mcp] listening on ${activeTtsMcpUrl}`);
+    }
     if (!devUrl) registerRendererProtocol();
     registerIpc();
     createAvatarWindow();
     const address = await agentServer.listen();
     safeLog(`[agent-http] listening on http://127.0.0.1:${address.port}`);
+  }).catch(error => {
+    safeError('[desktop-char] startup failed', error);
+    app.quit();
   });
 }
 
@@ -113,7 +140,9 @@ app.on('before-quit', () => {
   if (cursorTimer) clearInterval(cursorTimer);
   if (cursorRefreshTimer) clearTimeout(cursorRefreshTimer);
   void agentServer.close().catch(() => {});
-  void closeMcpSession().catch(() => {});
+  void closeMcpSession()
+    .finally(() => localTtsService?.close())
+    .catch(() => {});
 });
 
 function registerRendererProtocol() {
@@ -260,7 +289,6 @@ function registerIpc() {
   });
   ipcMain.handle(channels.mcpListTools, async event => {
     requireAvatarSender(event);
-    if (ttsMode !== 'mcp') throw new Error('TTS MCP mode is not enabled');
     const session = await getMcpSession();
     const result = await session.client.listTools(undefined, { timeout: 10_000 });
     return result.tools.map(tool => ({
@@ -272,7 +300,6 @@ function registerIpc() {
   });
   ipcMain.handle(channels.mcpCallTool, async (event, name, args, options) => {
     requireAvatarSender(event);
-    if (ttsMode !== 'mcp') throw new Error('TTS MCP mode is not enabled');
     if (typeof name !== 'string' || !name.trim() || !isPlainRecord(args)) throw new TypeError('Invalid MCP tool call');
     const session = await getMcpSession();
     return session.client.callTool({ name, arguments: args }, undefined, { timeout: options?.timeoutMs ?? 30_000 });
@@ -281,7 +308,7 @@ function registerIpc() {
 
 async function getMcpSession() {
   if (mcpSession) return mcpSession;
-  const transport = new StreamableHTTPClientTransport(new URL(ttsMcpUrl));
+  const transport = new StreamableHTTPClientTransport(new URL(activeTtsMcpUrl));
   const client = new Client({ name: 'desktop-char', version: app.getVersion() });
   await client.connect(transport);
   mcpSession = { client, transport };
@@ -368,7 +395,7 @@ function windowState() {
     interaction: { dragHoldDelayMs, dragWindowApi },
     tts: {
       mode: ttsMode,
-      mcpUrl: ttsMcpUrl,
+      mcpUrl: activeTtsMcpUrl,
       mcpTool: process.env.DESKTOP_CHAR_TTS_MCP_TOOL ?? 'tts_open_stream',
       mcpCancelTool: process.env.DESKTOP_CHAR_TTS_MCP_CANCEL_TOOL ?? 'tts_cancel_synthesis',
       timeoutMs: Number(process.env.DESKTOP_CHAR_TTS_TIMEOUT_MS ?? 30_000),
@@ -391,4 +418,24 @@ function isAgentState(value) {
 
 function isPlainRecord(value) {
   return value && typeof value === 'object' && !Array.isArray(value);
+}
+
+function environmentNumber(name, fallback, allowZero = false) {
+  const value = process.env[name];
+  if (value === undefined) return fallback;
+  const parsed = Number(value);
+  if (!Number.isFinite(parsed) || (allowZero ? parsed < 0 : parsed <= 0)) {
+    throw new TypeError(`${name} must be ${allowZero ? 'non-negative' : 'positive'}`);
+  }
+  return parsed;
+}
+
+function environmentPort(name, fallback) {
+  const value = process.env[name];
+  if (value === undefined || value === '') return fallback;
+  const parsed = Number(value);
+  if (!Number.isInteger(parsed) || parsed < 0 || parsed > 65_535) {
+    throw new TypeError(`${name} must be an integer from 0 to 65535`);
+  }
+  return parsed;
 }

@@ -1,7 +1,4 @@
-import type { AmplitudeSample, AudioStreamSource } from '../../contracts/src/index.ts';
-
-export const KNOWN_TONE_STREAM_URI = 'fixture://desktop-char/known-tone/v1';
-export const KNOWN_TONE_SPEECH_TEXT = '[desktop-char:known-tone-v1]';
+import type { AmplitudeSample } from '../../contracts/src/index.ts';
 export const KNOWN_TONE_SAMPLE_RATE_HZ = 24_000;
 export const KNOWN_TONE_CHANNELS = 1;
 export const KNOWN_TONE_DURATION_MS = 1_600;
@@ -61,15 +58,6 @@ export interface KnownToneResponseTimingResult {
   p95ModelResponseMs: number | null;
   maximumFrameResponseMs: number | null;
   p95FrameResponseMs: number | null;
-}
-
-export function createKnownToneAudioSource(requestId: string): AudioStreamSource {
-  return {
-    delivery: 'stream', requestId, uri: KNOWN_TONE_STREAM_URI,
-    mimeType: 'audio/pcm', codec: 'pcm_s16le',
-    sampleRateHz: KNOWN_TONE_SAMPLE_RATE_HZ, channels: KNOWN_TONE_CHANNELS,
-    durationMs: KNOWN_TONE_DURATION_MS,
-  };
 }
 
 export async function* createKnownTonePcmStream(

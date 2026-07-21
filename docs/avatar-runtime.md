@@ -217,6 +217,7 @@ UI 不负责：
 - 音频资源和 object URL 清理；
 - 增量消费 HTTP 音频流并管理首播缓冲、欠载和背压；
 - 从实际输出采样计算 `playback.level`，artifact 模式可使用 amplitude envelope；
+- 使用 Web Audio 输出时间线发出 `playback.started/progress/completed`，供嘴型、Timeline 和冒泡共享；
 - 将媒体事实转换为 PlaybackEvent。
 
 播放器不负责：
@@ -231,7 +232,7 @@ UI 不负责：
 TTS Adapter 负责：
 
 - 把纯文本准备为流式优先的 AudioSource，默认要求服务返回可立即打开的流描述；
-- 保留可选 viseme 或 amplitude 数据；
+- 保留可选 viseme、amplitude 或字词 `textCues` 数据；
 - 通过 requestId、AbortSignal 和 provider cancel 工具取消；
 - 报告 segment ready、failed 和 plan completed。
 

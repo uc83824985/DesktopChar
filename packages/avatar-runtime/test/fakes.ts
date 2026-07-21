@@ -10,6 +10,11 @@ interface PendingTts {
   dispatch: (event: AvatarEvent) => void;
 }
 
+interface PendingBubbleDismissal {
+  effect: Extract<RuntimeEffect, { type: 'speech-bubble.schedule-dismiss' }>;
+  dispatch: (event: AvatarEvent) => void;
+}
+
 export class ControlledEffects implements RuntimeEffectExecutor {
   readonly pendingTts = new Map<number, PendingTts>();
   readonly playedSegments: string[] = [];
@@ -17,6 +22,8 @@ export class ControlledEffects implements RuntimeEffectExecutor {
   readonly motions: string[] = [];
   readonly cancelledGenerations: number[] = [];
   readonly stoppedGenerations: number[] = [];
+  readonly pendingBubbleDismissals = new Map<number, PendingBubbleDismissal>();
+  readonly cancelledBubbleDismissals: number[] = [];
   private current: {
     generation: number;
     segmentId: string;
@@ -65,6 +72,13 @@ export class ControlledEffects implements RuntimeEffectExecutor {
       case 'audio.stop':
         this.stoppedGenerations.push(effect.generation);
         this.current = null;
+        break;
+      case 'speech-bubble.schedule-dismiss':
+        this.pendingBubbleDismissals.set(effect.presentationId, { effect, dispatch });
+        break;
+      case 'speech-bubble.cancel-dismiss':
+        this.pendingBubbleDismissals.delete(effect.presentationId);
+        this.cancelledBubbleDismissals.push(effect.presentationId);
         break;
       case 'renderer.apply-frame':
         this.frames.push(effect.frame);
@@ -125,6 +139,17 @@ export class ControlledEffects implements RuntimeEffectExecutor {
       generation: current.generation,
       segmentId: current.segmentId,
       positionMs,
+    });
+  }
+
+  dismissBubble(presentationId: number): void {
+    const pending = this.pendingBubbleDismissals.get(presentationId);
+    if (!pending) throw new Error(`No pending speech bubble dismissal for ${presentationId}`);
+    this.pendingBubbleDismissals.delete(presentationId);
+    pending.dispatch({
+      type: 'runtime.speech-bubble-dismissed',
+      generation: pending.effect.generation,
+      presentationId,
     });
   }
 }

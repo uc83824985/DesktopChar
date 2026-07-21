@@ -28,13 +28,14 @@ export const MAO_CHARACTER_CONFIG: CharacterConfig = {
 };
 
 export interface TtsConfig {
-  mode: 'mock' | 'mcp';
-  mock: {
+  mode: 'local' | 'mcp';
+  local: {
+    host: '127.0.0.1' | 'localhost' | '::1';
+    port: number;
     delayMs: number;
     durationPerCharacterMs: number;
     minimumDurationMs: number;
     amplitudeIntervalMs: number;
-    delivery: 'stream' | 'artifact';
     sampleRateHz: number;
     channels: number;
   };
@@ -50,14 +51,14 @@ export interface TtsConfig {
 }
 
 export const DEFAULT_TTS_CONFIG: TtsConfig = {
-  mode: 'mock',
-  mock: { delayMs: 15, durationPerCharacterMs: 90, minimumDurationMs: 500, amplitudeIntervalMs: 50, delivery: 'stream', sampleRateHz: 24_000, channels: 1 },
+  mode: 'local',
+  local: { host: '127.0.0.1', port: 8766, delayMs: 15, durationPerCharacterMs: 90, minimumDurationMs: 500, amplitudeIntervalMs: 50, sampleRateHz: 24_000, channels: 1 },
   mcp: { toolName: 'tts_open_stream', cancelToolName: 'tts_cancel_synthesis', timeoutMs: 30_000, requestIdArgument: 'request_id', textArgument: 'text', format: 'pcm_s16le' },
 };
 
 export function loadTtsConfig(values: Record<string, string | undefined>): TtsConfig {
   const mode = values.DESKTOP_CHAR_TTS_MODE ?? DEFAULT_TTS_CONFIG.mode;
-  if (mode !== 'mock' && mode !== 'mcp') throw new Error('DESKTOP_CHAR_TTS_MODE must be mock or mcp');
+  if (mode !== 'local' && mode !== 'mcp') throw new Error('DESKTOP_CHAR_TTS_MODE must be local or mcp');
   const mcp: TtsConfig['mcp'] = {
     toolName: values.DESKTOP_CHAR_TTS_MCP_TOOL ?? DEFAULT_TTS_CONFIG.mcp.toolName,
     cancelToolName: values.DESKTOP_CHAR_TTS_MCP_CANCEL_TOOL ?? DEFAULT_TTS_CONFIG.mcp.cancelToolName,
@@ -69,14 +70,15 @@ export function loadTtsConfig(values: Record<string, string | undefined>): TtsCo
   if (values.DESKTOP_CHAR_TTS_VOICE) mcp.voice = values.DESKTOP_CHAR_TTS_VOICE;
   return {
     mode,
-    mock: {
-      delayMs: environmentNumber(values.DESKTOP_CHAR_TTS_MOCK_DELAY_MS, DEFAULT_TTS_CONFIG.mock.delayMs, 'DESKTOP_CHAR_TTS_MOCK_DELAY_MS', true),
-      durationPerCharacterMs: environmentNumber(values.DESKTOP_CHAR_TTS_MOCK_CHAR_MS, DEFAULT_TTS_CONFIG.mock.durationPerCharacterMs, 'DESKTOP_CHAR_TTS_MOCK_CHAR_MS'),
-      minimumDurationMs: environmentNumber(values.DESKTOP_CHAR_TTS_MOCK_MIN_MS, DEFAULT_TTS_CONFIG.mock.minimumDurationMs, 'DESKTOP_CHAR_TTS_MOCK_MIN_MS'),
-      amplitudeIntervalMs: environmentNumber(values.DESKTOP_CHAR_TTS_MOCK_AMPLITUDE_MS, DEFAULT_TTS_CONFIG.mock.amplitudeIntervalMs, 'DESKTOP_CHAR_TTS_MOCK_AMPLITUDE_MS'),
-      delivery: mockDelivery(values.DESKTOP_CHAR_TTS_MOCK_DELIVERY),
-      sampleRateHz: environmentNumber(values.DESKTOP_CHAR_TTS_SAMPLE_RATE_HZ, DEFAULT_TTS_CONFIG.mock.sampleRateHz, 'DESKTOP_CHAR_TTS_SAMPLE_RATE_HZ'),
-      channels: environmentNumber(values.DESKTOP_CHAR_TTS_CHANNELS, DEFAULT_TTS_CONFIG.mock.channels, 'DESKTOP_CHAR_TTS_CHANNELS'),
+    local: {
+      host: loopbackHost(values.DESKTOP_CHAR_TTS_LOCAL_MCP_HOST),
+      port: environmentPort(values.DESKTOP_CHAR_TTS_LOCAL_MCP_PORT, DEFAULT_TTS_CONFIG.local.port),
+      delayMs: environmentNumber(values.DESKTOP_CHAR_TTS_LOCAL_DELAY_MS, DEFAULT_TTS_CONFIG.local.delayMs, 'DESKTOP_CHAR_TTS_LOCAL_DELAY_MS', true),
+      durationPerCharacterMs: environmentNumber(values.DESKTOP_CHAR_TTS_LOCAL_CHAR_MS, DEFAULT_TTS_CONFIG.local.durationPerCharacterMs, 'DESKTOP_CHAR_TTS_LOCAL_CHAR_MS'),
+      minimumDurationMs: environmentNumber(values.DESKTOP_CHAR_TTS_LOCAL_MIN_MS, DEFAULT_TTS_CONFIG.local.minimumDurationMs, 'DESKTOP_CHAR_TTS_LOCAL_MIN_MS'),
+      amplitudeIntervalMs: environmentNumber(values.DESKTOP_CHAR_TTS_LOCAL_AMPLITUDE_MS, DEFAULT_TTS_CONFIG.local.amplitudeIntervalMs, 'DESKTOP_CHAR_TTS_LOCAL_AMPLITUDE_MS'),
+      sampleRateHz: environmentNumber(values.DESKTOP_CHAR_TTS_SAMPLE_RATE_HZ, DEFAULT_TTS_CONFIG.local.sampleRateHz, 'DESKTOP_CHAR_TTS_SAMPLE_RATE_HZ'),
+      channels: environmentNumber(values.DESKTOP_CHAR_TTS_CHANNELS, DEFAULT_TTS_CONFIG.local.channels, 'DESKTOP_CHAR_TTS_CHANNELS'),
     },
     mcp,
   };
@@ -95,8 +97,17 @@ function audioFormat(value: string | undefined): TtsConfig['mcp']['format'] {
   throw new Error('DESKTOP_CHAR_TTS_FORMAT must be wav, mp3, ogg, opus, pcm_s16le, or pcm_f32le');
 }
 
-function mockDelivery(value: string | undefined): TtsConfig['mock']['delivery'] {
-  const delivery = value ?? DEFAULT_TTS_CONFIG.mock.delivery;
-  if (delivery === 'stream' || delivery === 'artifact') return delivery;
-  throw new Error('DESKTOP_CHAR_TTS_MOCK_DELIVERY must be stream or artifact');
+function loopbackHost(value: string | undefined): TtsConfig['local']['host'] {
+  const host = value ?? DEFAULT_TTS_CONFIG.local.host;
+  if (host === '127.0.0.1' || host === 'localhost' || host === '::1') return host;
+  throw new Error('DESKTOP_CHAR_TTS_LOCAL_MCP_HOST must be a loopback host');
+}
+
+function environmentPort(value: string | undefined, fallback: number): number {
+  if (value === undefined || value === '') return fallback;
+  const parsed = Number(value);
+  if (!Number.isInteger(parsed) || parsed < 0 || parsed > 65_535) {
+    throw new Error('DESKTOP_CHAR_TTS_LOCAL_MCP_PORT must be an integer from 0 to 65535');
+  }
+  return parsed;
 }

@@ -5,7 +5,6 @@ import {
   KNOWN_TONE_DURATION_MS,
   KNOWN_TONE_PULSES,
   KNOWN_TONE_SAMPLE_RATE_HZ,
-  createKnownToneAudioSource,
   createKnownTonePcmStream,
   evaluateKnownToneAcceptance,
   evaluateKnownToneResponseTiming,
@@ -13,8 +12,6 @@ import {
 } from '../src/known-tone-fixture.ts';
 
 test('known tone fixture produces deterministic 24kHz mono PCM with expected levels', async () => {
-  const source = createKnownToneAudioSource('known-tone-test');
-  assert.equal(source.amplitude, undefined, 'acceptance must derive level from PCM rather than metadata');
   const pcm = await collectKnownTone();
   assert.equal(pcm.byteLength, KNOWN_TONE_SAMPLE_RATE_HZ * KNOWN_TONE_DURATION_MS / 1_000 * 2);
 

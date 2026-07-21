@@ -20,10 +20,12 @@ export function createAgentHttpServer(options) {
           presentation: {
             speechBubbleModes: ['complete', 'stream', 'karaoke'],
             supportsAuthoredCues: true,
+            playbackGated: true,
+            defaultDismissDelayMs: 800,
             textInput: 'complete-plan',
           },
           avatar: currentState.snapshot?.capabilities ?? null,
-          tts: options.ttsContext ?? { mode: 'mock' },
+          tts: options.ttsContext ?? { requestedMode: 'local', activeMode: 'mcp', provider: 'desktop-char-local-tts' },
         });
       }
       if (request.method === 'GET' && url.pathname === '/v1/state') return json(response, 200, currentState);
@@ -92,6 +94,9 @@ function validateBubble(value, displayText, segmentIndex) {
   if (!isRecord(value) || !modes.has(value.mode)) throw bad('invalid-segment', `segments[${segmentIndex}].bubble.mode is invalid`);
   if (value.charactersPerSecond !== undefined && (!Number.isFinite(value.charactersPerSecond) || value.charactersPerSecond <= 0)) {
     throw bad('invalid-segment', `segments[${segmentIndex}].bubble.charactersPerSecond must be positive`);
+  }
+  if (value.dismissDelayMs !== undefined && (!Number.isFinite(value.dismissDelayMs) || value.dismissDelayMs < 0)) {
+    throw bad('invalid-segment', `segments[${segmentIndex}].bubble.dismissDelayMs must be non-negative`);
   }
   if (value.cues === undefined) return;
   if (!Array.isArray(value.cues)) throw bad('invalid-segment', `segments[${segmentIndex}].bubble.cues must be an array`);

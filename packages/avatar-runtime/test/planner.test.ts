@@ -40,6 +40,13 @@ test('planner rejects malformed speech bubble timing', () => {
       bubble: { mode: 'karaoke', cues: [{ text: '不匹配', atMs: 0 }] },
     }],
   }, capabilities), /concatenate to displayText/);
+  assert.throws(() => new DefaultAvatarPlanner().normalize({
+    id: 'bad-dismiss',
+    segments: [{
+      id: 's', sequence: 0, displayText: '你好', speechText: '你好',
+      bubble: { mode: 'complete', dismissDelayMs: -1 },
+    }],
+  }, capabilities), /dismissDelayMs must be non-negative/);
 });
 
 test('planner rejects duplicate sequencing identities', () => {

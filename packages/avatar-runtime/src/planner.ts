@@ -75,6 +75,9 @@ function validateSpeechBubble(segment: PerformanceSegment): void {
   if (bubble.charactersPerSecond !== undefined && (!Number.isFinite(bubble.charactersPerSecond) || bubble.charactersPerSecond <= 0)) {
     throw new Error('Speech bubble charactersPerSecond must be positive');
   }
+  if (bubble.dismissDelayMs !== undefined && (!Number.isFinite(bubble.dismissDelayMs) || bubble.dismissDelayMs < 0)) {
+    throw new Error('Speech bubble dismissDelayMs must be non-negative');
+  }
   if (!bubble.cues) return;
   let previousAtMs = -1;
   let combined = '';

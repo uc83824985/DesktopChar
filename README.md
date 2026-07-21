@@ -12,6 +12,7 @@
 - `packages/audio-runtime`：真实播放时钟接口。
 - `packages/tts-mcp-adapter`：TTS MCP 输出适配。
 - `packages/transport`、`packages/config`：传输和配置边界。
+- `local-tts-mcp`：可独立运行的真实 Streamable HTTP MCP/HTTP PCM 参考服务；仅合成模型由确定性测试生成器替代。
 
 详细设计见 [架构文档](docs/architecture.md)、[Avatar Runtime](docs/avatar-runtime.md) 和 [Scene Engine 抽象](docs/scene-engine.md)。
 
@@ -19,7 +20,7 @@
 动态场景 UI 使用与 Scene Frame 同 revision 的框架无关 Surface，参考项目取舍和引擎/应用边界见 [桌面 UI 引擎层设计](docs/desktop-ui-engine.md)。
 角色语音可通过应用层聊天冒泡以完整、渐进追加或 KTV 高亮方式投影，契约和 Agent 示例见 [角色语音聊天冒泡](docs/speech-bubble.md)。
 
-TTS Mock、流式 MCP/HTTP 绑定和真实服务接入契约见 [TTS Adapter 文档](docs/tts-adapter.md)；Qwen3-TTS 当前公开推理接口的流式能力核对见 [Qwen3-TTS 阅读记录](docs/references/qwen3-tts.md)。
+可独立运行的样例见 [Local TTS MCP reference service](local-tts-mcp/README.md)；Adapter、流式 MCP/HTTP 绑定和真实服务接入契约见 [TTS Adapter 文档](docs/tts-adapter.md)；MCP 侧新增语速、sample 时间线和可选生成事件时参照 [Qwen3-TTS MCP 流式扩展说明](docs/tts-mcp-streaming-extension.md)；Qwen3-TTS 当前公开推理接口的流式能力核对见 [Qwen3-TTS 阅读记录](docs/references/qwen3-tts.md)。
 
 外部 Agent 可通过 Electron 随附的 loopback HTTP 控制面提交完整表演计划、发起中断并轮询 Runtime 状态；协议、PowerShell 示例与 TTS MCP 注入边界见 [外部 Agent 本地 HTTP 接入指南](docs/external-agent-http.md)。
 
@@ -32,7 +33,9 @@ npm install
 npm start
 ```
 
-浏览器会自动打开 `http://127.0.0.1:5173`。看到“Runtime 已就绪”后，可测试模拟说话、动作事件和鼠标视线跟随。UI 只向 Runtime 提交事件，模型参数由 Runtime Effects 驱动。
+`npm start` 会同时启动根目录的本地 TTS MCP 服务和网页前台；`npm run desktop` 则由 Electron 自动在随机 loopback 端口启动同一服务实现。
+
+浏览器会自动打开 `http://127.0.0.1:5173`。看到“Runtime 已就绪”后，可测试本地 MCP 语音、动作事件和鼠标视线跟随。UI 只向 Runtime 提交事件，模型参数由 Runtime Effects 驱动。
 
 “口型同步验收”会播放一段先验已知的三段式 PCM 提示音，实时显示播放端、Mao 嘴部参数和 Pixi 渲染帧的响应时差，并将这些时差纳入自动验收；规则见 [先验铃声流与口型时点验收](docs/audio-lip-sync-acceptance.md)。
 

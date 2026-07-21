@@ -18,6 +18,7 @@ export interface TtsRuntimeEffectHandlerOptions {
 
 export class TtsRuntimeEffectHandler {
   private readonly pending = new Map<number, Set<PendingPreparation>>();
+  private readonly requestIds = new Map<number, Set<string>>();
   private readonly adapter: TtsAdapter;
   private readonly requestDefaults: TtsRuntimeEffectHandlerOptions;
 
@@ -29,6 +30,12 @@ export class TtsRuntimeEffectHandler {
   handle(effect: RuntimeEffect, dispatch: (event: AvatarEvent) => void): boolean {
     if (effect.type === 'tts.synthesize') {
       const requestId = `g${effect.generation}:${effect.segment.id}`;
+      for (const generation of this.requestIds.keys()) {
+        if (generation < effect.generation) this.requestIds.delete(generation);
+      }
+      const requestIds = this.requestIds.get(effect.generation) ?? new Set<string>();
+      requestIds.add(requestId);
+      this.requestIds.set(effect.generation, requestIds);
       const preparation = { requestId, controller: new AbortController() };
       const group = this.pending.get(effect.generation) ?? new Set<PendingPreparation>();
       group.add(preparation);
@@ -46,6 +53,8 @@ export class TtsRuntimeEffectHandler {
       })
         .then(audio => dispatch({ type: 'tts.segment-ready', generation: effect.generation, segmentId: effect.segment.id, sequence: effect.segment.sequence, audio }))
         .catch(cause => {
+          requestIds.delete(requestId);
+          if (!requestIds.size) this.requestIds.delete(effect.generation);
           const error = normalizeError(cause);
           dispatch({ type: 'tts.segment-failed', generation: effect.generation, segmentId: effect.segment.id, sequence: effect.segment.sequence,
             error: { code: error.code, message: error.message, recoverable: error.recoverable } });
@@ -59,9 +68,12 @@ export class TtsRuntimeEffectHandler {
     if (effect.type === 'tts.cancel') {
       for (const preparation of this.pending.get(effect.generation) ?? []) {
         preparation.controller.abort();
-        void this.adapter.cancel(preparation.requestId).catch(() => undefined);
+      }
+      for (const requestId of this.requestIds.get(effect.generation) ?? []) {
+        void this.adapter.cancel(requestId).catch(() => undefined);
       }
       this.pending.delete(effect.generation);
+      this.requestIds.delete(effect.generation);
       return true;
     }
     return false;

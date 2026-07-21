@@ -8,6 +8,7 @@ import type {
   PerformancePlan,
   PerformanceSegment,
   RuntimeEffect,
+  SpeechBubbleState,
 } from '../../contracts/src/index.ts';
 import type { AvatarPlanner, RuntimePolicy } from './planner.ts';
 import type { ParameterLayers } from './mixer.ts';
@@ -15,6 +16,7 @@ import { ParameterMixer } from './mixer.ts';
 import { createInitialSnapshot, reduceAvatarSnapshot } from './reducer.ts';
 import { PerformanceTimeline } from './timeline.ts';
 import { DEFAULT_GAZE_PROFILE, mapGazeTarget, validateGazeProfile } from './gaze-profile.ts';
+import { DEFAULT_SPEECH_BUBBLE_DISMISS_DELAY_MS } from './speech-bubble.ts';
 
 export interface RuntimeEffectExecutor {
   execute(effect: RuntimeEffect, dispatch: (event: AvatarEvent) => void): void | Promise<void>;
@@ -180,10 +182,12 @@ export class AvatarRuntime {
       this.emitFrame();
     }
 
+    const bubbleTransition = this.transitionSpeechBubble(acceptedEvent);
     const transition = reduceAvatarSnapshot(this.snapshot, acceptedEvent);
-    this.snapshot = transition.snapshot;
+    this.snapshot = { ...transition.snapshot, speechBubble: bubbleTransition.state };
     this.notify();
     this.executeAll(transition.effects);
+    this.executeAll(bubbleTransition.effects);
 
     if (acceptedEvent.type === 'renderer.ready' && this.snapshot.gaze.active) {
       this.layers.gaze = gazeLayer(this.snapshot.gaze.x, this.snapshot.gaze.y, this.gazeProfile);
@@ -293,6 +297,86 @@ export class AvatarRuntime {
     return this.plan?.segments.find(segment => segment.id === segmentId);
   }
 
+  private transitionSpeechBubble(event: AvatarEvent): {
+    state: SpeechBubbleState;
+    effects: RuntimeEffect[];
+  } {
+    const current = this.snapshot.speechBubble;
+    if (event.type === 'playback.started') {
+      const segment = this.segmentById(event.segmentId);
+      if (!segment) return { state: current, effects: [] };
+      const config = speechBubbleConfig(segment, this.currentSource);
+      const effects = current.phase === 'holding'
+        ? [{
+            type: 'speech-bubble.cancel-dismiss' as const,
+            generation: this.snapshot.generation,
+            presentationId: current.presentationId,
+          }]
+        : [];
+      return {
+        state: {
+          phase: 'playing',
+          presentationId: current.presentationId + 1,
+          segmentId: segment.id,
+          displayText: segment.displayText,
+          ...(config ? { config } : {}),
+          positionMs: event.positionMs,
+          ...(this.currentSource?.durationMs !== undefined ? { durationMs: this.currentSource.durationMs } : {}),
+        },
+        effects,
+      };
+    }
+    if (
+      current.phase === 'playing'
+      && 'segmentId' in event
+      && event.segmentId === current.segmentId
+      && (
+        event.type === 'playback.progress'
+        || event.type === 'playback.level'
+        || event.type === 'playback.stalled'
+        || event.type === 'playback.recovered'
+        || event.type === 'playback.paused'
+        || event.type === 'playback.resumed'
+      )
+    ) {
+      return { state: { ...current, positionMs: event.positionMs }, effects: [] };
+    }
+    if (event.type === 'playback.completed' && current.phase === 'playing' && event.segmentId === current.segmentId) {
+      const delayMs = current.config?.dismissDelayMs ?? DEFAULT_SPEECH_BUBBLE_DISMISS_DELAY_MS;
+      return {
+        state: { ...current, phase: 'holding', positionMs: event.positionMs },
+        effects: [{
+          type: 'speech-bubble.schedule-dismiss',
+          generation: this.snapshot.generation,
+          presentationId: current.presentationId,
+          delayMs,
+        }],
+      };
+    }
+    if (
+      event.type === 'runtime.speech-bubble-dismissed'
+      && current.phase === 'holding'
+      && event.presentationId === current.presentationId
+    ) {
+      return { state: hiddenSpeechBubble(current.presentationId), effects: [] };
+    }
+    if (
+      event.type === 'user.interrupt-requested'
+      || event.type === 'playback.failed'
+      || event.type === 'playback.interrupted'
+    ) {
+      const effects = current.phase === 'holding'
+        ? [{
+            type: 'speech-bubble.cancel-dismiss' as const,
+            generation: this.snapshot.generation,
+            presentationId: current.presentationId,
+          }]
+        : [];
+      return { state: hiddenSpeechBubble(current.presentationId), effects };
+    }
+    return { state: current, effects: [] };
+  }
+
   private executeAll(effects: RuntimeEffect[]): void {
     for (const effect of effects) this.execute(effect);
   }
@@ -348,6 +432,8 @@ export class AvatarRuntime {
       case 'audio.resume':
       case 'audio.stop':
       case 'tts.cancel':
+      case 'speech-bubble.schedule-dismiss':
+      case 'speech-bubble.cancel-dismiss':
         this.dispatch({ type: 'runtime.effect-failed', generation: effect.generation, error });
         break;
     }
@@ -376,6 +462,20 @@ function neutralMouthLayer(): Record<string, ParameterValue> {
   return { ParamMouthOpenY: { value: 0, blend: 'overwrite' } };
 }
 
+function hiddenSpeechBubble(presentationId: number): SpeechBubbleState {
+  return { phase: 'hidden', presentationId, segmentId: null, displayText: '', positionMs: 0 };
+}
+
+function speechBubbleConfig(
+  segment: Readonly<PerformanceSegment>,
+  source: Readonly<AudioSource> | null,
+): import('../../contracts/src/index.ts').SpeechBubbleConfig | undefined {
+  const configured = segment.bubble ? structuredClone(segment.bubble) : undefined;
+  const aligned = source?.textCues;
+  if (!aligned?.length || aligned.map(cue => cue.text).join('') !== segment.displayText) return configured;
+  return { ...(configured ?? { mode: 'complete' as const }), cues: structuredClone(aligned) };
+}
+
 function gazeLayer(x: number, y: number, profile: GazeProfile): Record<string, ParameterValue> {
   return Object.fromEntries(Object.entries(mapGazeTarget(x, y, profile)).map(([parameter, value]) => (
     [parameter, { value, blend: 'overwrite' as const }]
@@ -390,7 +490,7 @@ function emotionLayer(emotion: string, intensity: number): Record<string, Parame
 }
 
 function sampleAmplitude(samples: AmplitudeSample[] | undefined, positionMs: number): number {
-  if (!samples?.length) return 0.35;
+  if (!samples?.length) return 0;
   let selected = samples[0]!.value;
   for (const sample of samples) {
     if (sample.atMs > positionMs) break;

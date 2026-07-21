@@ -1,32 +1,41 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
-import type { AvatarSnapshot, PerformanceSegment } from '../../contracts/src/index.ts';
-import { createInitialSnapshot, projectSpeechBubble } from '../src/index.ts';
-
-function speaking(positionMs: number): AvatarSnapshot {
-  return { ...createInitialSnapshot(), state: 'speaking', segmentId: 's', playback: { status: 'playing', positionMs } };
-}
+import type { PerformanceSegment, SpeechBubbleState } from '../../contracts/src/index.ts';
+import { projectSpeechBubble } from '../src/index.ts';
 
 function segment(mode: 'stream' | 'karaoke' | 'complete'): PerformanceSegment {
   return { id: 's', sequence: 0, displayText: '你好世界', speechText: '你好世界', bubble: { mode, charactersPerSecond: 2 } };
 }
 
+function playing(positionMs: number, value = segment('complete')): SpeechBubbleState {
+  return {
+    phase: 'playing', presentationId: 1, segmentId: value.id,
+    displayText: value.displayText, ...(value.bubble ? { config: value.bubble } : {}), positionMs,
+  };
+}
+
 test('complete speech bubble exposes the complete display text', () => {
-  const result = projectSpeechBubble(speaking(0), segment('complete'));
+  const result = projectSpeechBubble(playing(0));
   assert.equal(result.visibleText, '你好世界');
   assert.equal(result.activeText, '');
 });
 
 test('stream speech bubble reveals text from playback position', () => {
-  assert.equal(projectSpeechBubble(speaking(0), segment('stream')).visibleText, '');
-  assert.equal(projectSpeechBubble(speaking(1_100), segment('stream')).visibleText, '你好世');
+  assert.equal(projectSpeechBubble(playing(0, segment('stream'))).visibleText, '');
+  assert.equal(projectSpeechBubble(playing(1_100, segment('stream'))).visibleText, '你好世');
+});
+
+test('known audio duration scales fallback text timing to the complete utterance', () => {
+  const value = { ...playing(500, segment('stream')), durationMs: 2_000 };
+  assert.equal(projectSpeechBubble(value).visibleText, '你');
+  assert.equal(projectSpeechBubble({ ...value, positionMs: 2_000 }).visibleText, '你好世界');
 });
 
 test('stream speech bubble supports authored chunk timing', () => {
   const value = segment('stream');
   value.bubble!.cues = [{ text: '你好', atMs: 0 }, { text: '世界', atMs: 500 }];
-  assert.equal(projectSpeechBubble(speaking(0), value).visibleText, '你好');
-  assert.equal(projectSpeechBubble(speaking(500), value).visibleText, '你好世界');
+  assert.equal(projectSpeechBubble(playing(0, value)).visibleText, '你好');
+  assert.equal(projectSpeechBubble(playing(500, value)).visibleText, '你好世界');
 });
 
 test('karaoke speech bubble highlights authored cues from the playback clock', () => {
@@ -35,12 +44,28 @@ test('karaoke speech bubble highlights authored cues from the playback clock', (
     { text: '你好', atMs: 0, durationMs: 400 },
     { text: '世界', atMs: 400, durationMs: 400 },
   ];
-  const first = projectSpeechBubble(speaking(200), value);
+  const first = projectSpeechBubble(playing(200, value));
   assert.deepEqual([first.leadingText, first.activeText, first.trailingText], ['', '你好', '世界']);
-  const second = projectSpeechBubble(speaking(500), value);
+  const second = projectSpeechBubble(playing(500, value));
   assert.deepEqual([second.leadingText, second.activeText, second.trailingText], ['你好', '世界', '']);
 });
 
-test('speech bubble hides without an active Runtime segment', () => {
-  assert.equal(projectSpeechBubble(createInitialSnapshot(), null).visible, false);
+test('karaoke fallback uses known audio duration instead of an unrelated wall clock rate', () => {
+  const value = { ...playing(1_000, segment('karaoke')), durationMs: 2_000 };
+  assert.deepEqual(
+    [projectSpeechBubble(value).leadingText, projectSpeechBubble(value).activeText],
+    ['你好', '世'],
+  );
+});
+
+test('holding completes stream text while waiting for the Runtime dismissal event', () => {
+  const state = { ...playing(500, segment('stream')), phase: 'holding' as const };
+  assert.equal(projectSpeechBubble(state).visibleText, '你好世界');
+  assert.equal(projectSpeechBubble(state).mode, 'stream');
+});
+
+test('speech bubble hides without a Runtime-owned presentation', () => {
+  assert.equal(projectSpeechBubble({
+    phase: 'hidden', presentationId: 0, segmentId: null, displayText: '', positionMs: 0,
+  }).visible, false);
 });

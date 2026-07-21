@@ -15,7 +15,9 @@
   -> Pixi postrender 完成实际送屏
 ```
 
-它不使用 Mock 预计算的 amplitude 数组，因此 Runtime 无法绕过实际 PCM 数据“猜”出口型。只有播放器轨道、模型参数轨道和逐点响应时延都满足条件时，前台才显示通过。
+它通过真实本地 MCP 请求中的 `test_fixture: "known-tone-v1"` 返回 HTTP 流，不携带预计算 amplitude 数组，因此 Runtime 无法绕过实际 PCM 数据“猜”出口型。只有播放器轨道、模型参数轨道和逐点响应时延都满足条件时，前台才显示通过。
+
+该按钮只在 `DESKTOP_CHAR_TTS_MODE=local` 时启用。外部 MCP 不需要实现测试专用字段，切换到 `mcp` 模式后不会收到 `test_fixture`。
 
 ## 测试素材
 

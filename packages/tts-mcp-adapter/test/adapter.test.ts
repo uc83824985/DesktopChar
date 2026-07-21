@@ -2,49 +2,11 @@ import assert from 'node:assert/strict';
 import test from 'node:test';
 import type { AvatarEvent, RuntimeEffect } from '../../contracts/src/index.ts';
 import {
-  InMemoryTtsLogger,
   McpTtsAdapter,
-  MockTtsAdapter,
   TtsAdapterError,
   TtsRuntimeEffectHandler,
   VirtualMcpClient,
 } from '../src/index.ts';
-
-test('mock adapter prepares a deterministic 24kHz PCM stream by default', async () => {
-  const logger = new InMemoryTtsLogger();
-  const adapter = new MockTtsAdapter({ delayMs: 0, durationPerCharacterMs: 100, minimumDurationMs: 300, amplitudeIntervalMs: 100, logger });
-  const audio = await adapter.prepare({ requestId: 'r1', text: '测试', delivery: 'stream-required' });
-  assert.deepEqual({ delivery: audio.delivery, requestId: audio.requestId, mimeType: audio.mimeType }, { delivery: 'stream', requestId: 'r1', mimeType: 'audio/pcm' });
-  if (audio.delivery !== 'stream') assert.fail('expected stream');
-  assert.equal(audio.codec, 'pcm_s16le');
-  assert.equal(audio.sampleRateHz, 24_000);
-  assert.equal(audio.channels, 1);
-  assert.equal(audio.durationMs, 300);
-  assert.deepEqual(audio.amplitude?.map(sample => sample.atMs), [0, 100, 200, 300]);
-  assert.equal((await adapter.health()).status, 'ready');
-  assert.equal((await adapter.capabilities()).streaming, true);
-  assert.deepEqual(logger.entries.map(entry => entry.event), ['tts.prepare.started', 'tts.source.ready']);
-});
-
-test('mock adapter preserves artifact fallback, configured failures, and cancellation', async () => {
-  const artifact = await new MockTtsAdapter({ delayMs: 0 }).prepare({ requestId: 'artifact', text: 'hello', delivery: 'artifact' });
-  assert.equal(artifact.delivery, 'artifact');
-  assert.equal(artifact.mimeType, 'audio/wav');
-
-  const failing = new MockTtsAdapter({ delayMs: 0, failPattern: /FAIL/ });
-  await assert.rejects(failing.prepare({ requestId: 'fail', text: 'FAIL' }), error => error instanceof TtsAdapterError && error.code === 'tts-mock-failure');
-  const controller = new AbortController();
-  const delayed = new MockTtsAdapter({ delayMs: 1_000 }).prepare({ requestId: 'cancel', text: 'cancel', signal: controller.signal });
-  controller.abort();
-  await assert.rejects(delayed, error => error instanceof TtsAdapterError && error.code === 'tts-aborted');
-
-  const artifactOnly = new MockTtsAdapter({ delayMs: 0, delivery: 'artifact' });
-  assert.equal((await artifactOnly.capabilities()).streaming, false);
-  await assert.rejects(
-    artifactOnly.prepare({ requestId: 'strict', text: 'hello', delivery: 'stream-required' }),
-    error => error instanceof TtsAdapterError && error.code === 'tts-stream-unavailable',
-  );
-});
 
 test('MCP adapter maps streaming arguments and normalizes snake-case PCM descriptors', async () => {
   const client = new VirtualMcpClient([{ name: 'tts_open_stream', outputSchema: { type: 'object' } }], () => ({
@@ -53,6 +15,7 @@ test('MCP adapter maps streaming arguments and normalizes snake-case PCM descrip
       request_id: 'r-stream', stream_url: 'http://127.0.0.1/audio/r-stream', delivery: 'stream',
       mime_type: 'audio/pcm', codec: 'pcm_s16le', sample_rate_hz: 24000, channels: 1,
       amplitude: [{ at_ms: 100, value: 2 }, { at_ms: 0, value: -1 }],
+      text_cues: [{ text: '好', at_ms: 200, duration_ms: 100 }, { text: '你', at_ms: 0, duration_ms: 200 }],
     } },
   }));
   const adapter = new McpTtsAdapter({ client, timeoutMs: 500 });
@@ -64,6 +27,10 @@ test('MCP adapter maps streaming arguments and normalizes snake-case PCM descrip
   if (audio.delivery !== 'stream') assert.fail('expected stream');
   assert.equal(audio.sampleRateHz, 24_000);
   assert.deepEqual(audio.amplitude, [{ atMs: 0, value: 0 }, { atMs: 100, value: 1 }]);
+  assert.deepEqual(audio.textCues, [
+    { text: '你', atMs: 0, durationMs: 200 },
+    { text: '好', atMs: 200, durationMs: 100 },
+  ]);
   assert.equal((await adapter.health()).status, 'ready');
 });
 
@@ -121,7 +88,14 @@ test('MCP adapter distinguishes tool failures, malformed payloads, timeout, and 
 });
 
 test('runtime effect handler requests a stream source and emits Runtime facts', async () => {
-  const adapter = new MockTtsAdapter({ delayMs: 0 });
+  const client = new VirtualMcpClient([{ name: 'tts_open_stream', outputSchema: { type: 'object' } }], call => ({
+    content: [],
+    structuredContent: call.name === 'tts_open_stream' ? { stream: {
+      request_id: 'g3:s1', stream_url: 'http://127.0.0.1/audio/g3-s1', delivery: 'stream',
+      codec: 'pcm_s16le', sample_rate_hz: 24_000, channels: 1,
+    } } : { cancelled: true },
+  }));
+  const adapter = new McpTtsAdapter({ client });
   const handler = new TtsRuntimeEffectHandler(adapter);
   const events: AvatarEvent[] = [];
   const effect: RuntimeEffect = { type: 'tts.synthesize', generation: 3, segment: { id: 's1', sequence: 0, displayText: 'hi', speechText: 'hi' } };
@@ -132,5 +106,7 @@ test('runtime effect handler requests a stream source and emits Runtime facts', 
   assert.equal(events[0].audio.delivery, 'stream');
   assert.equal(events[0].audio.requestId, 'g3:s1');
   assert.equal(handler.handle({ type: 'tts.cancel', generation: 3 }, event => events.push(event)), true);
+  await new Promise(resolve => setTimeout(resolve, 0));
+  assert.deepEqual(client.calls[1], { name: 'tts_cancel_synthesis', args: { request_id: 'g3:s1' } });
   assert.equal(handler.handle({ type: 'audio.stop', generation: 3 }, event => events.push(event)), false);
 });

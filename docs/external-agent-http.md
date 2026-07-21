@@ -187,12 +187,13 @@ Invoke-RestMethod `
 {
   "bubble": {
     "mode": "stream",
-    "charactersPerSecond": 10
+    "charactersPerSecond": 10,
+    "dismissDelayMs": 800
   }
 }
 ```
 
-支持 `complete`、`stream` 和 `karaoke`；精确分块/高亮可提供与 `displayText` 完全拼接一致的 `cues`。当前 HTTP 仍提交完整计划，`stream` 是播放时钟驱动的渐进显示，不是网络 token 流。完整契约见 [角色语音聊天冒泡](speech-bubble.md)。
+支持 `complete`、`stream` 和 `karaoke`。冒泡只在 `playback.started` 后显示，完成后等待 `dismissDelayMs` 再隐藏。精确分块/高亮可由 Agent 提供与 `displayText` 完全拼接一致的 `cues`；若 TTS MCP 返回匹配的 `text_cues`，Runtime 优先采用实际语音对齐信息。当前 HTTP 仍提交完整计划，`stream` 是播放时钟驱动的渐进显示，不是网络 token 流。完整契约见 [角色语音聊天冒泡](speech-bubble.md)。
 
 ```powershell
 Invoke-RestMethod -Method Post http://127.0.0.1:17373/v1/interrupt
@@ -208,13 +209,14 @@ Invoke-RestMethod -Method Post http://127.0.0.1:17373/v1/interrupt
 - `snapshot.state`：`idle`、`thinking`、`speaking`；
 - `snapshot.planId / segmentId / sequence`：当前表演位置；
 - `snapshot.playback.status / positionMs`：真实播放生命周期；
+- `snapshot.speechBubble.phase / positionMs`：由 Runtime 持有的冒泡播放与延迟关闭状态；
 - `snapshot.lastError`：最近的可恢复或不可恢复错误。
 
 完成条件是同一 `planId` 执行后 Runtime 回到 `idle`，不是 HTTP 202、Agent 文本完成或 TTS source ready。若后续 Agent 需要低延迟主动反馈，可在不改变领域契约的前提下增加 SSE；SSE 只投影 snapshot/生命周期，不持有状态。
 
 ## TTS MCP 接入上下文
 
-当前应用 case 默认装配 `MockTtsAdapter`，用于在没有本机 TTS 服务时验证 Agent -> Runtime -> 表现链路。设置 `DESKTOP_CHAR_TTS_MODE=mcp` 后，Electron main 会持有 Streamable HTTP MCP session，并通过白名单 IPC 向 renderer 暴露 `tools/list` 与 `tools/call`。
+当前应用 case 默认自动启动根目录 [`local-tts-mcp`](../local-tts-mcp/README.md) 真实参考服务，并由 Electron main 通过官方 SDK 建立 Streamable HTTP MCP session；Renderer 只装配 `McpTtsAdapter`，本地与远端共享工具参数、流响应、取消和播放器契约。设置 `DESKTOP_CHAR_TTS_MODE=mcp` 后，只会把 session URL 改为外部服务并停止自动启动本地服务。远端不可用时不会静默回退。
 
 真实接入边界为：
 
@@ -233,7 +235,7 @@ concrete MCP session transport
 - `tts_open_stream` 合成调用和参数名配置；
 - `tts_cancel_synthesis` generation 中断；
 - stream/artifact、request id、codec、采样率、声道校验；
-- URI、base64 audio、viseme 和 amplitude 结构归一化；
+- URI、base64 audio、viseme、amplitude 和可选 `text_cues` 结构归一化；
 - 超时、AbortSignal、MCP tool error 和迟到结果处理。
 
 环境配置由 `loadTtsConfig()` 定义：

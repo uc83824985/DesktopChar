@@ -13,6 +13,9 @@ export function createInitialSnapshot(): AvatarSnapshot {
     segmentId: null,
     sequence: null,
     playback: { status: 'idle', positionMs: 0 },
+    speechBubble: {
+      phase: 'hidden', presentationId: 0, segmentId: null, displayText: '', positionMs: 0,
+    },
     emotion: { current: 'neutral', intensity: 0 },
     gesture: { actionId: null, action: null, queueLength: 0 },
     gaze: { x: 0, y: 0, active: false },
@@ -329,6 +332,7 @@ export function reduceAvatarSnapshot(
     case 'plan.completed':
     case 'tts.plan-completed':
     case 'plan.segment-appended':
+    case 'runtime.speech-bubble-dismissed':
     case 'user.avatar-clicked':
       return { snapshot, effects: [] };
   }

@@ -4,19 +4,21 @@
   "private": true,
   "type": "module",
   "scripts": {
-    "start": "vite apps/desktop --config apps/desktop/vite.config.ts --open",
+    "start": "node scripts/start-web.mjs",
     "desktop": "npm run build && electron apps/desktop/electron/main.mjs",
     "desktop:mcp": "powershell -NoProfile -ExecutionPolicy Bypass -File scripts/desktop-mcp-tts.ps1",
-    "dev": "vite apps/desktop --config apps/desktop/vite.config.ts",
+    "dev": "node scripts/start-web.mjs --no-open",
     "build": "vite build apps/desktop --config apps/desktop/vite.config.ts",
-    "preview": "vite preview apps/desktop --config apps/desktop/vite.config.ts --open",
+    "preview": "npm run build && node scripts/start-web.mjs --preview",
+    "tts:local-mcp": "node local-tts-mcp/server.mjs",
     "test:smoke": "npm run build && node scripts/smoke.mjs",
     "test:desktop": "node --test apps/desktop/electron/*.test.mjs",
+    "test:local-mcp": "node --test local-tts-mcp/*.test.mjs",
     "test:native": "node scripts/run-koffi-electron-test.mjs",
     "test:desktop-smoke": "npm run build && node scripts/desktop-smoke.mjs",
     "diagnose:tts": "node --experimental-strip-types scripts/tts-diagnostic.ts",
     "diagnose:drag": "npm run build && node scripts/drag-compositor-diagnostic.mjs",
-    "test": "node --experimental-strip-types --test packages/*/test/*.test.ts && npm run test:desktop",
+    "test": "node --experimental-strip-types --test packages/*/test/*.test.ts && npm run test:local-mcp && npm run test:desktop",
     "typecheck": "tsc --noEmit",
     "check": "npm run typecheck && npm test && npm run test:native && npm run build"
   },
@@ -33,7 +35,8 @@
     "@pixi/unsafe-eval": "^6.5.10",
     "koffi": "^3.1.1",
     "pixi-live2d-display": "^0.4.0",
-    "pixi.js": "^6.5.10"
+    "pixi.js": "^6.5.10",
+    "zod": "^4.4.3"
   },
   "overrides": {
     "gh-pages": "6.2.0"

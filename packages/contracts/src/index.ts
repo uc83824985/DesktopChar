@@ -44,6 +44,19 @@ export interface SpeechBubbleConfig {
   mode: SpeechBubbleMode;
   cues?: SpeechBubbleCue[];
   charactersPerSecond?: number;
+  dismissDelayMs?: number;
+}
+
+export type SpeechBubblePhase = 'hidden' | 'playing' | 'holding';
+
+export interface SpeechBubbleState {
+  phase: SpeechBubblePhase;
+  presentationId: number;
+  segmentId: string | null;
+  displayText: string;
+  config?: SpeechBubbleConfig;
+  positionMs: number;
+  durationMs?: number;
 }
 
 export interface PerformanceSegment {
@@ -82,6 +95,7 @@ interface AudioSourceBase {
   durationMs?: number;
   visemes?: VisemeTiming[];
   amplitude?: AmplitudeSample[];
+  textCues?: SpeechBubbleCue[];
 }
 
 export interface AudioArtifactSource extends AudioSourceBase {
@@ -160,6 +174,7 @@ export interface AvatarSnapshot {
     status: PlaybackStatus;
     positionMs: number;
   };
+  speechBubble: SpeechBubbleState;
   emotion: EmotionState;
   gesture: GestureState;
   gaze: GazeState;
@@ -210,6 +225,7 @@ export type RendererEvent =
 export type RuntimeInternalEvent =
   | { type: 'runtime.segment-selected'; generation: number; segmentId: string; sequence: number }
   | { type: 'runtime.plan-completed'; generation: number; planId: string }
+  | { type: 'runtime.speech-bubble-dismissed'; generation: number; presentationId: number }
   | { type: 'runtime.effect-failed'; generation: number; error: RuntimeError }
   | { type: 'timeline.emotion-cue'; generation: number; cue: EmotionCue }
   | { type: 'timeline.action-cue'; generation: number; cue: ActionCue };
@@ -250,6 +266,8 @@ export type RuntimeEffect =
   | { type: 'audio.pause'; generation: number }
   | { type: 'audio.resume'; generation: number }
   | { type: 'audio.stop'; generation: number }
+  | { type: 'speech-bubble.schedule-dismiss'; generation: number; presentationId: number; delayMs: number }
+  | { type: 'speech-bubble.cancel-dismiss'; generation: number; presentationId: number }
   | { type: 'renderer.apply-frame'; frame: ParameterFrame }
   | { type: 'renderer.play-motion'; generation: number; command: MotionCommand };
 

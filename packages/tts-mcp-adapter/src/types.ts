@@ -1,4 +1,4 @@
-import type { AmplitudeSample, AudioCodec, AudioSource, VisemeTiming } from '../../contracts/src/index.ts';
+import type { AmplitudeSample, AudioCodec, AudioSource, SpeechBubbleCue, VisemeTiming } from '../../contracts/src/index.ts';
 
 export type TtsAudioFormat = 'wav' | 'mp3' | 'ogg' | 'opus' | 'pcm_s16le' | 'pcm_f32le';
 export type TtsDeliveryPreference = 'stream-required' | 'stream-preferred' | 'artifact';
@@ -24,6 +24,7 @@ export interface TtsCapabilities {
   supportsInstructions: boolean;
   supportsVisemes: boolean;
   supportsAmplitude: boolean;
+  supportsTextCues: boolean;
   streaming: boolean;
   cancellation: 'none' | 'request';
 }
@@ -82,6 +83,7 @@ export interface NormalizedTtsPayload {
   durationMs?: number;
   visemes?: VisemeTiming[];
   amplitude?: AmplitudeSample[];
+  textCues?: SpeechBubbleCue[];
 }
 
 export class TtsAdapterError extends Error {
