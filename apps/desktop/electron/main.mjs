@@ -217,39 +217,13 @@ function createAvatarWindow() {
 }
 
 function createDesktopTray() {
-  const icon = createTrayIcon();
+  const iconPath = path.join(directory, 'assets', 'desktop-char-tray-icon.png');
+  const icon = nativeImage.createFromPath(iconPath).resize({ width: 16, height: 16, quality: 'best' });
   if (icon.isEmpty()) throw new Error('Desktop tray icon failed to load');
   desktopTray = new Tray(icon);
   desktopTray.setToolTip('DesktopChar');
   desktopTray.on('click', () => setAvatarVisibility(nextAvatarVisibility(avatarWindow?.isVisible() ?? false)));
   updateTrayMenu();
-}
-
-function createTrayIcon() {
-  const size = 16;
-  const bitmap = Buffer.alloc(size * size * 4);
-  for (let y = 1; y < size - 1; y++) {
-    for (let x = 1; x < size - 1; x++) {
-      const cornerDistance = Math.hypot(Math.max(0, 3 - x, x - 12), Math.max(0, 3 - y, y - 12));
-      if (cornerDistance > 2.5) continue;
-      setBitmapPixel(bitmap, size, x, y, 118, 87, 213, 255);
-    }
-  }
-  for (let y = 4; y <= 11; y++) setBitmapPixel(bitmap, size, 5, y, 255, 255, 255, 255);
-  for (let x = 5; x <= 9; x++) {
-    setBitmapPixel(bitmap, size, x, 4, 255, 255, 255, 255);
-    setBitmapPixel(bitmap, size, x, 11, 255, 255, 255, 255);
-  }
-  for (let y = 5; y <= 10; y++) setBitmapPixel(bitmap, size, 10, y, 255, 255, 255, 255);
-  return nativeImage.createFromBitmap(bitmap, { width: size, height: size, scaleFactor: 1 });
-}
-
-function setBitmapPixel(bitmap, width, x, y, red, green, blue, alpha) {
-  const offset = (y * width + x) * 4;
-  bitmap[offset] = blue;
-  bitmap[offset + 1] = green;
-  bitmap[offset + 2] = red;
-  bitmap[offset + 3] = alpha;
 }
 
 function updateTrayMenu() {

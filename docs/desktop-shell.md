@@ -24,7 +24,7 @@ setIgnoreMouseEvents(true, forward)    可点击 / 可拖动角色
 
 Electron main 在系统通知区域创建常驻 `DesktopChar` 托盘入口。左键单击托盘图标切换角色窗口显示/隐藏；右键菜单根据当前状态显示“显示角色”或“隐藏角色”，同时提供“恢复默认位置”和“退出 DesktopChar”。角色自身的共享右键菜单也注册“隐藏角色”，隐藏后通过托盘恢复。
 
-隐藏只调用现有 `BrowserWindow.hide()`，不会关闭窗口、卸载 Renderer、重建 Avatar Runtime、断开 Agent/TTS MCP，或重置窗口 bounds；恢复使用 `showInactive()`，不抢占当前前台应用焦点，并重新确认置顶状态。`DesktopWindowState.visible` 和 `tray.available` 提供可测试事实。托盘图标由 main 创建小型 BGRA `NativeImage`，不依赖外部图标解码或 Renderer 资源。
+隐藏只调用现有 `BrowserWindow.hide()`，不会关闭窗口、卸载 Renderer、重建 Avatar Runtime、断开 Agent/TTS MCP，或重置窗口 bounds；恢复使用 `showInactive()`，不抢占当前前台应用焦点，并重新确认置顶状态。`DesktopWindowState.visible` 和 `tray.available` 提供可测试事实。托盘使用随 Electron shell 打包的 `assets/desktop-char-tray-icon.png` 角色头像，main 通过 `nativeImage` 以高质量缩放到 16×16；它不依赖 Renderer 已加载或 Live2D 资源生命周期。
 
 通知区图标是否直接展开在任务栏右下角或收进系统溢出面板由 Windows 用户设置决定，应用不强行修改系统托盘布局。
 
