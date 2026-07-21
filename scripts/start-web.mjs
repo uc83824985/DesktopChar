@@ -9,9 +9,9 @@ const service = createLocalTtsMcpService({
   host: '127.0.0.1',
   port,
   delayMs: environmentNumber(process.env.DESKTOP_CHAR_TTS_LOCAL_DELAY_MS, 15, true),
-  durationPerCharacterMs: environmentNumber(process.env.DESKTOP_CHAR_TTS_LOCAL_CHAR_MS, 90),
+  defaultRate: environmentRate(process.env.DESKTOP_CHAR_TTS_LOCAL_RATE, 1),
+  durationPerCharacterMs: environmentNumber(process.env.DESKTOP_CHAR_TTS_LOCAL_CHAR_MS, 232),
   minimumDurationMs: environmentNumber(process.env.DESKTOP_CHAR_TTS_LOCAL_MIN_MS, 500),
-  amplitudeIntervalMs: environmentNumber(process.env.DESKTOP_CHAR_TTS_LOCAL_AMPLITUDE_MS, 50),
   sampleRateHz: environmentNumber(process.env.DESKTOP_CHAR_TTS_SAMPLE_RATE_HZ, 24_000),
   channels: environmentNumber(process.env.DESKTOP_CHAR_TTS_CHANNELS, 1),
 });
@@ -51,6 +51,15 @@ function environmentNumber(value, fallback, allowZero = false) {
   const parsed = Number(value);
   if (!Number.isFinite(parsed) || (allowZero ? parsed < 0 : parsed <= 0)) {
     throw new TypeError(`value must be ${allowZero ? 'non-negative' : 'positive'}`);
+  }
+  return parsed;
+}
+
+function environmentRate(value, fallback) {
+  if (value === undefined || value === '') return fallback;
+  const parsed = Number(value);
+  if (!Number.isFinite(parsed) || parsed < 0.5 || parsed > 2) {
+    throw new TypeError('DESKTOP_CHAR_TTS_LOCAL_RATE must be from 0.5 to 2');
   }
   return parsed;
 }

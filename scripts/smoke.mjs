@@ -56,7 +56,7 @@ try {
   await page.locator('body[data-motion-state="playing"]').waitFor({ timeout: 3_000 });
   await page.locator('body[data-gaze-follow="enabled"]').waitFor({ timeout: 1_000 });
   await page.locator('body[data-motion-state="completed"]').waitFor({ timeout: 3_000 });
-  await page.locator('body[data-runtime-state="idle"]').waitFor({ timeout: 3_000 });
+  await page.locator('body[data-runtime-state="idle"]').waitFor({ timeout: 12_000 });
 
   await page.getByRole('button', { name: '眼部跟随：开' }).click();
   await page.locator('body[data-gaze-follow="disabled"]').waitFor({ timeout: 1_000 });

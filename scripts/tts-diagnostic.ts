@@ -41,7 +41,7 @@ try {
     client: localClient,
     providerName: 'desktop-char-local-tts',
     supportsAmplitude: false,
-    supportsTextCues: false,
+    supportsTextCues: true,
     logger,
   });
   const localHealth = await local.health();
@@ -53,7 +53,8 @@ try {
   checks.localMcpContract = localAudio.delivery === 'stream'
     && localAudio.uri.startsWith(address.baseUrl)
     && localAudio.sampleRateHz === 24_000
-    && localAudio.durationMs === undefined
+    && localAudio.durationMs !== undefined
+    && localAudio.textCues?.map(cue => cue.text).join('') === 'DesktopChar local MCP TTS diagnostic'
     && localAudio.amplitude === undefined;
   checks.localMcpPcm = localAudio.delivery === 'stream'
     && (await fetch(localAudio.uri).then(response => response.arrayBuffer())).byteLength > 0;
@@ -68,7 +69,7 @@ try {
   }));
   const mcp = new McpTtsAdapter({ client: virtualClient, logger, timeoutMs: 1_000, supportsAmplitude: true });
   const mcpHealth = await mcp.health();
-  const mcpAudio = await mcp.prepare({ requestId: 'diagnostic-mcp', text: 'virtual MCP diagnostic', delivery: 'stream-required', voice: 'test-voice', format: 'pcm_s16le' });
+  const mcpAudio = await mcp.prepare({ requestId: 'diagnostic-mcp', text: 'virtual MCP diagnostic', delivery: 'stream-required', voice: 'jrpg-blip', format: 'pcm_s16le' });
   checks.virtualMcpHealth = mcpHealth.status === 'ready';
   checks.virtualMcpCall = virtualClient.calls[0]?.name === 'tts_open_stream' && virtualClient.calls[0]?.args.text === 'virtual MCP diagnostic';
   checks.virtualMcpAudio = mcpAudio.delivery === 'stream' && mcpAudio.uri === 'http://127.0.0.1/audio/diagnostic-mcp';

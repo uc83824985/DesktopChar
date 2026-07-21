@@ -1,6 +1,6 @@
 # Local TTS MCP reference service
 
-该目录是与桌面角色应用相对独立、可单独启动的真实 MCP 接入样例。只有“合成模型”由确定性 PCM 生成器代替；以下边界均使用正式实现：
+该目录是与桌面角色应用相对独立、可单独启动的真实 MCP 接入样例。只有“合成模型”由确定性的 `jrpg-blip` 逐字提示音生成器代替；以下边界均使用正式实现：
 
 - 官方 `@modelcontextprotocol/sdk` 的有状态 Streamable HTTP Server Transport；
 - `initialize`、session ID、`tools/list`、`tools/call` 与 session 关闭；
@@ -10,7 +10,7 @@
 - loopback-only 监听、Host 校验、Origin/CORS 白名单、流过期和重复消费保护；
 - 完整的 input/output schema，可被 MCP Client 的工具发现和结构校验直接使用。
 
-它不是 Renderer 内的 Mock Adapter，也没有 `mock://`、内存 URI 或播放器特判。替换成 Qwen3-TTS 时应保留服务边界，只替换 `createSyntheticSpeechPcmStream()` 及其生成调度。
+它不是 Renderer 内的 Mock Adapter，也没有 `mock://`、内存 URI 或播放器特判。替换成 Qwen3-TTS 时应保留服务边界，只替换 [`jrpg-blip.mjs`](jrpg-blip.mjs) 的计划与 PCM 增量生成器。
 
 ## 独立运行
 
@@ -36,9 +36,9 @@ PCM: http://127.0.0.1:8766/audio/{opaque-stream-token}
 DESKTOP_CHAR_TTS_LOCAL_MCP_HOST=127.0.0.1
 DESKTOP_CHAR_TTS_LOCAL_MCP_PORT=8766
 DESKTOP_CHAR_TTS_LOCAL_DELAY_MS=15
-DESKTOP_CHAR_TTS_LOCAL_CHAR_MS=90
+DESKTOP_CHAR_TTS_LOCAL_RATE=1
+DESKTOP_CHAR_TTS_LOCAL_CHAR_MS=232
 DESKTOP_CHAR_TTS_LOCAL_MIN_MS=500
-DESKTOP_CHAR_TTS_LOCAL_AMPLITUDE_MS=50
 DESKTOP_CHAR_TTS_SAMPLE_RATE_HZ=24000
 DESKTOP_CHAR_TTS_CHANNELS=1
 ```
@@ -58,7 +58,7 @@ DESKTOP_CHAR_TTS_CHANNELS=1
   "delivery": "stream-required",
   "format": "pcm_s16le",
   "language": "Chinese",
-  "voice": "optional-voice",
+  "voice": "jrpg-blip",
   "instruction": "optional-style",
   "rate": 1.0
 }
@@ -78,12 +78,43 @@ DESKTOP_CHAR_TTS_CHANNELS=1
     "channels": 1,
     "requested_rate": 1.0,
     "effective_rate": 1.0,
-    "rate_mode": "native"
+    "rate_mode": "native",
+    "duration_ms": 1779,
+    "text_cues": [
+      { "text": "需", "at_ms": 45, "duration_ms": 232 },
+      { "text": "要", "at_ms": 277, "duration_ms": 232 },
+      { "text": "合", "at_ms": 509, "duration_ms": 232 },
+      { "text": "成", "at_ms": 741, "duration_ms": 232 },
+      { "text": "的", "at_ms": 973, "duration_ms": 232 },
+      { "text": "文", "at_ms": 1205, "duration_ms": 232 },
+      { "text": "本", "at_ms": 1437, "duration_ms": 232 }
+    ]
   }
 }
 ```
 
-工具返回时整句 PCM 尚未全部产生。数据端点不发送 `Content-Length`，使用 HTTP chunked body 增量输出。默认不伪造 `duration_ms`、`amplitude` 或 `text_cues`，从而覆盖实际流式模型在总长度未知时的客户端降级路径。
+工具返回时整句 PCM 尚未全部产生。数据端点不发送 `Content-Length`，使用 HTTP chunked body 增量输出。参考 Provider 提供 `jrpg-blip` 与 `jrpg-blip-varied`；省略 `voice` 时使用前者，声明其他 voice 会得到明确的 schema 错误。
+
+普通字素各产生一个短促电子音，使用 `Intl.Segmenter` 保持中文和组合 Emoji 的可见字符边界。默认字间隔为 232 ms；`，、,` 在普通间隔上额外停顿 160 ms，`；：;:` 额外 200 ms，`。！？.!?` 额外 260 ms，省略号额外 320 ms；标点本身不发声。`rate` 会等比缩放逐字间隔与停顿。返回的 `duration_ms` 和逐字 `text_cues` 直接由 PCM 采样帧换算，因此冒泡、KTV、播放电平和口型共享同一时间线。
+
+音色峰值为旧版的 70%（`0.224`）。默认 `jrpg-blip` 的所有字素固定使用 560 Hz 基频；可选 `jrpg-blip-varied` 保留旧版逐字变化效果，从 500、560、620、680 Hz 中按字素稳定映射。同一段文本每次得到相同音高序列，因此可重复测试，它不是运行时随机数。两种 voice 的字速、音量、cue 与取消语义完全相同。波形由正弦基频和少量二、三次谐波构成，并使用 6 ms 淡入与 14 ms 淡出，不混入有采样跳变的方波成分。
+
+桌面角色默认通过 Runtime 的角色级 `LipSyncProfile.gain=2.5` 放大口型响应：`0.224` 的真实 PCM 电平约映射为 `0.56` 的嘴部开合，但扬声器音量不变。可用 `DESKTOP_CHAR_LIP_SYNC_GAIN` 覆盖桌面装配值；该配置属于客户端表现层，不属于 MCP 合成参数。
+
+`DESKTOP_CHAR_TTS_LOCAL_RATE` 配置服务端默认语速，范围为 `0.5..2.0`，`1` 是标准速度，值越大越快。MCP 单次请求中的 `rate` 优先于服务默认值；无论采用哪一层配置，响应中的 `requested_rate`、`effective_rate`、`duration_ms` 和 cue 时间都会反映最终速率。示例：
+
+```powershell
+$env:DESKTOP_CHAR_TTS_LOCAL_RATE = "0.8"
+npm run tts:local-mcp
+```
+
+`jrpg-blip` 的元数据是可精确计算的；未知总长度与无 `text_cues` 的降级路径继续由 Adapter 单元测试及真实外部 Qwen3-TTS MCP 覆盖，不需要让本地前台声音故意退化。
+
+可通过现有桌面启动脚本试听保留的变化音调版：
+
+```powershell
+powershell -NoProfile -ExecutionPolicy Bypass -File scripts/desktop-mcp-tts.ps1 -Voice "jrpg-blip-varied"
+```
 
 `test_fixture: "known-tone-v1"` 是仅供仓库前台验收使用的显式扩展。正常 Agent 和生产 MCP 不应发送它；外部 MCP 模式下桌面端也不会注入该字段。
 
@@ -132,6 +163,7 @@ npm run test:desktop-smoke
 测试使用官方 MCP Client 连接实际 TCP 端口，覆盖：
 
 - session 初始化、工具发现及 input/output schema；
+- `jrpg-blip` 每字短音、Unicode 字素、标点静音停顿及 sample-aligned `text_cues`；
 - MCP 返回流描述后实际获取 chunked PCM；
 - PCM URL 单次消费和跨站 Origin 拒绝；
 - 播放中的 MCP cancel 与资源回收；

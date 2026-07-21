@@ -5,6 +5,7 @@ import { createMcpExpressApp } from '@modelcontextprotocol/sdk/server/express.js
 import { StreamableHTTPServerTransport } from '@modelcontextprotocol/sdk/server/streamableHttp.js';
 import { isInitializeRequest } from '@modelcontextprotocol/sdk/types.js';
 import * as z from 'zod/v4';
+import { createJrpgBlipPcmStream, createJrpgBlipPlan, JRPG_BLIP_VOICE, JRPG_BLIP_VOICES } from './jrpg-blip.mjs';
 
 const OPEN_TOOL = 'tts_open_stream';
 const CANCEL_TOOL = 'tts_cancel_synthesis';
@@ -22,9 +23,9 @@ export function createLocalTtsMcpService(options = {}) {
   const requestedPort = portNumber(options.port ?? 0);
   const config = Object.freeze({
     delayMs: nonNegative(options.delayMs ?? 15, 'delayMs'),
-    durationPerCharacterMs: positive(options.durationPerCharacterMs ?? 90, 'durationPerCharacterMs'),
+    defaultRate: synthesisRate(options.defaultRate ?? 1, 'defaultRate'),
+    durationPerCharacterMs: positive(options.durationPerCharacterMs ?? 232, 'durationPerCharacterMs'),
     minimumDurationMs: positive(options.minimumDurationMs ?? 500, 'minimumDurationMs'),
-    amplitudeIntervalMs: positive(options.amplitudeIntervalMs ?? 50, 'amplitudeIntervalMs'),
     chunkDurationMs: positive(options.chunkDurationMs ?? 20, 'chunkDurationMs'),
     chunkDelayMs: nonNegative(options.chunkDelayMs ?? 1, 'chunkDelayMs'),
     sampleRateHz: positiveInteger(options.sampleRateHz ?? 24_000, 'sampleRateHz'),
@@ -130,16 +131,18 @@ export function createLocalTtsMcpService(options = {}) {
     const mcp = new McpServer({ name: 'desktop-char-local-tts', version: '1.0.0' });
     mcp.registerTool(OPEN_TOOL, {
       title: 'Open streaming TTS audio',
-      description: 'Creates a single-use HTTP PCM stream and returns before the complete utterance is generated.',
+      description: 'Creates a single-use HTTP PCM stream. The reference voice emits one JRPG-style blip per grapheme and returns sample-aligned text cues.',
       inputSchema: {
         request_id: z.string().trim().min(1),
         text: z.string().trim().min(1),
         delivery: z.enum(['stream-required', 'stream-preferred']).default('stream-required'),
         format: z.literal('pcm_s16le').default('pcm_s16le'),
         language: z.string().trim().min(1).optional(),
-        voice: z.string().trim().min(1).optional(),
+        voice: z.enum(JRPG_BLIP_VOICES).optional()
+          .describe('jrpg-blip is a fixed 560 Hz voice; jrpg-blip-varied deterministically maps graphemes to four pitches.'),
         instruction: z.string().trim().min(1).optional(),
-        rate: z.number().min(0.5).max(2).default(1),
+        rate: z.number().min(0.5).max(2).default(config.defaultRate)
+          .describe('Speech-rate multiplier. Explicit request values override the service default.'),
         test_fixture: z.literal(KNOWN_TONE_FIXTURE).optional().describe('Development acceptance fixture; omit in production integrations.'),
       },
       outputSchema: {
@@ -154,6 +157,12 @@ export function createLocalTtsMcpService(options = {}) {
           requested_rate: z.number().positive(),
           effective_rate: z.number().positive(),
           rate_mode: z.literal('native'),
+          duration_ms: z.number().positive().optional(),
+          text_cues: z.array(z.object({
+            text: z.string().min(1),
+            at_ms: z.number().nonnegative(),
+            duration_ms: z.number().positive(),
+          })).optional(),
         }),
       },
     }, async (request, extra) => {
@@ -166,10 +175,13 @@ export function createLocalTtsMcpService(options = {}) {
       const token = randomUUID();
       const controller = new AbortController();
       const fixture = request.test_fixture === KNOWN_TONE_FIXTURE;
-      const durationMs = fixture
-        ? KNOWN_TONE_DURATION_MS
-        : Math.max(config.minimumDurationMs, Array.from(request.text).length * config.durationPerCharacterMs) / request.rate;
-      const envelope = amplitudeEnvelope(durationMs, config.amplitudeIntervalMs);
+      const blipPlan = fixture ? undefined : createJrpgBlipPlan(request.text, {
+        sampleRateHz: config.sampleRateHz,
+        rate: request.rate,
+        voice: request.voice ?? JRPG_BLIP_VOICE,
+        characterIntervalMs: config.durationPerCharacterMs,
+        minimumDurationMs: config.minimumDurationMs,
+      });
       const job = {
         token,
         sessionId,
@@ -181,7 +193,7 @@ export function createLocalTtsMcpService(options = {}) {
         channels: config.channels,
         createStream: fixture
           ? signal => createKnownTonePcmStream({ ...config, signal })
-          : signal => createSyntheticSpeechPcmStream({ ...config, durationMs, envelope, signal }),
+          : signal => createJrpgBlipPcmStream(blipPlan, { ...config, signal }),
       };
       job.expiryTimer = setTimeout(() => {
         controller.abort(new DOMException('Unclaimed PCM stream expired', 'AbortError'));
@@ -201,6 +213,7 @@ export function createLocalTtsMcpService(options = {}) {
         requested_rate: request.rate,
         effective_rate: request.rate,
         rate_mode: 'native',
+        ...(blipPlan ? { duration_ms: blipPlan.durationMs, text_cues: blipPlan.cues } : {}),
       };
       return {
         content: [{ type: 'text', text: `PCM stream ready for request ${request.request_id}` }],
@@ -276,31 +289,16 @@ export function createLocalTtsMcpService(options = {}) {
       await new Promise((resolve, reject) => server.close(error => error ? reject(error) : resolve()));
     },
     diagnostics() {
-      return { sessions: sessions.size, streams: jobsByToken.size, baseUrl: baseUrl ?? null };
+      return {
+        sessions: sessions.size,
+        streams: jobsByToken.size,
+        baseUrl: baseUrl ?? null,
+        voice: JRPG_BLIP_VOICE,
+        voices: JRPG_BLIP_VOICES,
+        defaultRate: config.defaultRate,
+      };
     },
   };
-}
-
-async function* createSyntheticSpeechPcmStream(options) {
-  const totalFrames = Math.round(options.durationMs * options.sampleRateHz / 1_000);
-  const chunkFrames = Math.max(1, Math.round(options.chunkDurationMs * options.sampleRateHz / 1_000));
-  for (let firstFrame = 0; firstFrame < totalFrames; firstFrame += chunkFrames) {
-    throwIfAborted(options.signal);
-    if (firstFrame > 0) await abortableDelay(options.chunkDelayMs, options.signal);
-    const frameCount = Math.min(chunkFrames, totalFrames - firstFrame);
-    const bytes = new Uint8Array(frameCount * 2);
-    const view = new DataView(bytes.buffer);
-    for (let index = 0; index < frameCount; index++) {
-      const frame = firstFrame + index;
-      const positionMs = frame / options.sampleRateHz * 1_000;
-      const amplitude = sampleEnvelope(options.envelope, positionMs);
-      const time = frame / options.sampleRateHz;
-      const carrier = Math.sin(2 * Math.PI * 180 * time) * 0.78
-        + Math.sin(2 * Math.PI * 360 * time) * 0.22;
-      view.setInt16(index * 2, Math.round(clamp(carrier * amplitude) * 32_767), true);
-    }
-    yield bytes;
-  }
 }
 
 async function* createKnownTonePcmStream(options) {
@@ -326,22 +324,6 @@ async function* createKnownTonePcmStream(options) {
     }
     yield bytes;
   }
-}
-
-function amplitudeEnvelope(durationMs, intervalMs) {
-  return Array.from({ length: Math.floor(durationMs / intervalMs) + 1 }, (_, index) => ({
-    atMs: index * intervalMs,
-    value: index === 0 || index * intervalMs >= durationMs ? 0 : 0.2 + (index % 4) * 0.2,
-  }));
-}
-
-function sampleEnvelope(samples, positionMs) {
-  let value = samples[0]?.value ?? 0;
-  for (const sample of samples) {
-    if (sample.atMs > positionMs) break;
-    value = sample.value;
-  }
-  return clamp(value);
 }
 
 function abortableDelay(delayMs, signal) {
@@ -390,5 +372,10 @@ function nonNegative(value, name) {
 }
 function positiveInteger(value, name) {
   if (!Number.isInteger(value) || value <= 0) throw new RangeError(`${name} must be a positive integer`);
+  return value;
+}
+
+function synthesisRate(value, name) {
+  if (!Number.isFinite(value) || value < 0.5 || value > 2) throw new RangeError(`${name} must be from 0.5 to 2`);
   return value;
 }

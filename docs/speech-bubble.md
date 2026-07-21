@@ -69,6 +69,8 @@ PerformanceSegment.displayText + bubble     AudioSource.durationMs/textCues
 - 以上均无：按播放位置和字符速率产生 typewriter 降级；
 - 真正的 LLM token 流需要后续增加 generation-safe 的 segment text append 协议，不能让 presenter 自己订阅 Agent 网络流。
 
+仓库根目录的本地 MCP 默认使用固定音高 `jrpg-blip` 逐字提示音，也可选择确定性变化音调 `jrpg-blip-varied`；二者均返回直接由 PCM 采样帧换算的逐字 `text_cues`。中文逗号、句号等标点对应静音停顿；在 `displayText === speechText` 时，这些 cue 会自动覆盖字符速率降级，用于前台验证“字出现、提示音、嘴型电平”来自同一播放时点。
+
 当前 Qwen3-TTS 参考仓库的 Python 高层生成接口返回 waveform 和 sample rate，没有返回字/词时间戳。因此原生 Qwen3-TTS 只能提供音频级同步；若需要精确 KTV，MCP 包装层需要额外运行对齐器并返回 `text_cues`，或由 Agent 提供已经对齐的 `bubble.cues`。没有对齐信息时的时长均分/逐字符高亮只是稳定降级，不应宣称为强制对齐结果。
 
 ## 音频输出同步点
