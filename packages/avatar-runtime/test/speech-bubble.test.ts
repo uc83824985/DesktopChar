@@ -21,8 +21,12 @@ test('complete speech bubble exposes the complete display text', () => {
 });
 
 test('stream speech bubble reveals text from playback position', () => {
-  assert.equal(projectSpeechBubble(playing(0, segment('stream'))).visibleText, '');
-  assert.equal(projectSpeechBubble(playing(1_100, segment('stream'))).visibleText, '你好世');
+  const initial = projectSpeechBubble(playing(0, segment('stream')));
+  const progressed = projectSpeechBubble(playing(1_100, segment('stream')));
+  assert.equal(initial.visibleText, '');
+  assert.equal(initial.trailingText, '你好世界');
+  assert.equal(progressed.visibleText, '你好世');
+  assert.equal(progressed.trailingText, '界');
 });
 
 test('known audio duration scales fallback text timing to the complete utterance', () => {

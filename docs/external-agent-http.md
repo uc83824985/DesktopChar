@@ -52,7 +52,7 @@ Electron main 会在随机 loopback 端口自动启动 [`local-tts-mcp`](../loca
 - 可选、可重复的四音高 `jrpg-blip-varied`；
 - Unicode 字素级提示音和标点静音停顿；
 - sample-aligned `duration_ms` 与 `text_cues`；
-- 流式 PCM、取消、真实播放电平、角色级口型增益和冒泡同步。
+- 流式 PCM、取消、真实播放电平、角色级口型增益和聊天气泡同步。
 
 启动后验证：
 
@@ -244,7 +244,7 @@ Invoke-RestMethod `
 
 成功投递返回 HTTP 202 和 `planId`。角色非 `idle` 时返回 HTTP 409；Agent 应等待 `/v1/state` 回到 `idle`，或明确发起中断，不能盲目重试覆盖当前表演。
 
-每个 segment 可选声明 `bubble`，控制 `displayText` 的应用层聊天冒泡：
+每个 segment 可选声明 `bubble`，控制 `displayText` 的应用层聊天气泡：
 
 ```json
 {
@@ -256,7 +256,7 @@ Invoke-RestMethod `
 }
 ```
 
-支持 `complete`、`stream` 和 `karaoke`。冒泡只在 `playback.started` 后显示，完成后等待 `dismissDelayMs` 再隐藏。精确分块/高亮可由 Agent 提供与 `displayText` 完全拼接一致的 `cues`；若 TTS MCP 返回匹配的 `text_cues`，Runtime 优先采用实际语音对齐信息。当前 HTTP 仍提交完整计划，`stream` 是播放时钟驱动的渐进显示，不是网络 token 流。完整契约见 [角色语音聊天冒泡](speech-bubble.md)。
+支持 `complete`、`stream` 和 `karaoke`。聊天气泡只在 `playback.started` 后显示，完成后等待 `dismissDelayMs` 再隐藏。精确分块/高亮可由 Agent 提供与 `displayText` 完全拼接一致的 `cues`；若 TTS MCP 返回匹配的 `text_cues`，Runtime 优先采用实际语音对齐信息。当前 HTTP 仍提交完整计划，`stream` 是播放时钟驱动的渐进显示，不是网络 token 流。完整契约见 [角色聊天气泡](speech-bubble.md)。
 
 ```powershell
 Invoke-RestMethod -Method Post http://127.0.0.1:17373/v1/interrupt
@@ -272,7 +272,7 @@ Invoke-RestMethod -Method Post http://127.0.0.1:17373/v1/interrupt
 - `snapshot.state`：`idle`、`thinking`、`speaking`；
 - `snapshot.planId / segmentId / sequence`：当前表演位置；
 - `snapshot.playback.status / positionMs`：真实播放生命周期；
-- `snapshot.speechBubble.phase / positionMs`：由 Runtime 持有的冒泡播放与延迟关闭状态；
+- `snapshot.speechBubble.phase / positionMs`：由 Runtime 持有的聊天气泡播放与延迟关闭状态；
 - `snapshot.lastError`：最近的可恢复或不可恢复错误。
 
 完成条件是同一 `planId` 执行后 Runtime 回到 `idle`，不是 HTTP 202、Agent 文本完成或 TTS source ready。若后续 Agent 需要低延迟主动反馈，可在不改变领域契约的前提下增加 SSE；SSE 只投影 snapshot/生命周期，不持有状态。

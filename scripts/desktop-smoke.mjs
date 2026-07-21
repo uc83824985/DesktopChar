@@ -73,7 +73,8 @@ try {
   }));
   if (menu.gazeChecked !== 'true' || menu.bubbleItems.length !== 3
     || menu.hideAvatar !== '隐藏角色'
-    || !menu.headings.includes('角色设置') || !menu.headings.includes('桌面窗口')) {
+    || !menu.headings.includes('角色设置') || !menu.headings.includes('聊天气泡测试')
+    || !menu.headings.includes('桌面窗口')) {
     throw new Error(`Immediate context-menu registrations are incomplete: ${JSON.stringify(menu)}`);
   }
   await page.locator('[data-item-id="gaze-follow"]').click();
@@ -90,11 +91,18 @@ try {
     throw new Error(`Stream bubble must not render a synthetic input caret: ${streamDecoration}`);
   }
   await page.waitForTimeout(180);
-  const earlyStreamText = await page.locator('#speech-bubble').textContent();
+  const earlyStreamText = await page.locator('#speech-bubble-leading').textContent();
+  const earlyStreamLayout = await chatBubbleLayout(page);
   await page.waitForTimeout(320);
-  const laterStreamText = await page.locator('#speech-bubble').textContent();
+  const laterStreamText = await page.locator('#speech-bubble-leading').textContent();
+  const laterStreamLayout = await chatBubbleLayout(page);
   if (!earlyStreamText || !laterStreamText || laterStreamText.length <= earlyStreamText.length) {
     throw new Error(`Stream bubble did not advance with playback: ${JSON.stringify({ earlyStreamText, laterStreamText })}`);
+  }
+  if (earlyStreamLayout.textAlign !== 'center'
+    || earlyStreamLayout.contentHeight < earlyStreamLayout.lineHeight * 1.5
+    || !sameRect(earlyStreamLayout.rect, laterStreamLayout.rect)) {
+    throw new Error(`Chat bubble must wrap, center, and keep its full-text layout while streaming: ${JSON.stringify({ earlyStreamLayout, laterStreamLayout })}`);
   }
   await page.evaluate(() => document.querySelector('#avatar')?.dispatchEvent(
     new KeyboardEvent('keydown', { key: 'ContextMenu', bubbles: true }),
@@ -105,6 +113,10 @@ try {
   await page.locator('body[data-speech-bubble="karaoke"] #speech-bubble-active').waitFor({ timeout: 2_000 });
   const karaokeActive = await page.locator('#speech-bubble-active').textContent();
   if (!karaokeActive) throw new Error(`Karaoke bubble did not expose its timed cue: ${karaokeActive}`);
+  if (process.env.DESKTOP_CHAR_CHAT_BUBBLE_SCREENSHOT) {
+    await page.waitForTimeout(180);
+    await page.screenshot({ path: process.env.DESKTOP_CHAR_CHAT_BUBBLE_SCREENSHOT });
+  }
   await page.evaluate(() => document.querySelector('#avatar')?.dispatchEvent(
     new KeyboardEvent('keydown', { key: 'ContextMenu', bubbles: true }),
   ));
@@ -199,4 +211,26 @@ async function waitForMainWindowVisibility(application, expected) {
     await new Promise(resolve => setTimeout(resolve, 25));
   }
   throw new Error(`Avatar window did not become ${expected ? 'visible' : 'hidden'}`);
+}
+
+async function chatBubbleLayout(page) {
+  return page.evaluate(() => {
+    const bubble = document.querySelector('#speech-bubble');
+    const paragraph = bubble?.querySelector('p');
+    if (!(bubble instanceof HTMLElement) || !(paragraph instanceof HTMLElement)) {
+      throw new Error('Chat bubble DOM is missing');
+    }
+    const style = getComputedStyle(paragraph);
+    const rect = bubble.getBoundingClientRect();
+    return {
+      rect: { x: rect.x, y: rect.y, width: rect.width, height: rect.height },
+      contentHeight: paragraph.getBoundingClientRect().height,
+      lineHeight: Number.parseFloat(style.lineHeight),
+      textAlign: style.textAlign,
+    };
+  });
+}
+
+function sameRect(left, right, epsilon = 0.5) {
+  return ['x', 'y', 'width', 'height'].every(key => Math.abs(left[key] - right[key]) <= epsilon);
 }

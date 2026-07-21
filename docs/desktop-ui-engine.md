@@ -131,11 +131,11 @@ Scene UI 引擎不直接调用 Electron：
 - Actor state、Behavior mode、transform 和 presenter config 输入；
 - generation-safe UI 事件路由；
 - `scene-ui-dom` 的即时 UI 注册表和共享 DOM 右键菜单 Host；
-- 角色、冒泡诊断和桌面窗口分别主动注册菜单贡献，菜单打开时重新读取当前 Runtime 状态；
+- 角色、聊天气泡诊断和桌面窗口分别主动注册菜单贡献，菜单打开时重新读取当前 Runtime 状态；
 - 键盘 `Shift+F10` / Context Menu 键入口、菜单焦点导航，以及 Electron 穿透状态合并；
 - 动态状态更新、Actor 隐藏、层级排序和非法声明的测试。
 
-尚未实现通用 `SceneRenderFrame.uiSurfaces` DOM Host、冒泡的 Actor 锚点定位，以及根据内容测量修改窗口 bounds。右键菜单已先验证共享 Host、对象注册、即时状态投影和 Electron 命中合并；后续场景 Surface 复用同一 package，不在引擎中创建任何具体字幕、聊天框或场景 UI。
+尚未实现通用 `SceneRenderFrame.uiSurfaces` DOM Host、聊天气泡的 Actor 锚点定位，以及根据内容测量修改窗口 bounds。右键菜单已先验证共享 Host、对象注册、即时状态投影和 Electron 命中合并；后续场景 Surface 复用同一 package，不在引擎中创建任何具体字幕、聊天框或场景 UI。
 
 ### 开发期即时 UI 注册
 
@@ -165,8 +165,8 @@ registry.register({
 - 注册返回 disposer，对象卸载时可同步撤销 UI；
 - `target: '*'` 用于桌面窗口等全局贡献，多个对象贡献按 `order + id` 确定性合并。
 
-当前角色右键菜单包含可勾选的眼部跟随、三种冒泡效果测试、隐藏角色、恢复窗口位置和退出；“恢复中立”不再作为容易与跟随状态混淆的一次性按钮。菜单展开期间作为交互 Surface 暂停窗口穿透，关闭后重新回到像素 Coverage 决定的状态。隐藏角色只是向 Electron shell 发送白名单命令，托盘及窗口显隐仍由 main 独占。
+当前角色右键菜单包含可勾选的眼部跟随、三种聊天气泡测试、隐藏角色、恢复窗口位置和退出；“恢复中立”不再作为容易与跟随状态混淆的一次性按钮。菜单展开期间作为交互 Surface 暂停窗口穿透，关闭后重新回到像素 Coverage 决定的状态。隐藏角色只是向 Electron shell 发送白名单命令，托盘及窗口显隐仍由 main 独占。
 
-### 已落地的应用 presenter：语音聊天冒泡
+### 已落地的应用 presenter：聊天气泡
 
-现有 renderer 已装配第一个只读应用 presenter：角色语音聊天冒泡。它读取 Avatar Runtime 的活动 segment 与播放快照，通过纯函数投影完整、渐进追加和 KTV 高亮状态；不进入 Scene Engine 内置类型，也不在 DOM 中持有计划或播放进度。当前为 `scene-ui-dom` 落地前的应用装配验证，后续只迁移 Host 和角色锚点定位，保留领域契约。详见 [角色语音聊天冒泡](speech-bubble.md)。
+现有 renderer 已装配第一个只读应用 presenter：角色聊天气泡。它读取 Avatar Runtime 的活动 segment 与播放快照，通过纯函数投影完整、渐进追加和 KTV 高亮状态；不进入 Scene Engine 内置类型，也不在 DOM 中持有计划或播放进度。当前为 `scene-ui-dom` 落地前的应用装配验证，后续只迁移 Host 和角色锚点定位，保留领域契约。详见 [角色聊天气泡](speech-bubble.md)。

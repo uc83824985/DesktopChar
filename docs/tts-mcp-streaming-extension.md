@@ -10,7 +10,7 @@
 - HTTP 音频端点只传连续原始 PCM，不混入 JSON 或文本标记；
 - DesktopChar 播放器负责缓冲、实际播放位置、实时电平和完成事实；
 - Avatar Runtime 继续是角色状态唯一所有者；
-- 语速可以作为合成参数和冒泡降级校准依据，但不能伪装成字词强制对齐；
+- 语速可以作为合成参数和聊天气泡降级校准依据，但不能伪装成字词强制对齐；
 - 新字段采用向后兼容的可选扩展，当前客户端可忽略未知字段。
 
 ```text
@@ -45,7 +45,7 @@ tts_cancel_synthesis    owned by player         owned by TTS service
 - TTS 侧播放百分比、暂停、音量或播放器状态；
 - 在 raw PCM 中内嵌元数据；
 - 单次合成过程中动态改变语速；
-- 让 MCP 管理 DesktopChar 的消息队列、冒泡或角色状态。
+- 让 MCP 管理 DesktopChar 的消息队列、聊天气泡或角色状态。
 
 ## `tts_open_stream` 请求
 
@@ -212,7 +212,7 @@ sample_start = previous_sample_start + previous_sample_count
 - `sequence` 从 0 开始严格递增；
 - `sample_start` 单调递增且不得重叠；
 - 无静音补洞时，相邻事件应满足 `next.sample_start = current.sample_start + current.sample_count`；
-- `generated_at_monotonic_ms` 只用于诊断生成抖动，不用于驱动播放或冒泡；
+- `generated_at_monotonic_ms` 只用于诊断生成抖动，不用于驱动播放或聊天气泡；
 - 网络读取 chunk 不保证与该事件一一对应，消费者必须使用 sample offset。
 
 ### 正常完成
@@ -274,9 +274,9 @@ Qwen 双轨生成在流式文本输入模式下可以知道某个 `generation_st
 
 它只表示文本条件何时送入模型，不表示该字词何时在音频中发声。禁止将其转换成 `text_cues` 或用于精确 KTV 高亮。`non_streaming_mode=true` 时文本会整体预填，也不应产生这种逐 token 映射。
 
-## 冒泡与语速校准边界
+## 聊天气泡与语速校准边界
 
-DesktopChar 当前冒泡同步优先级保持不变：
+DesktopChar 当前聊天气泡同步优先级保持不变：
 
 1. 真实 `text_cues`；
 2. Agent 提供的 `bubble.cues`；
@@ -297,7 +297,7 @@ DesktopChar 当前冒泡同步优先级保持不变：
 
 建议至少覆盖多条包含停顿和不同长度的句子，使用最终音频时长计算中位数。`rate` 改变后可以用 `calibrated_cps * effective_rate` 作为初始估计，但仍应单独抽样验证，不能假设严格线性。
 
-`charactersPerSecond` 最终仍由应用层决定，因为冒泡显示的是 `displayText`，而 MCP 合成的是 `speechText`。MCP 返回值只能作为提示，不能直接修改 Runtime 状态。
+`charactersPerSecond` 最终仍由应用层决定，因为聊天气泡显示的是 `displayText`，而 MCP 合成的是 `speechText`。MCP 返回值只能作为提示，不能直接修改 Runtime 状态。
 
 ## 当前 `63` 服务的最小改造点
 

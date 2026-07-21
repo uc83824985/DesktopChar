@@ -217,7 +217,7 @@ UI 不负责：
 - 音频资源和 object URL 清理；
 - 增量消费 HTTP 音频流并管理首播缓冲、欠载和背压；
 - 从实际输出采样计算 `playback.level`，artifact 模式可使用 amplitude envelope；
-- 使用 Web Audio 输出时间线发出 `playback.started/progress/completed`，供嘴型、Timeline 和冒泡共享；
+- 使用 Web Audio 输出时间线发出 `playback.started/progress/completed`，供嘴型、Timeline 和聊天气泡共享；
 - 将媒体事实转换为 PlaybackEvent。
 
 播放器不负责：

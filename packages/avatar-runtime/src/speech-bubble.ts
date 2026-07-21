@@ -39,7 +39,17 @@ function streamBubble(
   const visibleText = cues?.length
     ? cues.filter(cue => cue.atMs <= positionMs).map(cue => cue.text).join('')
     : takeCharacters(text, revealedCharacterCount(text, positionMs, durationMs, config));
-  return { visible: true, mode: 'stream', fullText: text, visibleText, leadingText: visibleText, activeText: '', trailingText: '' };
+  return {
+    visible: true,
+    mode: 'stream',
+    fullText: text,
+    visibleText,
+    leadingText: visibleText,
+    activeText: '',
+    // The presenter keeps this remainder invisible but in-flow so the complete
+    // message determines wrapping before the first streamed character appears.
+    trailingText: text.slice(visibleText.length),
+  };
 }
 
 function karaokeBubble(
