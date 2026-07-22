@@ -17,7 +17,7 @@
 
 它通过真实本地 MCP 请求中的 `test_fixture: "known-tone-v1"` 返回 HTTP 流，不携带预计算 amplitude 数组，因此 Runtime 无法绕过实际 PCM 数据“猜”出口型。只有播放器轨道、模型参数轨道和逐点响应时延都满足条件时，前台才显示通过。
 
-该按钮只在 `DESKTOP_CHAR_TTS_MODE=local` 时启用。外部 MCP 不需要实现测试专用字段，切换到 `mcp` 模式后不会收到 `test_fixture`。
+该按钮只在当前 Provider 的 `tts_status.capabilities.test_fixtures` 包含 `known-tone-v1` 时启用。未声明该能力的 Provider 不会收到 `test_fixture`，判断不依赖 Provider 名称或 `managed/external` 生命周期。
 
 ## 测试素材
 

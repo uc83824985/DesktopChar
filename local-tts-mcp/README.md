@@ -5,6 +5,7 @@
 - 官方 `@modelcontextprotocol/sdk` 的有状态 Streamable HTTP Server Transport；
 - `initialize`、session ID、`tools/list`、`tools/call` 与 session 关闭；
 - MCP 控制面和 HTTP PCM 数据面分离；
+- `tts_status` 发布固定 Profile、就绪语义与可选测试能力；
 - `tts_open_stream` 尽快返回单次消费的 `stream_url`；
 - `tts_cancel_synthesis` 同时终止生成和正在输出的 PCM；
 - loopback-only 监听、Host 校验、Origin/CORS 白名单、流过期和重复消费保护；
@@ -28,7 +29,7 @@ MCP: http://127.0.0.1:8766/mcp
 PCM: http://127.0.0.1:8766/audio/{opaque-stream-token}
 ```
 
-桌面版 `npm run desktop` 会在 `DESKTOP_CHAR_TTS_MODE=local` 时自动启动同一服务实现，但使用随机空闲端口避免冲突。`npm start` 会同时启动该服务与网页开发服务器。
+桌面版 `npm run desktop` 默认通过 `managed` 生命周期执行该独立入口，再经正式 MCP session 连接；Electron 控制器不再直接创建 `createLocalTtsMcpService()`。`npm start` 也会先启动相同子进程，通过 Profile 就绪检查后再启动网页开发服务器。
 
 可配置项：
 
@@ -43,9 +44,15 @@ DESKTOP_CHAR_TTS_SAMPLE_RATE_HZ=24000
 DESKTOP_CHAR_TTS_CHANNELS=1
 ```
 
-独立服务只允许绑定 loopback。桌面自动启动时端口默认是 `0`，即由操作系统分配；独立运行与网页模式默认使用 `8766`。
+独立服务只允许绑定 loopback。managed 启动要求配置的 `connection.url` 与服务端口一致，默认使用 `8766`；端口冲突会作为所有权错误报告，不会静默接管其他进程。
 
 ## MCP 工具
+
+工具集合遵循 [DesktopChar TTS MCP Profile v1](../docs/tts-mcp-integration.md)。工具名和关键参数名固定，不通过 DesktopChar 配置映射。
+
+### `tts_status`
+
+输入为空对象。该调用无副作用，不加载模型，返回 `desktop-char.tts.streaming` Profile v1、`ready + accepting_requests=true` 以及格式、voice、`text_cues` 和 `known-tone-v1` 测试能力。
 
 ### `tts_open_stream`
 
@@ -110,13 +117,17 @@ npm run tts:local-mcp
 
 `jrpg-blip` 的元数据是可精确计算的；未知总长度与无 `text_cues` 的降级路径继续由 Adapter 单元测试及真实外部 Qwen3-TTS 语音合成 MCP 覆盖，不需要让本地前台声音故意退化。
 
-可通过现有桌面启动脚本试听保留的变化音调版：
+可在设备配置中选择保留的变化音调版：
 
-```powershell
-powershell -NoProfile -ExecutionPolicy Bypass -File scripts/desktop-mcp-tts.ps1 -Voice "jrpg-blip-varied"
+```json
+{
+  "ttsMcp": {
+    "synthesis": { "voice": "jrpg-blip-varied" }
+  }
+}
 ```
 
-`test_fixture: "known-tone-v1"` 是仅供仓库前台验收使用的显式扩展。正常 Agent 和生产 MCP 不应发送它；外部 MCP 模式下桌面端也不会注入该字段。
+`test_fixture: "known-tone-v1"` 是仅供仓库前台验收使用的显式扩展。正常 Agent 和生产 MCP 不应发送它；前台只有在 `tts_status.capabilities.test_fixtures` 声明该值时才会启用并注入，不根据 Provider 名称或生命周期特判。
 
 ### `tts_cancel_synthesis`
 
@@ -130,6 +141,7 @@ powershell -NoProfile -ExecutionPolicy Bypass -File scripts/desktop-mcp-tts.ps1 
 
 ```text
 MCP initialize/session
+  -> tools/list + tts_status
   -> tts_open_stream
        -> register synthesis job
        -> return opaque HTTP URL
