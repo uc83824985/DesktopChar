@@ -2,7 +2,7 @@
 
 ## 核心约束
 
-Avatar Runtime 是角色运行状态的唯一所有者。任何外部模块都不能直接设置 `idle`、`thinking`、`speaking`、表情或动作状态，只能报告已发生的事实或提交用户意图。
+Avatar Runtime 是角色运行状态的唯一所有者。任何外部模块都不能直接设置 `idle`、`thinking`、`speaking`、`presenting`、表情或动作状态，只能报告已发生的事实或提交用户意图。
 
 ```text
 UI / Player / TTS / Renderer
@@ -139,7 +139,7 @@ type TtsEvent =
   | { type: 'tts.plan-completed'; generation: number; planId: string };
 ```
 
-TTS 只报告合成事实，不选择播放顺序，不修改 `speaking` 状态。
+TTS 只报告合成事实，不选择播放顺序，不修改 `speaking` 或 `presenting` 状态。Runtime 收到失败事实后将对应 segment 排入顺序化纯文本回退；回退关闭前不会推进后续 segment。
 
 ### 播放器事件
 

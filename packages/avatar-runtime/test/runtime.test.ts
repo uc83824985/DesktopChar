@@ -4,6 +4,7 @@ import type { AvatarEvent, PerformancePlan, RuntimeEffect } from '../../contract
 import { ParameterMixer } from '../src/mixer.ts';
 import { DefaultAvatarPlanner } from '../src/planner.ts';
 import { AvatarRuntime } from '../src/runtime.ts';
+import { estimateTextFallbackDurationMs } from '../src/speech-bubble.ts';
 import { ControlledEffects } from './fakes.ts';
 import { capabilities } from './helpers.ts';
 
@@ -216,14 +217,65 @@ test('pause freezes timeline until playback resumes', () => {
   assert.deepEqual(effects.motions, ['nod-0']);
 });
 
-test('a failed TTS segment is skipped without blocking later ready audio', () => {
+test('a failed TTS segment presents complete text before advancing to later ready audio', () => {
+  const effects = new ControlledEffects();
+  const runtime = createRuntime(effects);
+  const plan = threeSegmentPlan();
+  plan.segments[0]!.bubble = { mode: 'stream', charactersPerSecond: 20 };
+  runtime.dispatch({ type: 'plan.submitted', plan });
+  effects.resolveTts(1);
+  effects.failTts(0);
+
+  const fallback = runtime.getSnapshot().speechBubble;
+  assert.equal(runtime.getSnapshot().state, 'presenting');
+  assert.equal(fallback.displayText, 'text-0');
+  assert.equal(fallback.config?.mode, 'complete');
+  assert.deepEqual(effects.playedSegments, []);
+  assert.equal(effects.frames.at(-1)?.ParamMouthOpenY, 0);
+  assert.equal(
+    effects.pendingBubbleDismissals.get(fallback.presentationId)?.effect.delayMs,
+    estimateTextFallbackDurationMs('text-0'),
+  );
+  effects.dismissBubble(fallback.presentationId);
+
+  assert.deepEqual(effects.playedSegments, ['segment-1']);
+  assert.equal(runtime.getSnapshot().lastError?.code, 'fake-tts-failed');
+});
+
+test('multiple failed TTS segments use ordered text fallbacks instead of replacing each other', () => {
   const effects = new ControlledEffects();
   const runtime = createRuntime(effects);
   runtime.dispatch({ type: 'plan.submitted', plan: threeSegmentPlan() });
-  effects.resolveTts(1);
+  effects.failTts(1);
+  effects.resolveTts(2);
   effects.failTts(0);
-  assert.deepEqual(effects.playedSegments, ['segment-1']);
-  assert.equal(runtime.getSnapshot().lastError?.code, 'fake-tts-failed');
+
+  const first = runtime.getSnapshot().speechBubble;
+  assert.equal(first.displayText, 'text-0');
+  effects.dismissBubble(first.presentationId);
+
+  const second = runtime.getSnapshot().speechBubble;
+  assert.equal(runtime.getSnapshot().state, 'presenting');
+  assert.equal(second.displayText, 'text-1');
+  assert.ok(second.presentationId > first.presentationId);
+  effects.dismissBubble(second.presentationId);
+
+  assert.deepEqual(effects.playedSegments, ['segment-2']);
+});
+
+test('interrupt cancels an active text fallback without advancing the failed plan', () => {
+  const effects = new ControlledEffects();
+  const runtime = createRuntime(effects);
+  runtime.dispatch({ type: 'plan.submitted', plan: threeSegmentPlan() });
+  effects.failTts(0);
+  const presentationId = runtime.getSnapshot().speechBubble.presentationId;
+
+  runtime.dispatch({ type: 'user.interrupt-requested' });
+
+  assert.equal(runtime.getSnapshot().state, 'idle');
+  assert.equal(runtime.getSnapshot().speechBubble.phase, 'hidden');
+  assert.deepEqual(effects.cancelledBubbleDismissals, [presentationId]);
+  assert.deepEqual(effects.playedSegments, []);
 });
 
 test('planner removes unsupported emotion, action, and gaze capabilities before execution', () => {
@@ -294,6 +346,10 @@ test('effect executor failures return to the runtime as error events', () => {
   runtime.dispatch({ type: 'plan.submitted', plan: threeSegmentPlan() });
   assert.equal(runtime.getSnapshot().lastError?.code, 'effect-failed');
   controlled.resolveTts(1);
+  const fallback = runtime.getSnapshot().speechBubble;
+  assert.equal(runtime.getSnapshot().state, 'presenting');
+  assert.equal(fallback.displayText, 'text-0');
+  controlled.dismissBubble(fallback.presentationId);
   assert.deepEqual(controlled.playedSegments, ['segment-1']);
 });
 

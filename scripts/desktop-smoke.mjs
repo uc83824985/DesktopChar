@@ -1,5 +1,7 @@
 import path from 'node:path';
 import { _electron as electron } from 'playwright-core';
+import { Client } from '@modelcontextprotocol/sdk/client/index.js';
+import { StreamableHTTPClientTransport } from '@modelcontextprotocol/sdk/client/streamableHttp.js';
 
 const root = process.cwd();
 const application = await electron.launch({
@@ -112,6 +114,38 @@ try {
   await page.locator('[data-item-id="tts-mcp-enabled"]').click();
   await page.locator('body[data-context-menu="open"][data-tts-mcp-service="disabled"] [data-item-id="tts-mcp-enabled"][aria-checked="false"]').waitFor({ timeout: 5_000 });
   assertContextMenuOrigin(await contextMenuOrigin(page), stableMenuOrigin, 'disabling TTS MCP');
+  const fallbackText = '中文回退';
+  const fallbackClient = new Client({ name: 'desktop-char-text-fallback-smoke', version: '1.0.0' });
+  await fallbackClient.connect(new StreamableHTTPClientTransport(new URL(initial.mcpServices.character.endpoint)));
+  try {
+    const suffix = Date.now();
+    const performed = await fallbackClient.callTool({
+      name: 'desktop_char_perform',
+      arguments: { plan: {
+        id: `text-fallback-${suffix}`,
+        segments: [{
+          id: `text-fallback-segment-${suffix}`,
+          sequence: 0,
+          displayText: fallbackText,
+          speechText: fallbackText,
+          bubble: { mode: 'karaoke' },
+        }],
+      } },
+    });
+    if (performed.structuredContent?.accepted !== true) {
+      throw new Error(`Character MCP rejected the text fallback plan: ${JSON.stringify(performed)}`);
+    }
+  }
+  finally {
+    await fallbackClient.close();
+  }
+  await page.locator('body[data-runtime-state="presenting"][data-speech-bubble="complete"]').waitFor({ timeout: 2_000 });
+  const fallbackBubbleText = await page.locator('#speech-bubble').textContent();
+  if (fallbackBubbleText?.trim() !== fallbackText) {
+    throw new Error(`Character MCP UTF-8 text fallback was corrupted: ${JSON.stringify(fallbackBubbleText)}`);
+  }
+  await page.locator('body[data-runtime-state="idle"][data-speech-bubble="hidden"]').waitFor({ timeout: 4_000 });
+  assertContextMenuOrigin(await contextMenuOrigin(page), stableMenuOrigin, 'presenting the TTS text fallback');
   await page.locator('[data-item-id="tts-mcp-enabled"]').click();
   await page.locator('body[data-context-menu="open"][data-tts-mcp-service="ready"] [data-item-id="tts-mcp-enabled"][aria-checked="true"]').waitFor({ timeout: 5_000 });
   assertContextMenuOrigin(await contextMenuOrigin(page), stableMenuOrigin, 'enabling TTS MCP');

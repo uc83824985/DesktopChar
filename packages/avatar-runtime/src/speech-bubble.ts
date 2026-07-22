@@ -16,6 +16,21 @@ export interface SpeechBubbleProjection {
 
 const DEFAULT_CHARACTERS_PER_SECOND = 8;
 export const DEFAULT_SPEECH_BUBBLE_DISMISS_DELAY_MS = 800;
+export const TEXT_FALLBACK_BASE_DURATION_MS = 1_200;
+export const TEXT_FALLBACK_DURATION_PER_CHARACTER_MS = 180;
+export const TEXT_FALLBACK_MIN_DURATION_MS = 2_000;
+export const TEXT_FALLBACK_MAX_DURATION_MS = 12_000;
+
+export function estimateTextFallbackDurationMs(text: string): number {
+  const characterCount = Array.from(text).filter(character => !/\s/u.test(character)).length;
+  return Math.max(
+    TEXT_FALLBACK_MIN_DURATION_MS,
+    Math.min(
+      TEXT_FALLBACK_MAX_DURATION_MS,
+      TEXT_FALLBACK_BASE_DURATION_MS + characterCount * TEXT_FALLBACK_DURATION_PER_CHARACTER_MS,
+    ),
+  );
+}
 
 export function projectSpeechBubble(
   state: Readonly<SpeechBubbleState>,

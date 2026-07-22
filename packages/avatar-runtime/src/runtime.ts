@@ -17,7 +17,10 @@ import { ParameterMixer } from './mixer.ts';
 import { createInitialSnapshot, reduceAvatarSnapshot } from './reducer.ts';
 import { PerformanceTimeline } from './timeline.ts';
 import { DEFAULT_GAZE_PROFILE, mapGazeTarget, validateGazeProfile } from './gaze-profile.ts';
-import { DEFAULT_SPEECH_BUBBLE_DISMISS_DELAY_MS } from './speech-bubble.ts';
+import {
+  DEFAULT_SPEECH_BUBBLE_DISMISS_DELAY_MS,
+  estimateTextFallbackDurationMs,
+} from './speech-bubble.ts';
 
 export interface RuntimeEffectExecutor {
   execute(effect: RuntimeEffect, dispatch: (event: AvatarEvent) => void): void | Promise<void>;
@@ -41,6 +44,7 @@ export class AvatarRuntime {
   private readonly failedSequences = new Set<number>();
   private timeline: PerformanceTimeline | null = null;
   private currentSource: AudioSource | null = null;
+  private textFallback: { presentationId: number; segmentId: string; sequence: number } | null = null;
   private disposed = false;
   private layers: ParameterLayers = emptyLayers();
   private readonly options: AvatarRuntimeOptions;
@@ -105,6 +109,7 @@ export class AvatarRuntime {
       this.failedSequences.clear();
       this.timeline = null;
       this.currentSource = null;
+      this.textFallback = null;
       this.layers = performanceLayersWithGaze(this.layers.gaze);
       acceptedEvent = { type: 'plan.submitted', plan: normalized };
     }
@@ -174,6 +179,7 @@ export class AvatarRuntime {
       this.timeline = null;
       this.currentSource = null;
       this.plan = null;
+      this.textFallback = null;
       this.readyAudio.clear();
       this.failedSequences.clear();
       this.layers = performanceLayersWithGaze(this.layers.gaze);
@@ -210,6 +216,22 @@ export class AvatarRuntime {
     this.executeAll(transition.effects);
     this.executeAll(bubbleTransition.effects);
 
+    if (
+      acceptedEvent.type === 'runtime.speech-bubble-dismissed'
+      && acceptedEvent.presentationId === this.textFallback?.presentationId
+    ) {
+      const completed = this.textFallback;
+      this.textFallback = null;
+      this.nextSegmentIndex++;
+      this.dispatch({
+        type: 'runtime.text-fallback-completed',
+        generation: this.snapshot.generation,
+        segmentId: completed.segmentId,
+        sequence: completed.sequence,
+      });
+      return;
+    }
+
     if (acceptedEvent.type === 'renderer.ready' && this.snapshot.gaze.active) {
       this.layers.gaze = gazeLayer(this.snapshot.gaze.x, this.snapshot.gaze.y, this.gazeProfile);
       this.emitFrame();
@@ -221,6 +243,7 @@ export class AvatarRuntime {
       || acceptedEvent.type === 'tts.segment-failed'
       || acceptedEvent.type === 'playback.completed'
       || acceptedEvent.type === 'playback.failed'
+      || acceptedEvent.type === 'runtime.text-fallback-completed'
     ) {
       this.playNextReadySegment();
     }
@@ -239,6 +262,7 @@ export class AvatarRuntime {
       || this.snapshot.playback.status === 'buffering'
       || this.snapshot.playback.status === 'playing'
       || this.snapshot.playback.status === 'paused'
+      || this.textFallback !== null
     ) {
       return;
     }
@@ -254,8 +278,16 @@ export class AvatarRuntime {
     }
     if (this.failedSequences.has(segment.sequence)) {
       this.failedSequences.delete(segment.sequence);
-      this.nextSegmentIndex++;
-      this.playNextReadySegment();
+      const presentationId = this.snapshot.speechBubble.presentationId + 1;
+      this.textFallback = { presentationId, segmentId: segment.id, sequence: segment.sequence };
+      this.dispatch({
+        type: 'runtime.text-fallback-selected',
+        generation: this.snapshot.generation,
+        segmentId: segment.id,
+        sequence: segment.sequence,
+        presentationId,
+        durationMs: estimateTextFallbackDurationMs(segment.displayText),
+      });
       return;
     }
     const audio = this.readyAudio.get(segment.sequence);
@@ -325,6 +357,35 @@ export class AvatarRuntime {
     effects: RuntimeEffect[];
   } {
     const current = this.snapshot.speechBubble;
+    if (event.type === 'runtime.text-fallback-selected') {
+      const segment = this.segmentById(event.segmentId);
+      if (!segment) return { state: current, effects: [] };
+      const effects: RuntimeEffect[] = current.phase === 'holding'
+        ? [{
+            type: 'speech-bubble.cancel-dismiss',
+            generation: this.snapshot.generation,
+            presentationId: current.presentationId,
+          }]
+        : [];
+      effects.push({
+        type: 'speech-bubble.schedule-dismiss',
+        generation: this.snapshot.generation,
+        presentationId: event.presentationId,
+        delayMs: event.durationMs,
+      });
+      return {
+        state: {
+          phase: 'holding',
+          presentationId: event.presentationId,
+          segmentId: segment.id,
+          displayText: segment.displayText,
+          config: { mode: 'complete', dismissDelayMs: event.durationMs },
+          positionMs: 0,
+          durationMs: event.durationMs,
+        },
+        effects,
+      };
+    }
     if (event.type === 'presentation.chat-bubble-requested') {
       const presentationId = current.presentationId + 1;
       const delayMs = event.dismissDelayMs ?? DEFAULT_SPEECH_BUBBLE_DISMISS_DELAY_MS;

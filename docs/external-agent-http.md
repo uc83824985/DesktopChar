@@ -258,7 +258,7 @@ Invoke-RestMethod `
 }
 ```
 
-支持 `complete`、`stream` 和 `karaoke`。聊天气泡只在 `playback.started` 后显示，完成后等待 `dismissDelayMs` 再隐藏。精确分块/高亮可由 Agent 提供与 `displayText` 完全拼接一致的 `cues`；若 TTS MCP 返回匹配的 `text_cues`，Runtime 优先采用实际语音对齐信息。当前 HTTP 仍提交完整计划，`stream` 是播放时钟驱动的渐进显示，不是网络 token 流。完整契约见 [角色聊天气泡](speech-bubble.md)。
+支持 `complete`、`stream` 和 `karaoke`。TTS 正常时聊天气泡只在 `playback.started` 后显示，完成后等待 `dismissDelayMs` 再隐藏。精确分块/高亮可由 Agent 提供与 `displayText` 完全拼接一致的 `cues`；若 TTS MCP 返回匹配的 `text_cues`，Runtime 优先采用实际语音对齐信息。当前 HTTP 仍提交完整计划，`stream` 是播放时钟驱动的渐进显示，不是网络 token 流。TTS 不可用时 Runtime 改为 `presenting`，强制完整文本并按字符数估算 2–12 秒显示时间，不产生语音、口型、流式追加或 KTV 高亮。完整契约见 [角色聊天气泡](speech-bubble.md)。
 
 ```powershell
 Invoke-RestMethod -Method Post http://127.0.0.1:17373/v1/interrupt
@@ -271,13 +271,17 @@ Invoke-RestMethod -Method Post http://127.0.0.1:17373/v1/interrupt
 当前最小版使用 `GET /v1/state` 轮询完整 `AvatarSnapshot`：
 
 - `ready`：模型及 Runtime 是否可接收计划；
-- `snapshot.state`：`idle`、`thinking`、`speaking`；
+- `snapshot.state`：`idle`、`thinking`、`speaking`、`presenting`（无音频纯文本回退）；
 - `snapshot.planId / segmentId / sequence`：当前表演位置；
 - `snapshot.playback.status / positionMs`：真实播放生命周期；
 - `snapshot.speechBubble.phase / positionMs`：由 Runtime 持有的聊天气泡播放与延迟关闭状态；
 - `snapshot.lastError`：最近的可恢复或不可恢复错误。
 
 完成条件是同一 `planId` 执行后 Runtime 回到 `idle`，不是 HTTP 202、Agent 文本完成或 TTS source ready。若后续 Agent 需要低延迟主动反馈，可在不改变领域契约的前提下增加 SSE；SSE 只投影 snapshot/生命周期，不持有状态。
+
+## 中文与 UTF-8
+
+HTTP JSON 和 Streamable HTTP MCP 链路均按 UTF-8 传输；官方 MCP Client 的集成测试会提交 `你好` 并断言 Runtime 收到的字符串逐字一致。Windows PowerShell 5.1 不应使用 `@'...中文...'@ | node --input-type=module -` 一类管道把临时源码送入原生进程：其 native stdin 转码可能在请求发出前把非 ASCII 字符替换为 `?`，表现为中文乱码而 `MCP` 等英文正常。前台脚本应保存为 UTF-8 `.mjs` 后执行，使用 PowerShell 7，或在临时命令中使用 `\uXXXX`/code point 转义。不要在接收端猜测并反转已经丢失的字符。
 
 ## TTS MCP 接入上下文
 

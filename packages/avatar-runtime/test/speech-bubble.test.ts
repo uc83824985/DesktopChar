@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 import type { PerformanceSegment, SpeechBubbleState } from '../../contracts/src/index.ts';
-import { projectSpeechBubble } from '../src/index.ts';
+import { estimateTextFallbackDurationMs, projectSpeechBubble } from '../src/index.ts';
 
 function segment(mode: 'stream' | 'karaoke' | 'complete'): PerformanceSegment {
   return { id: 's', sequence: 0, displayText: '你好世界', speechText: '你好世界', bubble: { mode, charactersPerSecond: 2 } };
@@ -79,4 +79,11 @@ test('non-speech chat-bubble presentations do not require a segment id', () => {
     phase: 'holding', presentationId: 1, segmentId: null,
     displayText: '连接测试通过', config: { mode: 'complete' }, positionMs: 0,
   }).visibleText, '连接测试通过');
+});
+
+test('text fallback visibility uses a bounded non-whitespace character heuristic', () => {
+  assert.equal(estimateTextFallbackDurationMs(''), 2_000);
+  assert.equal(estimateTextFallbackDurationMs('测'.repeat(24)), 5_520);
+  assert.equal(estimateTextFallbackDurationMs(`测 试\n${'字'.repeat(22)}`), 5_520);
+  assert.equal(estimateTextFallbackDurationMs('长'.repeat(100)), 12_000);
 });

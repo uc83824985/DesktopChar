@@ -14,6 +14,11 @@ test('accepts a valid performance and interrupt on loopback HTTP', async t => {
   const capabilities = await fetch(`${base}/v1/capabilities`).then(result => result.json());
   assert.deepEqual(capabilities.presentation.speechBubbleModes, ['complete', 'stream', 'karaoke']);
   assert.equal(capabilities.presentation.playbackGated, true);
+  assert.equal(capabilities.presentation.supportsTextFallback, true);
+  assert.equal(capabilities.presentation.textFallbackMode, 'complete');
+  assert.deepEqual(capabilities.presentation.textFallbackDuration, {
+    baseMs: 1_200, perCharacterMs: 180, minMs: 2_000, maxMs: 12_000,
+  });
   assert.deepEqual(capabilities.tts, {
     requestedMode: 'local', activeMode: 'mcp', provider: 'desktop-char-local-tts',
   });

@@ -264,6 +264,30 @@ export function reduceAvatarSnapshot(
         effects: [],
       };
 
+    case 'runtime.text-fallback-selected':
+      return {
+        snapshot: {
+          ...snapshot,
+          state: 'presenting',
+          segmentId: event.segmentId,
+          sequence: event.sequence,
+          playback: { status: 'idle', positionMs: 0 },
+        },
+        effects: [],
+      };
+
+    case 'runtime.text-fallback-completed':
+      return {
+        snapshot: {
+          ...snapshot,
+          state: 'thinking',
+          segmentId: null,
+          sequence: null,
+          playback: { status: 'idle', positionMs: 0 },
+        },
+        effects: [],
+      };
+
     case 'timeline.emotion-cue':
       return {
         snapshot: {

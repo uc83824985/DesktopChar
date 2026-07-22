@@ -308,7 +308,9 @@ try {
     gaze.setAttribute('aria-pressed', String(snapshot.gaze.active));
     status.textContent = snapshot.state === 'speaking'
       ? `Runtime: speaking · ${Math.round(snapshot.playback.positionMs)} ms`
-      : 'Runtime 已就绪 · UI 仅发送事件，状态由 Runtime 持有';
+      : snapshot.state === 'presenting'
+        ? 'Runtime: presenting · TTS 不可用，正在显示纯文本回退'
+        : 'Runtime 已就绪 · UI 仅发送事件，状态由 Runtime 持有';
     renderSpeechBubble(snapshot);
     contextMenuHost.refresh();
   });

@@ -117,6 +117,8 @@ Renderer 中的 `ReloadableTtsAdapter` 是稳定代理，`TtsRuntimeEffectHandle
 
 角色 MCP 与兼容 HTTP API 共用同一个 `validatePerformancePlan()`，因此 segment ID/sequence、speech/display text、emotion/action 白名单和聊天气泡 cue 校验完全一致。MCP 工具不允许直接写 Live2D 参数或跳过 Runtime。
 
+角色 MCP 可在 TTS MCP 未启用时继续接受计划。此时每个合成失败的 segment 由 Runtime 按 sequence 进入 `presenting` 纯文本回退：只显示完整聊天气泡，不产生声音、口型、流式追加或 KTV 高亮；显示时长按非空白字符数估算。`desktop_char_get_capabilities` 会公开该回退能力和计时参数。
+
 ## 验证
 
 ```powershell

@@ -1,4 +1,4 @@
-export type AvatarState = 'idle' | 'listening' | 'thinking' | 'speaking';
+export type AvatarState = 'idle' | 'listening' | 'thinking' | 'speaking' | 'presenting';
 export type PlaybackStatus = 'idle' | 'loading' | 'buffering' | 'playing' | 'paused' | 'stopped';
 
 export type Emotion =
@@ -231,6 +231,8 @@ export type RendererEvent =
 
 export type RuntimeInternalEvent =
   | { type: 'runtime.segment-selected'; generation: number; segmentId: string; sequence: number }
+  | { type: 'runtime.text-fallback-selected'; generation: number; segmentId: string; sequence: number; presentationId: number; durationMs: number }
+  | { type: 'runtime.text-fallback-completed'; generation: number; segmentId: string; sequence: number }
   | { type: 'runtime.plan-completed'; generation: number; planId: string }
   | { type: 'runtime.speech-bubble-dismissed'; generation: number; presentationId: number }
   | { type: 'runtime.effect-failed'; generation: number; error: RuntimeError }

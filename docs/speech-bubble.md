@@ -2,7 +2,7 @@
 
 ## 归属与状态边界
 
-聊天气泡是应用层的只读 `world-overlay` presenter，不属于 Live2D Renderer、TTS Adapter 或具体 Scene Actor 类型。Avatar Runtime 独占 `SpeechBubbleState`：语音内容只接受播放器生命周期事实；无语音的应用通知通过显式 `presentation.chat-bubble-requested` 事件进入完整显示/等待关闭状态。presenter 读取 `AvatarSnapshot.speechBubble` 生成 DOM，不保存定时器或另一份业务状态，也不反向修改 Runtime。
+聊天气泡是应用层的只读 `world-overlay` presenter，不属于 Live2D Renderer、TTS Adapter 或具体 Scene Actor 类型。Avatar Runtime 独占 `SpeechBubbleState`：有音频的语音内容只接受播放器生命周期事实；TTS 不可用时由 Runtime 将失败 segment 顺序转换为纯文本回退；其他无语音应用通知通过显式 `presentation.chat-bubble-requested` 事件进入完整显示/等待关闭状态。presenter 读取 `AvatarSnapshot.speechBubble` 生成 DOM，不保存定时器或另一份业务状态，也不反向修改 Runtime。
 
 面向用户的 UI 与中文架构说明统一使用“聊天气泡”。现有 `SpeechBubble*` 类型、`speechBubble` 状态字段和 `bubble` 协议字段属于已经落地的稳定技术标识，不代表该 presenter 归属于语音层；它仍是可以承载角色聊天文本的应用层 UI。
 
@@ -15,8 +15,10 @@ PerformanceSegment.displayText + bubble     AudioSource.durationMs/textCues
                               |
              Avatar Runtime SpeechBubbleState
                  hidden -> playing -> holding -> hidden
-                              ^
- presentation.chat-bubble-requested (no TTS/playback/lip sync)
+                              ^                  ^
+ presentation.chat-bubble-requested     tts.segment-failed
+       (application notification)       -> ordered text fallback
+                              (both have no playback/lip sync)
                               |
                   projectSpeechBubble()
                               |
@@ -34,6 +36,12 @@ PerformanceSegment.displayText + bubble     AudioSource.durationMs/textCues
 | `karaoke` | 完整文本常驻，当前语音 cue/字符高亮 | 实际音频输出位置 |
 
 未声明 `bubble` 时默认 `complete`。TTS 准备、流端点创建和首播缓冲期间聊天气泡保持隐藏；只有播放器确认音频开始输出后才进入 `playing`。`playback.completed` 后三种模式都会补全全文并进入 `holding`，默认延迟 800 ms 隐藏；可用 `dismissDelayMs` 为 segment 覆盖。播放失败或用户中断立即隐藏，不等待延迟。
+
+## 无可用 TTS 时的纯文本回退
+
+TTS MCP 被禁用、连接失败或合成失败产生 `tts.segment-failed` 时，Runtime 不再静默跳过该 segment。它进入 `presenting` 状态并按 sequence 依次显示 `displayText`；当前段关闭后才推进下一失败段或已就绪音频，因此并发失败不会互相覆盖。
+
+回退强制使用 `complete`，忽略原 segment 的 `stream`、`karaoke`、cue 和 `dismissDelayMs`，因为此时不存在可引用的实际播放时钟。它不创建 AudioSource，不产生 `playback.started/progress/level`，嘴型保持中立。显示时长使用可预测的阅读经验值：`clamp(1200ms + 非空白 Unicode 字符数 × 180ms, 2000ms, 12000ms)`；24 字约为 5.52 秒。Agent 可从 capabilities 的 `supportsTextFallback`、`textFallbackMode` 和 `textFallbackDuration` 读取该能力。
 
 `stream` 和 `karaoke` 的文本同步优先级为：
 
@@ -100,7 +108,7 @@ PCM Player 以 Web Audio 输出时间线作为统一基准：
 
 完整模式已纳入 Electron smoke：提交“本地语音测试”后先验证 TTS/缓冲期间聊天气泡隐藏，再验证 `playback.started` 后显示；播放完成后验证聊天气泡保持到关闭延迟结束。流式和 KTV 同时覆盖播放期推进。自动测试还会比较流式显示前后气泡的屏幕矩形，确保全文占位使排版保持稳定。
 
-自动测试覆盖播放开始门控、输出位置推进、TTS cue 优先级、已知时长降级、KTV 高亮、完成后延迟、多段替换和中断清理：
+自动测试覆盖播放开始门控、输出位置推进、TTS cue 优先级、已知时长降级、KTV 高亮、完成后延迟、多段替换、中断清理，以及 TTS 失败后无口型的完整文本回退和多失败段顺序展示：
 
 ```powershell
 npm test
@@ -111,5 +119,5 @@ npm run test:desktop-smoke
 
 - `body[data-speech-bubble]`：`hidden | complete | stream | karaoke`；
 - `#speech-bubble[data-mode]`：当前 presenter 模式；
-- `/v1/state.snapshot.speechBubble`：`phase`、实际输出 `positionMs`、TTS 时长及当前 presentation；
+- `/v1/state.snapshot.speechBubble`：`phase`、实际输出或纯文本回退的 `positionMs/durationMs` 及当前 presentation；
 - `/v1/state.snapshot.playback.positionMs`：播放器公开的实际输出时钟。
