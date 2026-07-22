@@ -65,6 +65,46 @@ test('new playback replaces a holding bubble and cancels its old dismissal', () 
   assert.deepEqual(first.effects.cancelledBubbleDismissals, [oldPresentation]);
 });
 
+test('application notifications use the Runtime-owned chat bubble without speech playback', () => {
+  const effects = new ControlledEffects();
+  const runtime = new AvatarRuntime({
+    planner: new DefaultAvatarPlanner(), mixer: new ParameterMixer(), effects,
+  });
+  runtime.dispatch({ type: 'renderer.ready', capabilities });
+
+  runtime.dispatch({
+    type: 'presentation.chat-bubble-requested',
+    text: '  角色 MCP：通过；TTS MCP：通过。  ',
+    dismissDelayMs: 3_500,
+  });
+
+  const bubble = runtime.getSnapshot().speechBubble;
+  assert.equal(runtime.getSnapshot().state, 'idle');
+  assert.equal(bubble.phase, 'holding');
+  assert.equal(bubble.segmentId, null);
+  assert.equal(projectSpeechBubble(bubble).visibleText, '角色 MCP：通过；TTS MCP：通过。');
+  assert.deepEqual(effects.playedSegments, []);
+  assert.equal(effects.pendingTts.size, 0);
+  assert.equal(effects.pendingBubbleDismissals.get(bubble.presentationId)?.effect.delayMs, 3_500);
+
+  effects.dismissBubble(bubble.presentationId);
+  assert.equal(runtime.getSnapshot().speechBubble.phase, 'hidden');
+});
+
+test('a newer application notification replaces the pending Runtime dismissal', () => {
+  const effects = new ControlledEffects();
+  const runtime = new AvatarRuntime({
+    planner: new DefaultAvatarPlanner(), mixer: new ParameterMixer(), effects,
+  });
+  runtime.dispatch({ type: 'renderer.ready', capabilities });
+  runtime.dispatch({ type: 'presentation.chat-bubble-requested', text: '第一次' });
+  const firstId = runtime.getSnapshot().speechBubble.presentationId;
+
+  runtime.dispatch({ type: 'presentation.chat-bubble-requested', text: '第二次' });
+  assert.deepEqual(effects.cancelledBubbleDismissals, [firstId]);
+  assert.equal(projectSpeechBubble(runtime.getSnapshot().speechBubble).visibleText, '第二次');
+});
+
 test('TTS text cues override rate fallback when they match display text', () => {
   const { runtime, effects } = setup();
   effects.resolveTts(0, {

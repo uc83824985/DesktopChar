@@ -88,10 +88,13 @@ try {
     headings: [...document.querySelectorAll('.scene-context-menu__heading')].map(node => node.textContent),
     gazeChecked: document.querySelector('[data-item-id="gaze-follow"]')?.getAttribute('aria-checked'),
     bubbleItems: [...document.querySelectorAll('[data-item-id="complete"], [data-item-id="stream"], [data-item-id="karaoke"]')].map(node => node.textContent?.trim()),
-    mcpItems: [...document.querySelectorAll('[data-item-id$="-mcp-enabled"], [data-item-id$="-mcp-test"], [data-item-id="mcp-config-reload"]')].map(node => node.getAttribute('data-item-id')),
+    mcpItems: [...document.querySelectorAll('[data-item-id="character-mcp-enabled"], [data-item-id="tts-mcp-enabled"], [data-item-id="mcp-connection-test"], [data-item-id="mcp-config-reload"]')].map(node => node.getAttribute('data-item-id')),
     hideAvatar: document.querySelector('[data-item-id="hide-avatar"]')?.textContent?.trim(),
   }));
-  if (menu.gazeChecked !== 'true' || menu.bubbleItems.length !== 3 || menu.mcpItems.length !== 5
+  if (menu.gazeChecked !== 'true' || menu.bubbleItems.length !== 3
+    || JSON.stringify(menu.mcpItems) !== JSON.stringify([
+      'character-mcp-enabled', 'tts-mcp-enabled', 'mcp-connection-test', 'mcp-config-reload',
+    ])
     || menu.hideAvatar !== '隐藏角色'
     || !menu.headings.includes('角色设置') || !menu.headings.includes('聊天气泡测试')
     || !menu.headings.some(label => label?.startsWith('MCP 服务 · 配置 r'))
@@ -106,13 +109,12 @@ try {
   await page.locator('body[data-context-menu="open"][data-tts-mcp-service="disabled"] [data-item-id="tts-mcp-enabled"][aria-checked="false"]').waitFor({ timeout: 5_000 });
   await page.locator('[data-item-id="tts-mcp-enabled"]').click();
   await page.locator('body[data-context-menu="open"][data-tts-mcp-service="ready"] [data-item-id="tts-mcp-enabled"][aria-checked="true"]').waitFor({ timeout: 5_000 });
-  await page.locator('[data-item-id="tts-mcp-test"]').click();
-  await page.locator('body[data-context-menu="closed"][data-tts-mcp-test="passed"]').waitFor({ timeout: 5_000 });
-  await page.evaluate(() => document.querySelector('#avatar')?.dispatchEvent(
-    new KeyboardEvent('keydown', { key: 'ContextMenu', bubbles: true }),
-  ));
-  await page.locator('body[data-context-menu="open"] [data-item-id="character-mcp-test"]').click();
-  await page.locator('body[data-context-menu="closed"][data-character-mcp-test="passed"]').waitFor({ timeout: 5_000 });
+  await page.locator('[data-item-id="mcp-connection-test"]').click();
+  await page.locator('body[data-context-menu="closed"][data-tts-mcp-test="passed"][data-character-mcp-test="passed"][data-speech-bubble="complete"]').waitFor({ timeout: 5_000 });
+  const mcpTestBubble = await page.locator('#speech-bubble').textContent();
+  if (!mcpTestBubble?.includes('角色 MCP：通过') || !mcpTestBubble.includes('TTS MCP：通过')) {
+    throw new Error(`Combined MCP result did not use the character chat bubble: ${mcpTestBubble}`);
+  }
   await page.evaluate(() => document.querySelector('#avatar')?.dispatchEvent(
     new KeyboardEvent('keydown', { key: 'ContextMenu', bubbles: true }),
   ));

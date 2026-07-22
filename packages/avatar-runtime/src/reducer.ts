@@ -332,6 +332,7 @@ export function reduceAvatarSnapshot(
     case 'plan.completed':
     case 'tts.plan-completed':
     case 'plan.segment-appended':
+    case 'presentation.chat-bubble-requested':
     case 'runtime.speech-bubble-dismissed':
     case 'user.avatar-clicked':
       return { snapshot, effects: [] };

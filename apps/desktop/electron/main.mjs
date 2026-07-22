@@ -45,6 +45,7 @@ const channels = {
   mcpServicesSetEnabled: 'mcp-services:set-enabled',
   mcpServicesReload: 'mcp-services:reload',
   mcpServicesTest: 'mcp-services:test',
+  mcpServicesTestAll: 'mcp-services:test-all',
   mcpServicesState: 'mcp-services:state',
 };
 
@@ -425,6 +426,10 @@ function registerIpc() {
   ipcMain.handle(channels.mcpServicesTest, (event, service) => {
     requireAvatarSender(event);
     return mcpServices.test(service);
+  });
+  ipcMain.handle(channels.mcpServicesTestAll, event => {
+    requireAvatarSender(event);
+    return mcpServices.testAll();
   });
 }
 

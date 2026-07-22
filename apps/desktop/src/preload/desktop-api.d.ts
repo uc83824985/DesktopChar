@@ -61,6 +61,7 @@ export interface DesktopCharApi {
   setMcpServiceEnabled(service: McpServiceId, enabled: boolean): Promise<McpServicesState>;
   reloadMcpServices(): Promise<McpServicesState>;
   testMcpService(service: McpServiceId): Promise<McpServiceTest>;
+  testAllMcpServices(): Promise<Record<McpServiceId, McpServiceTest>>;
   onMcpServicesState(callback: (state: McpServicesState) => void): () => void;
   onAgentCommand(callback: (command: AgentCommand) => void): () => void;
   onBoundsChanged(callback: (bounds: DesktopRectangle) => void): () => void;

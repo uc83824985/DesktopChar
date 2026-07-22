@@ -18,6 +18,7 @@ const channels = {
   mcpServicesSetEnabled: 'mcp-services:set-enabled',
   mcpServicesReload: 'mcp-services:reload',
   mcpServicesTest: 'mcp-services:test',
+  mcpServicesTestAll: 'mcp-services:test-all',
   mcpServicesState: 'mcp-services:state',
 };
 
@@ -37,6 +38,7 @@ contextBridge.exposeInMainWorld('desktopChar', {
   setMcpServiceEnabled: (service, enabled) => ipcRenderer.invoke(channels.mcpServicesSetEnabled, service, enabled),
   reloadMcpServices: () => ipcRenderer.invoke(channels.mcpServicesReload),
   testMcpService: service => ipcRenderer.invoke(channels.mcpServicesTest, service),
+  testAllMcpServices: () => ipcRenderer.invoke(channels.mcpServicesTestAll),
   onMcpServicesState(callback) {
     const listener = (_event, state) => callback(state);
     ipcRenderer.on(channels.mcpServicesState, listener);

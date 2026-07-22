@@ -22,7 +22,7 @@ export function projectSpeechBubble(
 ): SpeechBubbleProjection {
   const mode = state.config?.mode ?? 'complete';
   const text = state.displayText;
-  if (state.phase === 'hidden' || !state.segmentId || !text) return hiddenBubble(mode);
+  if (state.phase === 'hidden' || !text) return hiddenBubble(mode);
   if (mode === 'complete') return completeBubble(text);
   if (state.phase === 'holding') return completeBubble(text, mode);
   if (mode === 'stream') return streamBubble(text, state.config, state.positionMs, state.durationMs);

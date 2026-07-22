@@ -76,6 +76,20 @@ export class AvatarRuntime {
     if (this.disposed) return;
 
     let acceptedEvent = event;
+    if (event.type === 'presentation.chat-bubble-requested') {
+      if (this.snapshot.state !== 'idle') {
+        throw new Error('A chat-bubble presentation can only start while the Runtime is idle');
+      }
+      const text = event.text.trim();
+      if (!text) throw new Error('A chat-bubble presentation requires non-empty text');
+      if (
+        event.dismissDelayMs !== undefined
+        && (!Number.isFinite(event.dismissDelayMs) || event.dismissDelayMs < 0)
+      ) {
+        throw new RangeError('Chat-bubble dismissDelayMs must be finite and non-negative');
+      }
+      acceptedEvent = { ...event, text };
+    }
     if (event.type === 'plan.submitted') {
       if (this.plan || this.snapshot.state !== 'idle') {
         throw new Error('A performance plan is already active');
@@ -311,6 +325,34 @@ export class AvatarRuntime {
     effects: RuntimeEffect[];
   } {
     const current = this.snapshot.speechBubble;
+    if (event.type === 'presentation.chat-bubble-requested') {
+      const presentationId = current.presentationId + 1;
+      const delayMs = event.dismissDelayMs ?? DEFAULT_SPEECH_BUBBLE_DISMISS_DELAY_MS;
+      const effects: RuntimeEffect[] = current.phase === 'holding'
+        ? [{
+            type: 'speech-bubble.cancel-dismiss',
+            generation: this.snapshot.generation,
+            presentationId: current.presentationId,
+          }]
+        : [];
+      effects.push({
+        type: 'speech-bubble.schedule-dismiss',
+        generation: this.snapshot.generation,
+        presentationId,
+        delayMs,
+      });
+      return {
+        state: {
+          phase: 'holding',
+          presentationId,
+          segmentId: null,
+          displayText: event.text,
+          config: { mode: 'complete', dismissDelayMs: delayMs },
+          positionMs: 0,
+        },
+        effects,
+      };
+    }
     if (event.type === 'playback.started') {
       const segment = this.segmentById(event.segmentId);
       if (!segment) return { state: current, effects: [] };

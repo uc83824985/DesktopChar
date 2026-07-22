@@ -101,32 +101,48 @@ export function createMcpServicesController(options = {}) {
   function test(service) {
     requireServiceId(service);
     return enqueue(async () => {
+      const result = await runConnectionTest(service);
+      emit();
+      if (result.status === 'failed') throw new Error(result.details);
+      return result;
+    });
+  }
+
+  function testAll() {
+    return enqueue(async () => {
+      const entries = await Promise.all(['character', 'tts'].map(async service => (
+        [service, await runConnectionTest(service)]
+      )));
+      emit();
+      return Object.fromEntries(entries);
+    });
+  }
+
+  async function runConnectionTest(service) {
+    const startedAt = performance.now();
+    try {
       if (!state[service].desiredEnabled) throw new Error(`${service} MCP service is disabled`);
-      const startedAt = performance.now();
-      try {
-        const result = service === 'tts' ? await testTtsConnection() : await testCharacterConnection();
-        state[service].lastTest = {
-          status: 'passed',
-          testedAt: clock(),
-          latencyMs: Math.round(performance.now() - startedAt),
-          details: result,
-        };
-        emit();
-        return structuredClone(state[service].lastTest);
-      }
-      catch (error) {
-        state[service].lastTest = {
-          status: 'failed',
-          testedAt: clock(),
-          latencyMs: Math.round(performance.now() - startedAt),
-          details: errorMessage(error),
-        };
+      const details = service === 'tts' ? await testTtsConnection() : await testCharacterConnection();
+      state[service].lastTest = {
+        status: 'passed',
+        testedAt: clock(),
+        latencyMs: Math.round(performance.now() - startedAt),
+        details,
+      };
+    }
+    catch (error) {
+      state[service].lastTest = {
+        status: 'failed',
+        testedAt: clock(),
+        latencyMs: Math.round(performance.now() - startedAt),
+        details: errorMessage(error),
+      };
+      if (state[service].desiredEnabled) {
         if (service === 'tts') await handleTtsFailure(error);
         else await handleCharacterFailure(error);
-        emit();
-        throw error;
       }
-    });
+    }
+    return structuredClone(state[service].lastTest);
   }
 
   async function listTtsTools(options = {}) {
@@ -449,6 +465,7 @@ export function createMcpServicesController(options = {}) {
     reload,
     setEnabled,
     test,
+    testAll,
     snapshot,
     currentTtsConfig,
     listTtsTools,

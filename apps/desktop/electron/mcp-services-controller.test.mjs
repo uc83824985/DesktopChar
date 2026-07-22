@@ -27,6 +27,11 @@ test('both MCP services dynamically enable, test, reload and disable', async t =
   await controller.start();
   assert.equal(controller.snapshot().tts.phase, 'disabled');
   assert.equal(controller.snapshot().character.phase, 'disabled');
+  let combined = await controller.testAll();
+  assert.equal(combined.character.status, 'failed');
+  assert.equal(combined.tts.status, 'failed');
+  assert.match(combined.character.details, /disabled/);
+  assert.match(combined.tts.details, /disabled/);
 
   let state = await controller.setEnabled('tts', true);
   assert.ok(['ready', 'degraded'].includes(state.tts.phase));
@@ -36,6 +41,9 @@ test('both MCP services dynamically enable, test, reload and disable', async t =
   assert.equal(state.character.phase, 'ready');
   assert.match(state.character.endpoint, /^http:\/\/127\.0\.0\.1:\d+\/mcp$/);
   assert.equal((await controller.test('character')).status, 'passed');
+  combined = await controller.testAll();
+  assert.equal(combined.character.status, 'passed');
+  assert.equal(combined.tts.status, 'passed');
 
   await writeFile(configFilePath, JSON.stringify({
     ttsMcp: {

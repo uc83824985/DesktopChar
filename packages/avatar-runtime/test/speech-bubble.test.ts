@@ -73,3 +73,10 @@ test('speech bubble hides without a Runtime-owned presentation', () => {
     phase: 'hidden', presentationId: 0, segmentId: null, displayText: '', positionMs: 0,
   }).visible, false);
 });
+
+test('non-speech chat-bubble presentations do not require a segment id', () => {
+  assert.equal(projectSpeechBubble({
+    phase: 'holding', presentationId: 1, segmentId: null,
+    displayText: '连接测试通过', config: { mode: 'complete' }, positionMs: 0,
+  }).visibleText, '连接测试通过');
+});

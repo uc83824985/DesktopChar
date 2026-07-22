@@ -196,6 +196,9 @@ export type UserEvent =
   | { type: 'user.look-target-changed'; x: number; y: number }
   | { type: 'user.avatar-clicked'; hitArea: string };
 
+export type PresentationEvent =
+  | { type: 'presentation.chat-bubble-requested'; text: string; dismissDelayMs?: number };
+
 export type PlanEvent =
   | { type: 'plan.submitted'; plan: PerformancePlan }
   | { type: 'plan.segment-appended'; planId: string; segment: PerformanceSegment }
@@ -236,6 +239,7 @@ export type RuntimeInternalEvent =
 
 export type AvatarEvent =
   | UserEvent
+  | PresentationEvent
   | PlanEvent
   | TtsEvent
   | PlaybackEvent

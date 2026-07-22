@@ -41,6 +41,7 @@ import type {
   DesktopTtsConfig,
   McpServiceId,
   McpServiceState,
+  McpServiceTest,
   McpServicesState,
   PointerPresentation,
 } from '../preload/desktop-api.d.ts';
@@ -855,19 +856,6 @@ function registerDevelopmentUi(): void {
         label: `MCP 服务 · 配置 r${services.config.revision}`,
         items: [
           {
-            type: 'checkbox', id: 'tts-mcp-enabled',
-            label: `TTS MCP · ${mcpPhaseLabel(services.tts)}`,
-            checked: services.tts.desiredEnabled,
-            enabled: runtimeIdle && !mcpTransitioning(services.tts),
-            invoke: enabled => setMcpServiceEnabled('tts', enabled),
-          },
-          {
-            type: 'action', id: 'tts-mcp-test',
-            label: mcpTestLabel('测试 TTS 连接', services.tts),
-            enabled: isOperationalMcpService(services.tts),
-            invoke: () => testMcpService('tts'),
-          },
-          {
             type: 'checkbox', id: 'character-mcp-enabled',
             label: `角色 MCP · ${mcpPhaseLabel(services.character)}`,
             checked: services.character.desiredEnabled,
@@ -875,14 +863,23 @@ function registerDevelopmentUi(): void {
             invoke: enabled => setMcpServiceEnabled('character', enabled),
           },
           {
-            type: 'action', id: 'character-mcp-test',
-            label: mcpTestLabel('测试角色连接', services.character),
-            enabled: isOperationalMcpService(services.character),
-            invoke: () => testMcpService('character'),
+            type: 'checkbox', id: 'tts-mcp-enabled',
+            label: `TTS MCP · ${mcpPhaseLabel(services.tts)}`,
+            checked: services.tts.desiredEnabled,
+            enabled: runtimeIdle && !mcpTransitioning(services.tts),
+            invoke: enabled => setMcpServiceEnabled('tts', enabled),
+          },
+          {
+            type: 'action', id: 'mcp-connection-test',
+            label: '测试 MCP 连接',
+            enabled: runtimeIdle
+              && !mcpTransitioning(services.character)
+              && !mcpTransitioning(services.tts),
+            invoke: testAllMcpServices,
           },
           {
             type: 'action', id: 'mcp-config-reload',
-            label: services.config.status === 'error' ? '重新加载 MCP 配置（当前有错误）' : '重新加载 MCP 配置',
+            label: '重新加载 MCP',
             invoke: reloadMcpServices,
           },
         ],
@@ -909,10 +906,15 @@ async function setMcpServiceEnabled(service: McpServiceId, enabled: boolean): Pr
   applyMcpServicesState(await desktopShell.setMcpServiceEnabled(service, enabled));
 }
 
-async function testMcpService(service: McpServiceId): Promise<void> {
+async function testAllMcpServices(): Promise<void> {
   if (!desktopShell) return;
-  await desktopShell.testMcpService(service);
+  const results = await desktopShell.testAllMcpServices();
   applyMcpServicesState(await desktopShell.getMcpServicesState());
+  runtime?.dispatch({
+    type: 'presentation.chat-bubble-requested',
+    text: `MCP 连接测试：${formatMcpTestResult('角色 MCP', results.character)}；${formatMcpTestResult('TTS MCP', results.tts)}。`,
+    dismissDelayMs: 4_500,
+  });
 }
 
 async function reloadMcpServices(): Promise<void> {
@@ -933,9 +935,12 @@ function mcpPhaseLabel(service: McpServiceState): string {
   return labels[service.phase];
 }
 
-function mcpTestLabel(prefix: string, service: McpServiceState): string {
-  if (!service.lastTest) return prefix;
-  return `${prefix} · ${service.lastTest.status === 'passed' ? '通过' : '失败'}`;
+function formatMcpTestResult(label: string, result: McpServiceTest): string {
+  if (result.status === 'passed') return `${label}：通过（${result.latencyMs} ms）`;
+  if (/service is disabled/i.test(result.details)) return `${label}：未启用`;
+  const details = result.details.replace(/\s+/g, ' ').trim();
+  const summary = details.length > 60 ? `${details.slice(0, 57)}...` : details;
+  return `${label}：失败（${summary || '未知错误'}）`;
 }
 
 function openAvatarContextMenu(event: MouseEvent): void {
