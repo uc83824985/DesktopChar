@@ -82,12 +82,14 @@ export interface AgentRuntimeState {
 
 export interface DesktopTtsConfig {
   lifecycle: 'external' | 'managed';
+  activeProfile?: string;
   provider: string | null;
   mcpUrl: string;
   timeoutMs: number;
   format: import('../../../../packages/tts-mcp-adapter/src/index.ts').TtsAudioFormat;
   testFixtures: string[];
   voice?: string;
+  rate?: number;
 }
 
 export type McpServiceId = 'tts' | 'character';

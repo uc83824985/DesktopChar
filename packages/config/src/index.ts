@@ -172,6 +172,7 @@ export interface TtsConfig {
   mcp: {
     timeoutMs: number;
     voice?: string;
+    rate?: number;
     format: 'wav' | 'mp3' | 'ogg' | 'opus' | 'pcm_s16le' | 'pcm_f32le';
   };
 }
@@ -190,6 +191,7 @@ export function loadTtsConfig(values: Record<string, string | undefined>): TtsCo
     format: audioFormat(values.DESKTOP_CHAR_TTS_FORMAT),
   };
   if (values.DESKTOP_CHAR_TTS_VOICE) mcp.voice = values.DESKTOP_CHAR_TTS_VOICE;
+  if (values.DESKTOP_CHAR_TTS_RATE !== undefined) mcp.rate = speechRate(values.DESKTOP_CHAR_TTS_RATE, 'DESKTOP_CHAR_TTS_RATE');
   return { lifecycle, mcp };
 }
 
@@ -204,4 +206,10 @@ function audioFormat(value: string | undefined): TtsConfig['mcp']['format'] {
   const format = value ?? DEFAULT_TTS_CONFIG.mcp.format;
   if (format === 'wav' || format === 'mp3' || format === 'ogg' || format === 'opus' || format === 'pcm_s16le' || format === 'pcm_f32le') return format;
   throw new Error('DESKTOP_CHAR_TTS_FORMAT must be wav, mp3, ogg, opus, pcm_s16le, or pcm_f32le');
+}
+
+function speechRate(value: string, name: string): number {
+  const parsed = Number(value);
+  if (!Number.isFinite(parsed) || parsed < 0.5 || parsed > 2) throw new Error(`${name} must be from 0.5 to 2`);
+  return parsed;
 }

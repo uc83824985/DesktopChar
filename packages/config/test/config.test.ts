@@ -51,16 +51,19 @@ test('loads standardized TTS lifecycle and synthesis variables', () => {
   const config = loadTtsConfig({
     DESKTOP_CHAR_TTS_LIFECYCLE: 'managed',
     DESKTOP_CHAR_TTS_TIMEOUT_MS: '1234',
-    DESKTOP_CHAR_TTS_FORMAT: 'mp3', DESKTOP_CHAR_TTS_VOICE: 'alice',
+    DESKTOP_CHAR_TTS_FORMAT: 'mp3',
+    DESKTOP_CHAR_TTS_VOICE: 'alice',
+    DESKTOP_CHAR_TTS_RATE: '1.1',
   });
   assert.equal(config.lifecycle, 'managed');
-  assert.deepEqual(config.mcp, { timeoutMs: 1234, format: 'mp3', voice: 'alice' });
+  assert.deepEqual(config.mcp, { timeoutMs: 1234, format: 'mp3', voice: 'alice', rate: 1.1 });
 });
 
 test('rejects invalid TTS environment values', () => {
   assert.throws(() => loadTtsConfig({ DESKTOP_CHAR_TTS_LIFECYCLE: 'embedded' }), /managed or external/);
   assert.throws(() => loadTtsConfig({ DESKTOP_CHAR_TTS_TIMEOUT_MS: '0' }), /positive/);
   assert.throws(() => loadTtsConfig({ DESKTOP_CHAR_TTS_FORMAT: 'aac' }), /pcm_s16le/);
+  assert.throws(() => loadTtsConfig({ DESKTOP_CHAR_TTS_RATE: '3' }), /0.5 to 2/);
 });
 
 function axis(negative: number, positive: number) {

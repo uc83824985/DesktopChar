@@ -118,7 +118,12 @@ Windows 通常对应 `%APPDATA%/DesktopChar/config.json`。程序只通过 Elect
   "character": {
     "profile": "models/Mao/DesktopChar.character.json"
   },
-  "ttsMcp": {},
+  "ttsMcp": {
+    "activeProfile": "local",
+    "profiles": {
+      "local": {}
+    }
+  },
   "characterMcp": {}
 }
 ```
@@ -246,7 +251,7 @@ CharacterProfileController -- asset revision ---+--> validate complete candidate
 - `DESKTOP_CHAR_TTS_SAMPLE_RATE_HZ`
 - `DESKTOP_CHAR_TTS_CHANNELS`
 
-当 Electron 托管该参考 Provider 时，这些值通过 `ttsMcp.lifecycle.start.env` 传给独立子进程；MCP Adapter 不读取它们。只有用户在命令行独立运行 `local-tts-mcp` 时才需要在 shell 中设置。若后续为独立服务增加配置文件，应使用它自己的 `local-tts-mcp.config.json`，而不是让服务反向依赖 DesktopChar 的整份配置。
+当 Electron 托管该参考 Provider 时，这些值通过当前活动 profile 的 `ttsMcp.profiles.<name>.lifecycle.start.env` 传给独立子进程；MCP Adapter 不读取它们。只有用户在命令行独立运行 `local-tts-mcp` 时才需要在 shell 中设置。若后续为独立服务增加配置文件，应使用它自己的 `local-tts-mcp.config.json`，而不是让服务反向依赖 DesktopChar 的整份配置。
 
 ## 迁移期环境变量兼容
 
@@ -255,7 +260,7 @@ CharacterProfileController -- asset revision ---+--> validate complete candidate
 - `DESKTOP_CHAR_DRAG_HOLD_DELAY_MS`
 - `DESKTOP_CHAR_AGENT_PORT`
 - `DESKTOP_CHAR_TTS_MODE` 作为 `managed/external` 迁移前的旧别名；新引导变量为 `DESKTOP_CHAR_TTS_LIFECYCLE`
-- `DESKTOP_CHAR_TTS_MCP_ENABLED` 及 TTS 连接、超时、格式、voice 变量；工具名和参数名不再允许映射
+- `DESKTOP_CHAR_TTS_MCP_ENABLED` 及 TTS 连接、超时、格式、voice、rate 变量；工具名和参数名不再允许映射
 - `DESKTOP_CHAR_CHARACTER_MCP_ENABLED`、`DESKTOP_CHAR_CHARACTER_MCP_HOST`、`DESKTOP_CHAR_CHARACTER_MCP_PORT`、`DESKTOP_CHAR_CHARACTER_MCP_PATH`
 
 迁移期优先级保持：

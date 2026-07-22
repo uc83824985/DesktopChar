@@ -72,8 +72,21 @@
     "ttsMcp": {
       "type": "object",
       "additionalProperties": false,
+      "required": ["activeProfile", "profiles"],
       "properties": {
         "autoStart": { "type": "boolean" },
+        "activeProfile": { "type": "string", "minLength": 1 },
+        "profiles": {
+          "type": "object",
+          "minProperties": 1,
+          "additionalProperties": { "$ref": "#/$defs/ttsMcpProfile" }
+        }
+      }
+    },
+    "ttsMcpProfile": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
         "lifecycle": {
           "type": "object",
           "additionalProperties": false,
@@ -118,7 +131,8 @@
           "additionalProperties": false,
           "properties": {
             "format": { "enum": ["wav", "mp3", "ogg", "opus", "pcm_s16le", "pcm_f32le"] },
-            "voice": { "type": "string", "minLength": 1 }
+            "voice": { "type": "string", "minLength": 1 },
+            "rate": { "type": "number", "minimum": 0.5, "maximum": 2 }
           }
         },
         "reconnect": { "$ref": "#/$defs/reconnect" }

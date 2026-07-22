@@ -95,7 +95,7 @@ interface ToneAcceptanceRun {
 }
 
 class ReloadableTtsAdapter implements TtsAdapter {
-  private current: { adapter: TtsAdapter; defaults: Pick<TtsSynthesisRequest, 'voice' | 'format'> } | undefined;
+  private current: { adapter: TtsAdapter; defaults: Pick<TtsSynthesisRequest, 'voice' | 'format' | 'rate'> } | undefined;
   private enabled = false;
 
   configure(adapter: TtsAdapter, config: DesktopTtsConfig, enabled: boolean): void {
@@ -104,6 +104,7 @@ class ReloadableTtsAdapter implements TtsAdapter {
       defaults: {
         ...(config.voice ? { voice: config.voice } : {}),
         ...(config.format ? { format: config.format } : {}),
+        ...(config.rate !== undefined ? { rate: config.rate } : {}),
       },
     };
     this.enabled = enabled;

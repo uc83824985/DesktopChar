@@ -15,13 +15,18 @@ test('MCP config merges environment bootstrap with JSON overrides', () => {
   const config = normalizeMcpServicesConfig({
     ttsMcp: {
       autoStart: false,
-      lifecycle: {
-        type: 'managed',
-        start: { executable: process.execPath, args: ['provider.mjs'], cwd: '.', env: { PROVIDER_RATE: '0.8' } },
+      activeProfile: 'custom',
+      profiles: {
+        custom: {
+          lifecycle: {
+            type: 'managed',
+            start: { executable: process.execPath, args: ['provider.mjs'], cwd: '.', env: { PROVIDER_RATE: '0.8' } },
+          },
+          connection: { url: 'http://127.0.0.1:9876/mcp' },
+          synthesis: { voice: 'test-voice', rate: 1.25 },
+          reconnect: { initialDelayMs: 20, maximumDelayMs: 40 },
+        },
       },
-      connection: { url: 'http://127.0.0.1:9876/mcp' },
-      synthesis: { voice: 'test-voice' },
-      reconnect: { initialDelayMs: 20, maximumDelayMs: 40 },
     },
     characterMcp: { autoStart: true, port: 0, path: '/character-mcp' },
   }, {
@@ -33,8 +38,46 @@ test('MCP config merges environment bootstrap with JSON overrides', () => {
   assert.equal(config.tts.connection.url, 'http://127.0.0.1:9876/mcp');
   assert.equal(config.tts.lifecycle.start.env.PROVIDER_RATE, '0.8');
   assert.equal(config.tts.synthesis.voice, 'test-voice');
+  assert.equal(config.tts.synthesis.rate, 1.25);
   assert.equal(config.character.path, '/character-mcp');
   assert.equal(Object.isFrozen(config.tts.lifecycle.start), true);
+});
+
+test('TTS config switches by activeProfile across named MCP profiles', () => {
+  const config = normalizeMcpServicesConfig({
+    ttsMcp: {
+      autoStart: true,
+      activeProfile: 'qwen',
+      profiles: {
+        local: {
+          lifecycle: {
+            type: 'managed',
+            start: { executable: 'node', args: ['local-tts-mcp/server.mjs'], cwd: '.' },
+          },
+          connection: { url: 'http://127.0.0.1:8766/mcp' },
+          synthesis: { format: 'pcm_s16le', voice: 'jrpg-blip' },
+        },
+        qwen: {
+          lifecycle: {
+            type: 'managed',
+            start: {
+              executable: 'C:/Windows/System32/WindowsPowerShell/v1.0/powershell.exe',
+              args: ['-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', 'G:/Qwen3-TTS-GGUF/Start-DesktopChar-TTS-MCP.ps1'],
+              cwd: 'G:/Qwen3-TTS-GGUF',
+              env: { PYTHONUTF8: '1' },
+            },
+          },
+          connection: { url: 'http://127.0.0.1:8766/mcp', timeoutMs: 45_000 },
+          synthesis: { format: 'pcm_s16le', rate: 1 },
+        },
+      },
+    },
+  });
+  assert.equal(config.tts.activeProfile, 'qwen');
+  assert.equal(config.tts.lifecycle.start.cwd.replaceAll('\\', '/'), 'G:/Qwen3-TTS-GGUF');
+  assert.equal(config.tts.connection.timeoutMs, 45_000);
+  assert.equal(config.tts.synthesis.rate, 1);
+  assert.equal(config.tts.synthesis.voice, undefined);
 });
 
 test('desktop config owns interaction, window, agent and character profile settings', () => {
@@ -74,12 +117,18 @@ test('desktop config path prefers the new bootstrap variable and validates appli
 
 test('MCP config rejects unsafe server binding and malformed reconnect policy', () => {
   assert.throws(() => normalizeMcpServicesConfig({ characterMcp: { host: '0.0.0.0' } }), /loopback/);
-  assert.throws(() => normalizeMcpServicesConfig({ ttsMcp: { reconnect: { initialDelayMs: 50, maximumDelayMs: 10 } } }), /at least/);
-  assert.throws(() => normalizeMcpServicesConfig({ ttsMcp: { synthesis: { format: 'aac' } } }), /unsupported/);
-  assert.throws(() => normalizeMcpServicesConfig({ ttsMcp: { lifecycle: { type: 'embedded' } } }), /managed or external/);
-  assert.throws(() => normalizeMcpServicesConfig({ ttsMcp: { contract: { version: 2 } } }), /unsupported/);
+  assert.throws(() => normalizeMcpServicesConfig({ ttsMcp: { autoStart: false } }), /activeProfile \+ profiles/);
+  assert.throws(() => normalizeMcpServicesConfig({ ttsMcp: { activeProfile: 'local' } }), /activeProfile \+ profiles/);
+  assert.throws(() => normalizeMcpServicesConfig({ ttsMcp: { lifecycle: { type: 'managed' } } }), /unknown field|single-profile shape|activeProfile \+ profiles/);
+  assert.throws(() => normalizeMcpServicesConfig({ ttsMcp: { profiles: { local: {} } } }), /activeProfile is required/);
+  assert.throws(() => normalizeMcpServicesConfig({ ttsMcp: { profiles: { local: {} }, activeProfile: 'qwen' } }), /unknown profile/);
+  assert.throws(() => normalizeMcpServicesConfig({ ttsMcp: { activeProfile: 'local', profiles: { local: { reconnect: { initialDelayMs: 50, maximumDelayMs: 10 } } } } }), /at least/);
+  assert.throws(() => normalizeMcpServicesConfig({ ttsMcp: { activeProfile: 'local', profiles: { local: { synthesis: { format: 'aac' } } } } }), /unsupported/);
+  assert.throws(() => normalizeMcpServicesConfig({ ttsMcp: { activeProfile: 'local', profiles: { local: { synthesis: { rate: 0.4 } } } } }), /0.5 to 2/);
+  assert.throws(() => normalizeMcpServicesConfig({ ttsMcp: { activeProfile: 'local', profiles: { local: { lifecycle: { type: 'embedded' } } } } }), /managed or external/);
+  assert.throws(() => normalizeMcpServicesConfig({ ttsMcp: { activeProfile: 'local', profiles: { local: { contract: { version: 2 } } } } }), /unsupported/);
   assert.throws(() => normalizeMcpServicesConfig({}, { DESKTOP_CHAR_TTS_MCP_TOOL: 'voice.generate' }), /fixed by the DesktopChar TTS Profile/);
-  assert.throws(() => normalizeMcpServicesConfig({ ttsMcp: { lifecycle: { start: { executable: 'node', env: { INVALID: 1 } } } } }), /must be a string/);
+  assert.throws(() => normalizeMcpServicesConfig({ ttsMcp: { activeProfile: 'local', profiles: { local: { lifecycle: { start: { executable: 'node', env: { INVALID: 1 } } } } } } }), /must be a string/);
 });
 
 test('managed Local TTS uses one host and port for its process and endpoint defaults', () => {

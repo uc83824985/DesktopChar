@@ -133,9 +133,14 @@ test('external TTS reconnects when its MCP endpoint becomes available', async t 
   await writeFile(configFilePath, JSON.stringify({
     ttsMcp: {
       autoStart: true,
-      lifecycle: { type: 'external' },
-      connection: { url: `http://127.0.0.1:${reservedAddress.port}/mcp`, timeoutMs: 100 },
-      reconnect: { initialDelayMs: 20, maximumDelayMs: 40 },
+      activeProfile: 'external-local',
+      profiles: {
+        'external-local': {
+          lifecycle: { type: 'external' },
+          connection: { url: `http://127.0.0.1:${reservedAddress.port}/mcp`, timeoutMs: 100 },
+          reconnect: { initialDelayMs: 20, maximumDelayMs: 40 },
+        },
+      },
     },
     characterMcp: { autoStart: false },
   }), 'utf8');
@@ -169,7 +174,7 @@ test('character MCP retries its loopback binding after a port conflict clears', 
   const configFilePath = path.join(directory, 'desktop-char.config.json');
   t.after(() => rm(directory, { recursive: true, force: true }));
   await writeFile(configFilePath, JSON.stringify({
-    ttsMcp: { autoStart: false },
+    ttsMcp: { autoStart: false, activeProfile: 'local', profiles: { local: {} } },
     characterMcp: {
       autoStart: true,
       port: address.port,
@@ -200,7 +205,16 @@ test('controller automatically applies a saved config file revision', async t =>
   await controller.start();
   const revision = controller.snapshot().config.revision;
   await writeFile(configFilePath, JSON.stringify({
-    ttsMcp: { autoStart: false, lifecycle: { type: 'external' }, connection: { timeoutMs: 12_345 } },
+    ttsMcp: {
+      autoStart: false,
+      activeProfile: 'external-local',
+      profiles: {
+        'external-local': {
+          lifecycle: { type: 'external' },
+          connection: { timeoutMs: 12_345 },
+        },
+      },
+    },
     characterMcp: { autoStart: false, path: '/watched-mcp' },
   }), 'utf8');
   await waitFor(() => controller.snapshot().config.revision > revision, 3_000);
@@ -220,25 +234,30 @@ async function waitFor(predicate, timeoutMs = 4_000) {
 function managedLocalTtsConfig(port, options = {}) {
   return {
     autoStart: options.autoStart ?? true,
-    lifecycle: {
-      type: 'managed',
-      start: {
-        executable: process.execPath,
-        args: [localTtsServer],
-        cwd: repositoryRoot,
-        env: {
-          DESKTOP_CHAR_TTS_LOCAL_MCP_HOST: '127.0.0.1',
-          DESKTOP_CHAR_TTS_LOCAL_MCP_PORT: String(port),
-          DESKTOP_CHAR_TTS_LOCAL_DELAY_MS: String(options.delayMs ?? 1),
-          DESKTOP_CHAR_TTS_LOCAL_RATE: String(options.rate ?? 1),
+    activeProfile: 'local',
+    profiles: {
+      local: {
+        lifecycle: {
+          type: 'managed',
+          start: {
+            executable: process.execPath,
+            args: [localTtsServer],
+            cwd: repositoryRoot,
+            env: {
+              DESKTOP_CHAR_TTS_LOCAL_MCP_HOST: '127.0.0.1',
+              DESKTOP_CHAR_TTS_LOCAL_MCP_PORT: String(port),
+              DESKTOP_CHAR_TTS_LOCAL_DELAY_MS: String(options.delayMs ?? 1),
+              DESKTOP_CHAR_TTS_LOCAL_RATE: String(options.rate ?? 1),
+            },
+          },
+          startupTimeoutMs: 5_000,
+          shutdownTimeoutMs: 2_000,
+          healthIntervalMs: 100,
         },
+        connection: { url: `http://127.0.0.1:${port}/mcp`, timeoutMs: 1_000 },
+        ...(options.reconnect ? { reconnect: options.reconnect } : {}),
       },
-      startupTimeoutMs: 5_000,
-      shutdownTimeoutMs: 2_000,
-      healthIntervalMs: 100,
     },
-    connection: { url: `http://127.0.0.1:${port}/mcp`, timeoutMs: 1_000 },
-    ...(options.reconnect ? { reconnect: options.reconnect } : {}),
   };
 }
 

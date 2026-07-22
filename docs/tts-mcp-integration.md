@@ -80,54 +80,71 @@ DesktopChar 拥有一个配置明确的入口子进程。启动流程为：
 
 ## 3. DesktopChar 配置规则
 
-配置位于 `desktop-char.config.json` 的 `ttsMcp` 分区。通用结构如下：
+配置位于 `desktop-char.config.json` 的 `ttsMcp` 分区。当前原生结构固定为“多 Profile + 活动选择器”：
 
 ```json
 {
   "ttsMcp": {
     "autoStart": true,
-    "lifecycle": {
-      "type": "managed",
-      "start": {
-        "executable": "node",
-        "args": ["local-tts-mcp/server.mjs"],
-        "cwd": ".",
-        "env": {
-          "DESKTOP_CHAR_TTS_LOCAL_MCP_HOST": "127.0.0.1",
-          "DESKTOP_CHAR_TTS_LOCAL_MCP_PORT": "8766"
+    "activeProfile": "local",
+    "profiles": {
+      "local": {
+        "lifecycle": {
+          "type": "managed",
+          "start": {
+            "executable": "node",
+            "args": ["local-tts-mcp/server.mjs"],
+            "cwd": "."
+          }
+        },
+        "connection": {
+          "transport": "streamable-http",
+          "url": "http://127.0.0.1:8766/mcp"
+        },
+        "synthesis": {
+          "format": "pcm_s16le",
+          "voice": "jrpg-blip",
+          "rate": 1
         }
       },
-      "startupTimeoutMs": 120000,
-      "shutdownTimeoutMs": 10000,
-      "healthIntervalMs": 10000,
-      "restartOnFailure": true
-    },
-    "connection": {
-      "transport": "streamable-http",
-      "url": "http://127.0.0.1:8766/mcp",
-      "timeoutMs": 30000
-    },
-    "contract": {
-      "profile": "desktop-char.tts.streaming",
-      "version": 1
-    },
-    "synthesis": {
-      "format": "pcm_s16le",
-      "voice": "jrpg-blip"
-    },
-    "reconnect": {
-      "initialDelayMs": 500,
-      "maximumDelayMs": 10000
+      "qwen": {
+        "lifecycle": {
+          "type": "managed",
+          "start": {
+            "executable": "C:\\Windows\\System32\\WindowsPowerShell\\v1.0\\powershell.exe",
+            "args": [
+              "-NoProfile",
+              "-ExecutionPolicy", "Bypass",
+              "-File", "G:\\Qwen3-TTS-GGUF\\Start-DesktopChar-TTS-MCP.ps1"
+            ],
+            "cwd": "G:\\Qwen3-TTS-GGUF"
+          }
+        },
+        "connection": {
+          "transport": "streamable-http",
+          "url": "http://127.0.0.1:8766/mcp"
+        },
+        "synthesis": {
+          "format": "pcm_s16le",
+          "rate": 1
+        }
+      }
     }
   }
 }
 ```
+
+切换时只需修改 `ttsMcp.activeProfile`，例如从 `local` 改为 `qwen`，然后在前台执行“重新加载配置”。
+
+旧的单套 `ttsMcp.lifecycle/connection/...` 写法不再受支持。
 
 字段语义：
 
 | 字段 | 规则 |
 | --- | --- |
 | `autoStart` | 应用启动后的初始启用状态；不改变生命周期所有权 |
+| `activeProfile` | 必需；必须指向 `profiles` 中的一个键 |
+| `profiles` | 必需；命名配置集合，每个 profile 都使用同一套 TTS MCP 结构 |
 | `lifecycle.type` | 只能是 `external` 或 `managed` |
 | `lifecycle.start` | 仅 `managed` 使用；推荐绝对路径，参数必须拆成数组 |
 | `startupTimeoutMs` | 等待 managed Provider endpoint 和 Profile 就绪的上限 |
@@ -141,25 +158,31 @@ DesktopChar 拥有一个配置明确的入口子进程。启动流程为：
 | `contract.version` | 当前固定为 `1` |
 | `synthesis.format` | 默认请求的音频格式，必须在 Provider 能力中声明 |
 | `synthesis.voice` | 可选默认音色，必须是 Provider 接受的值 |
+| `synthesis.rate` | 可选默认语速，范围固定为 `0.5` 到 `2`，透传到 `tts_open_stream.rate` |
 | `reconnect` | MCP 连接的指数退避上下限 |
 
-external 配置不应包含 `lifecycle.start`：
+external profile 不应包含 `lifecycle.start`：
 
 ```json
 {
   "ttsMcp": {
     "autoStart": true,
-    "lifecycle": { "type": "external" },
-    "connection": {
-      "transport": "streamable-http",
-      "url": "http://127.0.0.1:8766/mcp",
-      "timeoutMs": 30000
-    },
-    "contract": {
-      "profile": "desktop-char.tts.streaming",
-      "version": 1
-    },
-    "synthesis": { "format": "pcm_s16le" }
+    "activeProfile": "qwen-external",
+    "profiles": {
+      "qwen-external": {
+        "lifecycle": { "type": "external" },
+        "connection": {
+          "transport": "streamable-http",
+          "url": "http://127.0.0.1:8766/mcp",
+          "timeoutMs": 30000
+        },
+        "contract": {
+          "profile": "desktop-char.tts.streaming",
+          "version": 1
+        },
+        "synthesis": { "format": "pcm_s16le" }
+      }
+    }
   }
 }
 ```

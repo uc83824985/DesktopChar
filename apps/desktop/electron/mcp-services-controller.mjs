@@ -628,12 +628,14 @@ function ttsRuntimeConfig(config, endpoint, status) {
   if (!config) return null;
   return {
     lifecycle: config.lifecycle.type,
+    ...(config.activeProfile ? { activeProfile: config.activeProfile } : {}),
     provider: status?.provider ?? null,
     mcpUrl: endpoint ?? config.connection.url,
     timeoutMs: config.connection.timeoutMs,
     format: config.synthesis.format,
     testFixtures: Array.isArray(status?.capabilities?.test_fixtures) ? [...status.capabilities.test_fixtures] : [],
     ...(config.synthesis.voice ? { voice: config.synthesis.voice } : {}),
+    ...(config.synthesis.rate !== undefined ? { rate: config.synthesis.rate } : {}),
   };
 }
 
