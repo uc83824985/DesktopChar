@@ -306,7 +306,7 @@ Expression
 Base
 ```
 
-其中 `ParamMouthOpenY` 默认由 Mouth 独占。播放器上报未经增益、带实际播放位置的 `playback.level`；Runtime 内部的 `LipSyncEnvelope` 先按角色级 `LipSyncProfile.gain` 映射到 `0..1`，再使用快速 attack、短峰值保持和较慢 release 生成最终嘴部参数。当前 Mao 的校准值为 `gain=2.5`、`attackMs=30`、`releaseMs=100`、`peakHoldMs=25`。
+其中 `ParamMouthOpenY` 默认由 Mouth 独占。播放器上报未经增益、带实际播放位置的 `playback.level`；Runtime 内部的 `LipSyncEnvelope` 先按角色级 `LipSyncProfile.gain` 映射到 `0..1`，再使用快速 attack、短峰值保持和较慢 release 生成最终嘴部参数。当前 Mao 的校准值为 `gain=2.5`、`attackMs=30`、`releaseMs=180`、`peakHoldMs=25`。
 
 `attackMs` 和 `releaseMs` 定义为完成 90% 响应所需时间，而不是额外延迟：输入上升时嘴部在首个 25ms 电平周期内明显张开，输入下降时跨多个播放时点逐步闭合。`peakHoldMs` 只保存最近短峰值，防止本地逐字提示音退化成单帧开合。包络以 `playback.positionMs` 计算，不依赖 IPC/事件抵达的墙钟间隔，因此调度抖动不会改变同一音频时间线的口型曲线。
 

@@ -12,7 +12,7 @@ test('Mao asset-side profile compensates its authored gaze and lip response', as
   assert.equal(profile.lipSyncProfile.gain, 2.5);
   assert.deepEqual(
     { attackMs: profile.lipSyncProfile.attackMs, releaseMs: profile.lipSyncProfile.releaseMs, peakHoldMs: profile.lipSyncProfile.peakHoldMs },
-    { attackMs: 30, releaseMs: 100, peakHoldMs: 25 },
+    { attackMs: 30, releaseMs: 180, peakHoldMs: 25 },
   );
 });
 

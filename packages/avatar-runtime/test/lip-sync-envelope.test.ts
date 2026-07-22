@@ -37,6 +37,22 @@ test('level envelope uses playback position rather than event arrival intervals'
   assert.ok(Math.abs(regularValue - delayedValue) < 1e-12);
 });
 
+test('a 180ms release bridges short character blips without holding the mouth open', () => {
+  const envelope = new LipSyncEnvelope({ gain: 2.5, attackMs: 30, releaseMs: 180, peakHoldMs: 25 });
+  envelope.reset(0);
+  envelope.update(0.224, 25);
+  const peak = envelope.update(0.224, 50);
+  let beforeNextCharacter = peak;
+  for (let positionMs = 75; positionMs <= 225; positionMs += 25) {
+    beforeNextCharacter = envelope.update(0, positionMs);
+  }
+  const nextOpening = envelope.update(0.224, 250);
+
+  assert.ok(peak > 0.5);
+  assert.ok(beforeNextCharacter > 0.05 && beforeNextCharacter < 0.12);
+  assert.ok(nextOpening > 0.45, 'the next character should still reopen promptly');
+});
+
 test('zero response times preserve the legacy direct level mapping', () => {
   const envelope = new LipSyncEnvelope({ gain: 2.5, attackMs: 0, releaseMs: 0, peakHoldMs: 0 });
   envelope.reset(0);

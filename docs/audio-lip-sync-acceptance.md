@@ -33,7 +33,7 @@
 | 1050–1400ms | 提示音 3 | 1100Hz | 0.85 |
 | 1400–1600ms | 静音 | — | 0 |
 
-格式为 24 kHz、单声道、`pcm_s16le`。每个提示音边界使用 12ms 淡入淡出避免爆音；流默认按 20ms PCM 块输出。播放器从同一批 PCM 样本的 20ms RMS 窗口计算原始电平，并乘以 `sqrt(2)` 还原正弦峰值尺度。Runtime 随后使用当前角色的 `LipSyncProfile` 映射嘴型；Mao 当前为 `gain=2.5`、`attackMs=30`、`releaseMs=100`、`peakHoldMs=25`。gain 只改变模型响应，时间参数只改变嘴型包络，均不改变音频输出音量和原始 `playback.level`。
+格式为 24 kHz、单声道、`pcm_s16le`。每个提示音边界使用 12ms 淡入淡出避免爆音；流默认按 20ms PCM 块输出。播放器从同一批 PCM 样本的 20ms RMS 窗口计算原始电平，并乘以 `sqrt(2)` 还原正弦峰值尺度。Runtime 随后使用当前角色的 `LipSyncProfile` 映射嘴型；Mao 当前为 `gain=2.5`、`attackMs=30`、`releaseMs=180`、`peakHoldMs=25`。gain 只改变模型响应，时间参数只改变嘴型包络，均不改变音频输出音量和原始 `playback.level`。
 
 ## 自动验收条件
 

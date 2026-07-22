@@ -33,7 +33,7 @@
   "lipSyncProfile": {
     "gain": 2.5,
     "attackMs": 30,
-    "releaseMs": 100,
+    "releaseMs": 180,
     "peakHoldMs": 25
   }
 }
