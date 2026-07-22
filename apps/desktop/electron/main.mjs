@@ -382,7 +382,14 @@ function registerIpc() {
   });
   ipcMain.on(channels.setPointerPresentation, (event, presentation) => {
     requireAvatarSender(event);
-    if (isPointerPresentation(presentation) && !dragState) applyPointerPresentation(presentation);
+    if (!isPointerPresentation(presentation)) return;
+    if (!dragState) applyPointerPresentation(presentation);
+    else if (!presentation.passthrough && presentation.cursor === 'move') {
+      applyPointerPresentation(presentation, {
+        forceCursorRefresh: true,
+        immediateCursorRefresh: true,
+      });
+    }
   });
   ipcMain.on(channels.windowCommand, (event, command) => {
     requireAvatarSender(event);
@@ -438,6 +445,7 @@ function applyPointerPresentation(presentation, options = {}) {
     pointerPresentation,
     presentation,
     pointerPresentationApplied,
+    { forceCursorRefresh: options.forceCursorRefresh },
   );
   pointerPresentation = { ...presentation };
   pointerPresentationApplied = true;
@@ -450,7 +458,7 @@ function applyPointerPresentation(presentation, options = {}) {
   }
   if (change.refreshCursor && options.refreshCursor !== false && process.platform === 'win32') {
     if (cursorRefreshTimer) clearTimeout(cursorRefreshTimer);
-    cursorRefreshTimer = setTimeout(() => {
+    const refresh = () => {
       cursorRefreshTimer = undefined;
       const current = { ...pointerPresentation };
       const focused = avatarWindow?.isFocused() ?? false;
@@ -466,7 +474,9 @@ function applyPointerPresentation(presentation, options = {}) {
       if (!result.refreshed) safeError('[cursor-refresh] failed', {
         presentation: current, available: nativeCursorRefresh.available, focused, ...result,
       });
-    }, 16);
+    };
+    if (options.immediateCursorRefresh) refresh();
+    else cursorRefreshTimer = setTimeout(refresh, 16);
   }
 }
 

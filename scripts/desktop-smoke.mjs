@@ -272,6 +272,7 @@ try {
     const state = await api.getWindowState();
     const start = { x: state.bounds.x + state.bounds.width / 2, y: state.bounds.y + state.bounds.height / 2 };
     await api.beginDrag(start);
+    api.setPointerPresentation({ passthrough: false, cursor: 'move' });
     api.dragTo({ x: start.x - 36, y: start.y - 28 });
     await new Promise(resolve => setTimeout(resolve, 120));
     await api.endDrag();

@@ -74,14 +74,15 @@ export function parseDragHoldDelayMs(value) {
 }
 
 /** Separates a cursor-only update from a native mouse-passthrough mutation. */
-export function describePointerPresentationChange(previous, next, previouslyApplied) {
+export function describePointerPresentationChange(previous, next, previouslyApplied, options = {}) {
   const passthroughChanged = !previouslyApplied || previous.passthrough !== next.passthrough;
   const cursorChanged = previous.cursor !== next.cursor;
   return {
     passthroughChanged,
     cursorChanged,
     enteredInteractive: previouslyApplied && previous.passthrough && !next.passthrough,
-    refreshCursor: previouslyApplied && (passthroughChanged || cursorChanged),
+    refreshCursor: Boolean(options.forceCursorRefresh)
+      || previouslyApplied && (passthroughChanged || cursorChanged),
   };
 }
 

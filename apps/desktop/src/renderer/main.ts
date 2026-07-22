@@ -175,6 +175,10 @@ const dragGesture = new HoldDragController<string>({
       // complete frame after drag entry. This keeps the first move from racing
       // the cursor/style transition and exposing an unpainted compositor frame.
       await nextRenderedFrame();
+      // beginDrag records the move intent without refreshing Windows' cursor.
+      // Re-submit the same single-source presentation after the safe frame so
+      // main can force the native cursor before the first accumulated move.
+      publishPointerPresentation({ passthrough: false, cursor: 'move' });
     },
     onDragMoved(point) {
       document.body.dataset.dragState = 'moving';

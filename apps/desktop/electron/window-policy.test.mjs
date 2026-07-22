@@ -78,4 +78,15 @@ test('drag cursor activation does not resubmit unchanged mouse passthrough', () 
     { passthrough: true, cursor: 'default' },
     false,
   ).passthroughChanged, true);
+  assert.deepEqual(describePointerPresentationChange(
+    { passthrough: false, cursor: 'move' },
+    { passthrough: false, cursor: 'move' },
+    true,
+    { forceCursorRefresh: true },
+  ), {
+    passthroughChanged: false,
+    cursorChanged: false,
+    enteredInteractive: false,
+    refreshCursor: true,
+  });
 });
