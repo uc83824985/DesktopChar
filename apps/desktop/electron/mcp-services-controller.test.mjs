@@ -30,8 +30,8 @@ test('both MCP services dynamically enable, test, reload and disable', async t =
   let combined = await controller.testAll();
   assert.equal(combined.character.status, 'failed');
   assert.equal(combined.tts.status, 'failed');
-  assert.match(combined.character.details, /disabled/);
-  assert.match(combined.tts.details, /disabled/);
+  assert.match(combined.character.details, /角色接入 MCP 服务未启用/);
+  assert.match(combined.tts.details, /语音合成 MCP 服务未启用/);
 
   let state = await controller.setEnabled('tts', true);
   assert.ok(['ready', 'degraded'].includes(state.tts.phase));

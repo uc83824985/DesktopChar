@@ -121,7 +121,9 @@ export function createMcpServicesController(options = {}) {
   async function runConnectionTest(service) {
     const startedAt = performance.now();
     try {
-      if (!state[service].desiredEnabled) throw new Error(`${service} MCP service is disabled`);
+      if (!state[service].desiredEnabled) {
+        throw new Error(service === 'tts' ? '语音合成 MCP 服务未启用' : '角色接入 MCP 服务未启用');
+      }
       const details = service === 'tts' ? await testTtsConnection() : await testCharacterConnection();
       state[service].lastTest = {
         status: 'passed',
@@ -267,7 +269,7 @@ export function createMcpServicesController(options = {}) {
       });
       const result = await candidateSession.client.listTools(undefined, { timeout: config.tts.timeoutMs });
       const tool = result.tools.find(item => item.name === config.tts.toolName);
-      if (!tool) throw new Error(`TTS MCP tool ${config.tts.toolName} was not advertised`);
+      if (!tool) throw new Error(`语音合成 MCP 未发布工具 ${config.tts.toolName}`);
       localTtsService = candidateLocal;
       ttsSession = candidateSession;
       activeTtsConfig = config.tts;
@@ -351,16 +353,16 @@ export function createMcpServicesController(options = {}) {
 
   async function testTtsConnection() {
     if (!ttsSession) await startTts('connection-test');
-    if (!ttsSession) throw new Error(state.tts.lastError ?? 'TTS MCP session is unavailable');
+    if (!ttsSession) throw new Error(state.tts.lastError ?? '语音合成 MCP session 不可用');
     const result = await ttsSession.client.listTools(undefined, { timeout: config.tts.timeoutMs });
     const tool = result.tools.find(item => item.name === config.tts.toolName);
-    if (!tool) throw new Error(`TTS MCP tool ${config.tts.toolName} was not advertised`);
+    if (!tool) throw new Error(`语音合成 MCP 未发布工具 ${config.tts.toolName}`);
     return `${result.tools.length} tools; ${config.tts.toolName} available`;
   }
 
   async function testCharacterConnection() {
     const endpoint = state.character.endpoint;
-    if (!endpoint) throw new Error('Character MCP endpoint is unavailable');
+    if (!endpoint) throw new Error('角色接入 MCP endpoint 不可用');
     const probe = await connectClient(endpoint, {
       name: 'desktop-char-character-probe',
       version: options.version ?? '0.1.0',
@@ -370,7 +372,7 @@ export function createMcpServicesController(options = {}) {
       const result = await probe.client.listTools(undefined, { timeout: 5_000 });
       const names = new Set(result.tools.map(tool => tool.name));
       const missing = CHARACTER_MCP_TOOLS.filter(name => !names.has(name));
-      if (missing.length) throw new Error(`Character MCP is missing tools: ${missing.join(', ')}`);
+      if (missing.length) throw new Error(`角色接入 MCP 缺少工具：${missing.join(', ')}`);
       return `${result.tools.length} tools available`;
     }
     finally {
@@ -379,11 +381,11 @@ export function createMcpServicesController(options = {}) {
   }
 
   async function waitForTtsSession() {
-    if (!state.tts.desiredEnabled) throw new Error('TTS MCP service is disabled');
+    if (!state.tts.desiredEnabled) throw new Error('语音合成 MCP 服务未启用');
     await operation.catch(() => {});
     if (ttsSession) return;
     await enqueue(() => startTts('request'));
-    if (!ttsSession) throw new Error(state.tts.lastError ?? 'TTS MCP session is unavailable');
+    if (!ttsSession) throw new Error(state.tts.lastError ?? '语音合成 MCP session 不可用');
   }
 
   async function handleTtsFailure(error) {

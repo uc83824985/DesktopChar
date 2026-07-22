@@ -1,5 +1,7 @@
 # Qwen3-TTS MCP 流式扩展说明
 
+本文保留 Qwen3-TTS 与 `tts_*` 协议专名；在 DesktopChar 用户界面和普通说明中，该能力统一显示为“语音合成 MCP”。
+
 ## 目标与适用范围
 
 本文面向 Qwen3-TTS MCP 服务实现者，定义 DesktopChar 当前需要的 `tts_open_stream` 扩展边界，以及可从 Qwen3-TTS 底层 codec/decoder 直接提供、但暂不要求客户端消费的时序信息。

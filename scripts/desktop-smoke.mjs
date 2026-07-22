@@ -107,13 +107,13 @@ try {
   const stableMenuOrigin = await contextMenuOrigin(page);
   await page.locator('[data-item-id="character-mcp-enabled"]').click();
   await page.locator('body[data-context-menu="open"][data-character-mcp-service="disabled"] [data-item-id="character-mcp-enabled"][aria-checked="false"]').waitFor({ timeout: 5_000 });
-  assertContextMenuOrigin(await contextMenuOrigin(page), stableMenuOrigin, 'disabling character MCP');
+  assertContextMenuOrigin(await contextMenuOrigin(page), stableMenuOrigin, 'disabling character-access MCP');
   await page.locator('[data-item-id="character-mcp-enabled"]').click();
   await page.locator('body[data-context-menu="open"][data-character-mcp-service="ready"] [data-item-id="character-mcp-enabled"][aria-checked="true"]').waitFor({ timeout: 5_000 });
-  assertContextMenuOrigin(await contextMenuOrigin(page), stableMenuOrigin, 'enabling character MCP');
+  assertContextMenuOrigin(await contextMenuOrigin(page), stableMenuOrigin, 'enabling character-access MCP');
   await page.locator('[data-item-id="tts-mcp-enabled"]').click();
   await page.locator('body[data-context-menu="open"][data-tts-mcp-service="disabled"] [data-item-id="tts-mcp-enabled"][aria-checked="false"]').waitFor({ timeout: 5_000 });
-  assertContextMenuOrigin(await contextMenuOrigin(page), stableMenuOrigin, 'disabling TTS MCP');
+  assertContextMenuOrigin(await contextMenuOrigin(page), stableMenuOrigin, 'disabling speech-synthesis MCP');
   const fallbackText = '中文回退';
   const fallbackClient = new Client({ name: 'desktop-char-text-fallback-smoke', version: '1.0.0' });
   await fallbackClient.connect(new StreamableHTTPClientTransport(new URL(initial.mcpServices.character.endpoint)));
@@ -148,11 +148,11 @@ try {
   assertContextMenuOrigin(await contextMenuOrigin(page), stableMenuOrigin, 'presenting the TTS text fallback');
   await page.locator('[data-item-id="tts-mcp-enabled"]').click();
   await page.locator('body[data-context-menu="open"][data-tts-mcp-service="ready"] [data-item-id="tts-mcp-enabled"][aria-checked="true"]').waitFor({ timeout: 5_000 });
-  assertContextMenuOrigin(await contextMenuOrigin(page), stableMenuOrigin, 'enabling TTS MCP');
+  assertContextMenuOrigin(await contextMenuOrigin(page), stableMenuOrigin, 'enabling speech-synthesis MCP');
   await page.locator('[data-item-id="mcp-connection-test"]').click();
   await page.locator('body[data-context-menu="closed"][data-tts-mcp-test="passed"][data-character-mcp-test="passed"][data-speech-bubble="complete"]').waitFor({ timeout: 5_000 });
   const mcpTestBubble = await page.locator('#speech-bubble').textContent();
-  if (!mcpTestBubble?.includes('角色 MCP：通过') || !mcpTestBubble.includes('TTS MCP：通过')) {
+  if (!mcpTestBubble?.includes('角色接入 MCP：通过') || !mcpTestBubble.includes('语音合成 MCP：通过')) {
     throw new Error(`Combined MCP result did not use the character chat bubble: ${mcpTestBubble}`);
   }
   await page.evaluate(() => document.querySelector('#avatar')?.dispatchEvent(

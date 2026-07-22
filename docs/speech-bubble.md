@@ -2,7 +2,7 @@
 
 ## 归属与状态边界
 
-聊天气泡是应用层的只读 `world-overlay` presenter，不属于 Live2D Renderer、TTS Adapter 或具体 Scene Actor 类型。Avatar Runtime 独占 `SpeechBubbleState`：有音频的语音内容只接受播放器生命周期事实；TTS 不可用时由 Runtime 将失败 segment 顺序转换为纯文本回退；其他无语音应用通知通过显式 `presentation.chat-bubble-requested` 事件进入完整显示/等待关闭状态。presenter 读取 `AvatarSnapshot.speechBubble` 生成 DOM，不保存定时器或另一份业务状态，也不反向修改 Runtime。
+聊天气泡是应用层的只读 `world-overlay` presenter，不属于 Live2D Renderer、TTS Adapter 或具体 Scene Actor 类型。Avatar Runtime 独占 `SpeechBubbleState`：有音频的语音内容只接受播放器生命周期事实；语音合成不可用时由 Runtime 将失败 segment 顺序转换为纯文本回退；其他无语音应用通知通过显式 `presentation.chat-bubble-requested` 事件进入完整显示/等待关闭状态。presenter 读取 `AvatarSnapshot.speechBubble` 生成 DOM，不保存定时器或另一份业务状态，也不反向修改 Runtime。
 
 面向用户的 UI 与中文架构说明统一使用“聊天气泡”。现有 `SpeechBubble*` 类型、`speechBubble` 状态字段和 `bubble` 协议字段属于已经落地的稳定技术标识，不代表该 presenter 归属于语音层；它仍是可以承载角色聊天文本的应用层 UI。
 
@@ -39,7 +39,7 @@ PerformanceSegment.displayText + bubble     AudioSource.durationMs/textCues
 
 ## 无可用 TTS 时的纯文本回退
 
-TTS MCP 被禁用、连接失败或合成失败产生 `tts.segment-failed` 时，Runtime 不再静默跳过该 segment。它进入 `presenting` 状态并按 sequence 依次显示 `displayText`；当前段关闭后才推进下一失败段或已就绪音频，因此并发失败不会互相覆盖。
+语音合成 MCP（TTS）被禁用、连接失败或合成失败产生 `tts.segment-failed` 时，Runtime 不再静默跳过该 segment。它进入 `presenting` 状态并按 sequence 依次显示 `displayText`；当前段关闭后才推进下一失败段或已就绪音频，因此并发失败不会互相覆盖。
 
 回退强制使用 `complete`，忽略原 segment 的 `stream`、`karaoke`、cue 和 `dismissDelayMs`，因为此时不存在可引用的实际播放时钟。它不创建 AudioSource，不产生 `playback.started/progress/level`，嘴型保持中立。显示时长使用可预测的阅读经验值：`clamp(1200ms + 非空白 Unicode 字符数 × 180ms, 2000ms, 12000ms)`；24 字约为 5.52 秒。Agent 可从 capabilities 的 `supportsTextFallback`、`textFallbackMode` 和 `textFallbackDuration` 读取该能力。
 
@@ -100,7 +100,7 @@ PCM Player 以 Web Audio 输出时间线作为统一基准：
 
 桌面版可在角色可见像素上右键，打开由 `scene-ui-dom` 即时注册表生成的设置菜单，并从“聊天气泡测试”依次触发完整显示、流式显示和 KTV 高亮。键盘可使用 `Shift+F10` 或 Context Menu 键打开同一菜单；该入口复用正式 UI Host，不是单独的测试面板。
 
-同一菜单的“测试 MCP 连接”会同时探测角色 MCP 与 TTS MCP，并用一次 Runtime 管理的完整聊天气泡显示两端汇总结果。该通知不提交 `PerformancePlan`，不会合成静音或提示音，也不会生成播放进度和口型事件。
+同一菜单的“测试 MCP 连接”会同时探测角色接入 MCP 与语音合成 MCP，并用一次 Runtime 管理的完整聊天气泡显示两端汇总结果。该通知不提交 `PerformancePlan`，不会合成静音或提示音，也不会生成播放进度和口型事件。
 
 流式模式只逐步追加实际文本，不绘制输入框式光标或紫色 caret；它表达的是角色已经开始输出的内容，不暗示用户仍可在聊天气泡中输入。未显示的全文后缀会以不可见、仍参与排版的形式占位，因此气泡从首字开始就按完整 `displayText` 决定宽度与换行，不会在逐字显示期间缩放或改变换行点。气泡整体仍按角色锚点放置，正文内部使用稳定左边界并按中文严格规则自动换行，避免较短首行因逐行居中形成不规则的大缩进；使用 `pre-wrap` 的正文模板禁止在三个投影节点之外保留源码缩进文本，避免 HTML 格式化空白变成首行缩进。中文句号、问号、感叹号及对应全角形式会在 Presenter 视觉层结束当前行，下一句从新行开始；紧随其后的横向空格会在视觉投影中移除。该换行不写回 `displayText`，不改变 TTS cue 索引。KTV 高亮不添加会改变字宽的内边距。
 

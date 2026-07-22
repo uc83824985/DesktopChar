@@ -1,6 +1,6 @@
 # 外部 Agent 本地 HTTP 接入指南
 
-> 本文保留兼容 HTTP case。新 Agent 优先使用 DesktopChar 自身的角色 MCP Server；其动态启停、默认 `http://127.0.0.1:17374/mcp` endpoint、四个工具和重连语义见 [MCP 服务生命周期与角色控制接口](mcp-services.md)。HTTP 与角色 MCP 共用同一计划校验和 Runtime 命令入口。
+> 本文保留兼容 HTTP case。新 Agent 优先使用 DesktopChar 自身的角色接入 MCP Server；其动态启停、默认 `http://127.0.0.1:17374/mcp` endpoint、四个工具和重连语义见 [MCP 服务生命周期与角色接入接口](mcp-services.md)。HTTP 与角色接入 MCP 共用同一计划校验和 Runtime 命令入口。
 
 ## 定位与边界
 
@@ -97,7 +97,7 @@ powershell -NoProfile -ExecutionPolicy Bypass -File scripts/desktop-mcp-tts.ps1 
 
 需要接入真实 Qwen3-TTS 时的最短可复现流程：
 
-1. 启动 Qwen3-TTS MCP：
+1. 启动 Qwen3-TTS 语音合成 MCP：
 
 ```powershell
 cd G:\Qwen3-TTS-GGUF
@@ -111,7 +111,7 @@ cd G:\DesktopChar
 npm run desktop:mcp
 ```
 
-3. 验证 DesktopChar 已实际接入 MCP TTS：
+3. 验证 DesktopChar 已实际接入语音合成 MCP：
 
 ```powershell
 (Invoke-RestMethod http://127.0.0.1:17373/v1/health).status
@@ -170,9 +170,9 @@ Invoke-RestMethod `
 - 热启动 `submit -> speaking` 约 `1.0s`
 - 若首轮明显更慢，通常是模型、音色、MCP session 或播放器冷启动，不应立即判定接入失败
 
-如果要让 DesktopChar 通过外部 MCP TTS 服务合成语音，先启动 TTS MCP 服务，再用包装脚本启动桌面角色。使用默认 `local_tts_mcp` 时不需要执行这一步。
+如果要让 DesktopChar 通过外部语音合成 MCP 服务合成语音，先启动该服务，再用包装脚本启动桌面角色。使用默认 `local_tts_mcp` 时不需要执行这一步。
 
-Qwen3-TTS MCP 示例：
+Qwen3-TTS 语音合成 MCP 示例：
 
 ```powershell
 cd G:\Qwen3-TTS-GGUF
@@ -258,7 +258,7 @@ Invoke-RestMethod `
 }
 ```
 
-支持 `complete`、`stream` 和 `karaoke`。TTS 正常时聊天气泡只在 `playback.started` 后显示，完成后等待 `dismissDelayMs` 再隐藏。精确分块/高亮可由 Agent 提供与 `displayText` 完全拼接一致的 `cues`；若 TTS MCP 返回匹配的 `text_cues`，Runtime 优先采用实际语音对齐信息。当前 HTTP 仍提交完整计划，`stream` 是播放时钟驱动的渐进显示，不是网络 token 流。TTS 不可用时 Runtime 改为 `presenting`，强制完整文本并按字符数估算 2–12 秒显示时间，不产生语音、口型、流式追加或 KTV 高亮。完整契约见 [角色聊天气泡](speech-bubble.md)。
+支持 `complete`、`stream` 和 `karaoke`。语音合成正常时聊天气泡只在 `playback.started` 后显示，完成后等待 `dismissDelayMs` 再隐藏。精确分块/高亮可由 Agent 提供与 `displayText` 完全拼接一致的 `cues`；若语音合成 MCP（TTS）返回匹配的 `text_cues`，Runtime 优先采用实际语音对齐信息。当前 HTTP 仍提交完整计划，`stream` 是播放时钟驱动的渐进显示，不是网络 token 流。语音合成不可用时 Runtime 改为 `presenting`，强制完整文本并按字符数估算 2–12 秒显示时间，不产生语音、口型、流式追加或 KTV 高亮。完整契约见 [角色聊天气泡](speech-bubble.md)。
 
 ```powershell
 Invoke-RestMethod -Method Post http://127.0.0.1:17373/v1/interrupt
@@ -283,7 +283,7 @@ Invoke-RestMethod -Method Post http://127.0.0.1:17373/v1/interrupt
 
 HTTP JSON 和 Streamable HTTP MCP 链路均按 UTF-8 传输；官方 MCP Client 的集成测试会提交 `你好` 并断言 Runtime 收到的字符串逐字一致。Windows PowerShell 5.1 不应使用 `@'...中文...'@ | node --input-type=module -` 一类管道把临时源码送入原生进程：其 native stdin 转码可能在请求发出前把非 ASCII 字符替换为 `?`，表现为中文乱码而 `MCP` 等英文正常。前台脚本应保存为 UTF-8 `.mjs` 后执行，使用 PowerShell 7，或在临时命令中使用 `\uXXXX`/code point 转义。不要在接收端猜测并反转已经丢失的字符。
 
-## TTS MCP 接入上下文
+## 语音合成 MCP 接入上下文
 
 当前应用 case 的 `local_tts_mcp` 选项默认自动启动根目录 [`local-tts-mcp`](../local-tts-mcp/README.md) 真实参考服务，并由 Electron main 通过官方 SDK 建立 Streamable HTTP MCP session；Renderer 只装配 `McpTtsAdapter`，本地与远端共享工具参数、流响应、取消和播放器契约。设置 `DESKTOP_CHAR_TTS_MODE=mcp` 后切换为 `external_tts_mcp`：只会把 session URL 改为外部服务并停止自动启动本地服务。远端不可用时不会静默回退到本地。
 

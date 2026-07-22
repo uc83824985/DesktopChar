@@ -1,4 +1,4 @@
-# Local TTS MCP reference service
+# 本地语音合成 MCP 参考服务（Local TTS MCP）
 
 该目录是与桌面角色应用相对独立、可单独启动的真实 MCP 接入样例。只有“合成模型”由确定性的 `jrpg-blip` 逐字提示音生成器代替；以下边界均使用正式实现：
 
@@ -108,7 +108,7 @@ $env:DESKTOP_CHAR_TTS_LOCAL_RATE = "0.8"
 npm run tts:local-mcp
 ```
 
-`jrpg-blip` 的元数据是可精确计算的；未知总长度与无 `text_cues` 的降级路径继续由 Adapter 单元测试及真实外部 Qwen3-TTS MCP 覆盖，不需要让本地前台声音故意退化。
+`jrpg-blip` 的元数据是可精确计算的；未知总长度与无 `text_cues` 的降级路径继续由 Adapter 单元测试及真实外部 Qwen3-TTS 语音合成 MCP 覆盖，不需要让本地前台声音故意退化。
 
 可通过现有桌面启动脚本试听保留的变化音调版：
 

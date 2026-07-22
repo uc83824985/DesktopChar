@@ -32,7 +32,7 @@ if ($AgentPort.Trim().Length -gt 0) {
   $env:DESKTOP_CHAR_AGENT_PORT = $AgentPort
 }
 
-Write-Host "[desktop-char] TTS MCP mode enabled"
+Write-Host "[desktop-char] 语音合成 MCP mode enabled"
 Write-Host "[desktop-char] MCP URL: $env:DESKTOP_CHAR_TTS_MCP_URL"
 Write-Host "[desktop-char] Tool: $env:DESKTOP_CHAR_TTS_MCP_TOOL"
 Write-Host "[desktop-char] Cancel tool: $env:DESKTOP_CHAR_TTS_MCP_CANCEL_TOOL"

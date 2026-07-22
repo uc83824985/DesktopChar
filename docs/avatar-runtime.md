@@ -407,4 +407,4 @@ interrupt(...)
 - Fake Effect Executor 覆盖了 TTS、Player 和 Renderer 的端到端行为。
 - Live2D 前台已使用真实 Mao 模型验证帧末参数应用、PCM 口型、原生 `TapBody` motion 和持续眼部跟随。
 
-当前已接入真实 Streamable HTTP MCP 控制面与 HTTP PCM 数据面：默认 `local_tts_mcp` 和外部 Qwen3-TTS MCP 都通过相同 Adapter/Player 端口进入 Runtime，不能绕过 Runtime 修改状态。装配与外部 Agent 使用方式见 [外部 Agent 本地 HTTP 接入指南](external-agent-http.md)。
+当前已接入真实 Streamable HTTP MCP 控制面与 HTTP PCM 数据面：默认 `local_tts_mcp` 和外部 Qwen3-TTS 语音合成 MCP 都通过相同 Adapter/Player 端口进入 Runtime，不能绕过 Runtime 修改状态。装配与外部 Agent 使用方式见 [外部 Agent 本地 HTTP 接入指南](external-agent-http.md)。

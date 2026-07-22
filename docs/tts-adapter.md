@@ -1,5 +1,7 @@
 # TTS Adapter：流式优先契约
 
+用户侧统一称为“语音合成 MCP”；`TTS`、`tts-mcp-adapter`、`tts.*` 事件和配置字段是保持兼容的技术标识。
+
 ## 结论
 
 `tts-mcp-adapter` 采用“控制面与数据面分离”的流式优先设计：

@@ -123,13 +123,13 @@ class ReloadableTtsAdapter implements TtsAdapter {
 
   health(): Promise<TtsHealthReport> {
     if (!this.current || !this.enabled) return Promise.resolve({
-      status: 'unavailable', provider: 'desktop-char-mcp-services', latencyMs: 0, details: 'TTS MCP service is disabled',
+      status: 'unavailable', provider: 'desktop-char-mcp-services', latencyMs: 0, details: '语音合成 MCP 服务未启用',
     });
     return this.current.adapter.health();
   }
 
   private requireCurrent() {
-    if (!this.current || !this.enabled) throw new Error('TTS MCP service is not ready');
+    if (!this.current || !this.enabled) throw new Error('语音合成 MCP 服务未就绪');
     return this.current;
   }
 }
@@ -309,7 +309,7 @@ try {
     status.textContent = snapshot.state === 'speaking'
       ? `Runtime: speaking · ${Math.round(snapshot.playback.positionMs)} ms`
       : snapshot.state === 'presenting'
-        ? 'Runtime: presenting · TTS 不可用，正在显示纯文本回退'
+        ? 'Runtime: presenting · 语音合成不可用，正在显示纯文本回退'
         : 'Runtime 已就绪 · UI 仅发送事件，状态由 Runtime 持有';
     renderSpeechBubble(snapshot);
     contextMenuHost.refresh();
@@ -859,14 +859,14 @@ function registerDevelopmentUi(): void {
         items: [
           {
             type: 'checkbox', id: 'character-mcp-enabled',
-            label: `角色 MCP · ${mcpPhaseLabel(services.character)}`,
+            label: `角色接入 MCP · ${mcpPhaseLabel(services.character)}`,
             checked: services.character.desiredEnabled,
             enabled: !mcpTransitioning(services.character),
             invoke: enabled => setMcpServiceEnabled('character', enabled),
           },
           {
             type: 'checkbox', id: 'tts-mcp-enabled',
-            label: `TTS MCP · ${mcpPhaseLabel(services.tts)}`,
+            label: `语音合成 MCP · ${mcpPhaseLabel(services.tts)}`,
             checked: services.tts.desiredEnabled,
             enabled: runtimeIdle && !mcpTransitioning(services.tts),
             invoke: enabled => setMcpServiceEnabled('tts', enabled),
@@ -914,7 +914,7 @@ async function testAllMcpServices(): Promise<void> {
   applyMcpServicesState(await desktopShell.getMcpServicesState());
   runtime?.dispatch({
     type: 'presentation.chat-bubble-requested',
-    text: `MCP 连接测试：${formatMcpTestResult('角色 MCP', results.character)}；${formatMcpTestResult('TTS MCP', results.tts)}。`,
+    text: `MCP 连接测试：${formatMcpTestResult('角色接入 MCP', results.character)}；${formatMcpTestResult('语音合成 MCP', results.tts)}。`,
     dismissDelayMs: 4_500,
   });
 }
@@ -939,7 +939,7 @@ function mcpPhaseLabel(service: McpServiceState): string {
 
 function formatMcpTestResult(label: string, result: McpServiceTest): string {
   if (result.status === 'passed') return `${label}：通过（${result.latencyMs} ms）`;
-  if (/service is disabled/i.test(result.details)) return `${label}：未启用`;
+  if (/service is disabled|服务未启用/i.test(result.details)) return `${label}：未启用`;
   const details = result.details.replace(/\s+/g, ' ').trim();
   const summary = details.length > 60 ? `${details.slice(0, 57)}...` : details;
   return `${label}：失败（${summary || '未知错误'}）`;
