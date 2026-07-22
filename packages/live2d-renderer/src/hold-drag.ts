@@ -134,7 +134,10 @@ export class HoldDragController<TTarget> {
   async #activate(gesture: Gesture<TTarget>): Promise<void> {
     if (this.#gesture !== gesture || gesture.released || gesture.phase !== 'pending') return;
     gesture.phase = 'starting';
-    gesture.dragOrigin = { ...gesture.latest };
+    // Preserve the originally pressed pixel as the native window-drag anchor.
+    // Pointer movement accumulated during the hold delay is emitted after the
+    // renderer/native startup boundary instead of being discarded as a new origin.
+    gesture.dragOrigin = { ...gesture.pressedAt };
     this.#callbacks.onPhaseChanged?.('starting');
     try {
       await this.#callbacks.onHoldStarted(gesture.dragOrigin, gesture.target);

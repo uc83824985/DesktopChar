@@ -59,18 +59,18 @@ test('short single and double clicks never enter the drag phase', () => {
   assert.equal(facts.finishes, 0);
 });
 
-test('a hold activates dragging from the latest point without jumping', async () => {
+test('a hold preserves the pressed pointer anchor across delayed activation', async () => {
   const { controller, scheduler, facts } = fixture();
   controller.begin(7, 'avatar', { x: 10, y: 10 });
   controller.move(7, { x: 30, y: 25 });
   scheduler.fire();
   await Promise.resolve();
 
-  assert.deepEqual(facts.starts, [{ x: 30, y: 25 }]);
-  assert.deepEqual(facts.moves, []);
+  assert.deepEqual(facts.starts, [{ x: 10, y: 10 }]);
+  assert.deepEqual(facts.moves, [{ x: 30, y: 25 }]);
   controller.move(7, { x: 34, y: 28 });
   controller.end(7, { x: 35, y: 29 });
-  assert.deepEqual(facts.moves, [{ x: 34, y: 28 }, { x: 35, y: 29 }]);
+  assert.deepEqual(facts.moves, [{ x: 30, y: 25 }, { x: 34, y: 28 }, { x: 35, y: 29 }]);
   assert.equal(facts.finishes, 1);
   assert.deepEqual(facts.clicks, []);
 });
