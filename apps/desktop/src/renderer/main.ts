@@ -917,7 +917,8 @@ async function testAllMcpServices(): Promise<void> {
   applyMcpServicesState(await desktopShell.getMcpServicesState());
   runtime?.dispatch({
     type: 'presentation.chat-bubble-requested',
-    text: `MCP 连接测试：${formatMcpTestResult('角色接入 MCP', results.character)}；${formatMcpTestResult('语音合成 MCP', results.tts)}。`,
+    text: `MCP 连接测试：${formatMcpTestResult('角色接入 MCP', results.character)}。`
+      + `${formatMcpTestResult('语音合成 MCP', results.tts)}。`,
     dismissDelayMs: 4_500,
   });
 }
@@ -932,8 +933,8 @@ async function reloadMcpServices(): Promise<void> {
       ? '已更新'
       : '无变化';
     showMcpNotification(
-      `MCP 重新加载完成：配置 r${next.config.revision}（${revisionStatus}）；`
-      + `${formatMcpServiceState('角色接入 MCP', next.character)}；`
+      `MCP 重新加载完成：配置 r${next.config.revision}（${revisionStatus}）。`
+      + `${formatMcpServiceState('角色接入 MCP', next.character)}。`
       + `${formatMcpServiceState('语音合成 MCP', next.tts)}。`,
     );
   }
@@ -948,8 +949,8 @@ async function reloadMcpServices(): Promise<void> {
     }
     const details = summarizeMcpDetails(current?.config.error ?? error);
     const serviceStatus = current
-      ? `；现有${formatMcpServiceState('角色接入 MCP', current.character)}`
-        + `；${formatMcpServiceState('语音合成 MCP', current.tts)}`
+      ? `。现有${formatMcpServiceState('角色接入 MCP', current.character)}`
+        + `。${formatMcpServiceState('语音合成 MCP', current.tts)}`
       : '';
     showMcpNotification(`MCP 重新加载失败：${details}${serviceStatus}。`);
   }

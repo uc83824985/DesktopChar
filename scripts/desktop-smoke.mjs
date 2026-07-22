@@ -155,7 +155,8 @@ try {
   if (!reloadBubble?.includes('MCP 重新加载完成')
     || !/配置 r\d+（无变化）/.test(reloadBubble)
     || !reloadBubble.includes('角色接入 MCP：已连接')
-    || !reloadBubble.includes('语音合成 MCP：已连接')) {
+    || !reloadBubble.includes('语音合成 MCP：已连接')
+    || !reloadBubble.includes('角色接入 MCP：已连接。\n语音合成 MCP：已连接')) {
     throw new Error(`MCP reload result did not use the character chat bubble: ${reloadBubble}`);
   }
   await page.evaluate(() => document.querySelector('#avatar')?.dispatchEvent(
@@ -165,7 +166,9 @@ try {
   await page.locator('[data-item-id="mcp-connection-test"]').click();
   await page.locator('body[data-context-menu="closed"][data-tts-mcp-test="passed"][data-character-mcp-test="passed"][data-speech-bubble="complete"]').waitFor({ timeout: 5_000 });
   const mcpTestBubble = await page.locator('#speech-bubble').textContent();
-  if (!mcpTestBubble?.includes('角色接入 MCP：通过') || !mcpTestBubble.includes('语音合成 MCP：通过')) {
+  if (!mcpTestBubble?.includes('角色接入 MCP：通过')
+    || !mcpTestBubble.includes('语音合成 MCP：通过')
+    || !/角色接入 MCP：通过（\d+ ms）。\n语音合成 MCP：通过/.test(mcpTestBubble)) {
     throw new Error(`Combined MCP result did not use the character chat bubble: ${mcpTestBubble}`);
   }
   await page.evaluate(() => document.querySelector('#avatar')?.dispatchEvent(

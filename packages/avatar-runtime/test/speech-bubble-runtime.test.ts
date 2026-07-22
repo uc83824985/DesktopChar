@@ -74,7 +74,7 @@ test('application notifications use the Runtime-owned chat bubble without speech
 
   runtime.dispatch({
     type: 'presentation.chat-bubble-requested',
-    text: '  角色接入 MCP：通过；语音合成 MCP：通过。  ',
+    text: '  角色接入 MCP：通过。语音合成 MCP：通过。  ',
     dismissDelayMs: 3_500,
   });
 
@@ -82,7 +82,7 @@ test('application notifications use the Runtime-owned chat bubble without speech
   assert.equal(runtime.getSnapshot().state, 'idle');
   assert.equal(bubble.phase, 'holding');
   assert.equal(bubble.segmentId, null);
-  assert.equal(projectSpeechBubble(bubble).visibleText, '角色接入 MCP：通过；语音合成 MCP：通过。');
+  assert.equal(projectSpeechBubble(bubble).visibleText, '角色接入 MCP：通过。语音合成 MCP：通过。');
   assert.deepEqual(effects.playedSegments, []);
   assert.equal(effects.pendingTts.size, 0);
   assert.equal(effects.pendingBubbleDismissals.get(bubble.presentationId)?.effect.delayMs, 3_500);
