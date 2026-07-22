@@ -628,7 +628,7 @@ function ttsRuntimeConfig(config, endpoint, status) {
   if (!config) return null;
   return {
     lifecycle: config.lifecycle.type,
-    ...(config.activeProfile ? { activeProfile: config.activeProfile } : {}),
+    ...(config.profile ? { profile: config.profile } : {}),
     provider: status?.provider ?? null,
     mcpUrl: endpoint ?? config.connection.url,
     timeoutMs: config.connection.timeoutMs,

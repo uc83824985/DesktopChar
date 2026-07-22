@@ -1,14 +1,23 @@
 import { spawn } from 'node:child_process';
+import path from 'node:path';
+import { fileURLToPath } from 'node:url';
 
 const OUTPUT_TAIL_LIMIT = 8_192;
+const directory = path.dirname(fileURLToPath(import.meta.url));
+const WINDOWS_PROCESS_HOST = path.join(directory, 'managed-process-host.mjs');
 
 export async function startManagedProcess(spec, options = {}) {
   const spawnProcess = options.spawnProcess ?? spawn;
-  const child = spawnProcess(spec.executable, spec.args, {
-    cwd: spec.cwd,
-    env: { ...process.env, ...spec.env },
+  const platform = options.platform ?? process.platform;
+  const closeProcessTree = options.closeProcessTree ?? defaultCloseProcessTree;
+  const wrapped = platform === 'win32' && (options.useProcessHost ?? true);
+  const childSpec = wrapped ? windowsProcessHostSpec(spec, options) : spec;
+  const child = spawnProcess(childSpec.executable, childSpec.args, {
+    cwd: childSpec.cwd,
+    env: { ...process.env, ...childSpec.env },
     windowsHide: true,
     shell: false,
+    detached: wrapped,
     stdio: ['ignore', 'pipe', 'pipe'],
   });
   let stdoutTail = '';
@@ -32,6 +41,7 @@ export async function startManagedProcess(spec, options = {}) {
     child.once('spawn', resolve);
     child.once('error', reject);
   });
+  if (wrapped) child.unref?.();
 
   let closing = false;
   return {
@@ -42,18 +52,59 @@ export async function startManagedProcess(spec, options = {}) {
       if (closing) return exited;
       closing = true;
       if (exitInfo) return exitInfo;
-      child.kill('SIGTERM');
+      if (platform === 'win32') {
+        await closeProcessTree(child.pid, { force: false });
+      }
+      else {
+        child.kill('SIGTERM');
+      }
       const graceful = await Promise.race([
         exited.then(result => ({ result })),
         delay(timeoutMs).then(() => null),
       ]);
       if (graceful) return graceful.result;
-      child.kill('SIGKILL');
+      if (platform === 'win32') {
+        await closeProcessTree(child.pid, { force: true });
+      }
+      else {
+        child.kill('SIGKILL');
+      }
       return await Promise.race([
         exited,
         delay(Math.min(timeoutMs, 2_000)).then(() => ({ code: null, signal: 'SIGKILL-timeout', stdoutTail, stderrTail })),
       ]);
     },
+  };
+}
+
+async function defaultCloseProcessTree(pid, { force }) {
+  if (!Number.isInteger(pid) || pid <= 0) return;
+  const args = ['/PID', String(pid), '/T'];
+  if (force) args.unshift('/F');
+  await new Promise(resolve => {
+    const killer = spawn('taskkill', args, {
+      windowsHide: true,
+      shell: false,
+      stdio: ['ignore', 'ignore', 'ignore'],
+    });
+    killer.once('error', () => resolve());
+    killer.once('exit', () => resolve());
+  });
+}
+
+function windowsProcessHostSpec(spec, options) {
+  const payload = Buffer.from(JSON.stringify({
+    parentPid: process.pid,
+    spec,
+  }), 'utf8').toString('base64');
+  const executable = options.hostExecutable ?? process.execPath;
+  const env = { ...spec.env };
+  if (/\belectron(?:\.exe)?$/i.test(path.basename(executable))) env.ELECTRON_RUN_AS_NODE = '1';
+  return {
+    executable,
+    args: [WINDOWS_PROCESS_HOST, payload],
+    cwd: spec.cwd,
+    env,
   };
 }
 

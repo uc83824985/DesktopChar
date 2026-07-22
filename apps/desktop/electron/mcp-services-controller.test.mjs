@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import http from 'node:http';
-import { mkdtemp, rm, writeFile } from 'node:fs/promises';
+import { mkdir as fsMkdir, mkdtemp, rm, writeFile } from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
 import test from 'node:test';
@@ -14,12 +14,14 @@ const localTtsServer = path.join(repositoryRoot, 'local-tts-mcp/server.mjs');
 test('both MCP services dynamically enable, test, reload and disable', async t => {
   const directory = await mkdtemp(path.join(os.tmpdir(), 'desktop-char-mcp-controller-'));
   const configFilePath = path.join(directory, 'desktop-char.config.json');
+  const profileDirectory = path.join(directory, 'tts-mcp-profiles');
   t.after(() => rm(directory, { recursive: true, force: true }));
   const ttsPort = await reservePort();
   const baseConfig = {
     ttsMcp: managedLocalTtsConfig(ttsPort, { autoStart: false }),
     characterMcp: { autoStart: false, port: 0 },
   };
+  await writeTtsProfile(profileDirectory, 'local', managedLocalTtsProfile(ttsPort, { rate: 1 }));
   await writeFile(configFilePath, JSON.stringify(baseConfig), 'utf8');
   const states = [];
   const commands = [];
@@ -78,6 +80,10 @@ test('both MCP services dynamically enable, test, reload and disable', async t =
       reconnect: { initialDelayMs: 20, maximumDelayMs: 80 },
     },
   }), 'utf8');
+  await writeTtsProfile(profileDirectory, 'local', managedLocalTtsProfile(ttsPort, {
+    rate: 0.8,
+    reconnect: { initialDelayMs: 20, maximumDelayMs: 80 },
+  }));
   state = await controller.reload('test');
   assert.equal(state.tts.phase, 'ready');
   assert.equal(state.character.phase, 'ready');
@@ -97,8 +103,10 @@ test('both MCP services dynamically enable, test, reload and disable', async t =
 test('TTS hot reload waits for the Runtime idle boundary', async t => {
   const directory = await mkdtemp(path.join(os.tmpdir(), 'desktop-char-mcp-idle-'));
   const configFilePath = path.join(directory, 'desktop-char.config.json');
+  const profileDirectory = path.join(directory, 'tts-mcp-profiles');
   t.after(() => rm(directory, { recursive: true, force: true }));
   const ttsPort = await reservePort();
+  await writeTtsProfile(profileDirectory, 'local', managedLocalTtsProfile(ttsPort, { delayMs: 1 }));
   await writeFile(configFilePath, JSON.stringify({
     ttsMcp: managedLocalTtsConfig(ttsPort, { autoStart: true, delayMs: 1 }),
     characterMcp: { autoStart: false },
@@ -114,6 +122,7 @@ test('TTS hot reload waits for the Runtime idle boundary', async t => {
     ttsMcp: managedLocalTtsConfig(ttsPort, { autoStart: true, delayMs: 2 }),
     characterMcp: { autoStart: false },
   }), 'utf8');
+  await writeTtsProfile(profileDirectory, 'local', managedLocalTtsProfile(ttsPort, { delayMs: 2 }));
   const pending = await controller.reload('test');
   assert.equal(pending.tts.phase, 'reload-pending');
   assert.equal(pending.tts.endpoint, endpoint);
@@ -126,21 +135,16 @@ test('TTS hot reload waits for the Runtime idle boundary', async t => {
 test('external TTS reconnects when its MCP endpoint becomes available', async t => {
   const directory = await mkdtemp(path.join(os.tmpdir(), 'desktop-char-mcp-reconnect-'));
   const configFilePath = path.join(directory, 'desktop-char.config.json');
+  const profileDirectory = path.join(directory, 'tts-mcp-profiles');
   t.after(() => rm(directory, { recursive: true, force: true }));
   const reservation = createLocalTtsMcpService({ port: 0 });
   const reservedAddress = await reservation.listen();
   await reservation.close();
+  await writeTtsProfile(profileDirectory, 'external-local', externalTtsProfile({ url: `http://127.0.0.1:${reservedAddress.port}/mcp`, timeoutMs: 100, reconnect: { initialDelayMs: 20, maximumDelayMs: 40 } }));
   await writeFile(configFilePath, JSON.stringify({
     ttsMcp: {
       autoStart: true,
-      activeProfile: 'external-local',
-      profiles: {
-        'external-local': {
-          lifecycle: { type: 'external' },
-          connection: { url: `http://127.0.0.1:${reservedAddress.port}/mcp`, timeoutMs: 100 },
-          reconnect: { initialDelayMs: 20, maximumDelayMs: 40 },
-        },
-      },
+      profile: 'external-local',
     },
     characterMcp: { autoStart: false },
   }), 'utf8');
@@ -172,9 +176,11 @@ test('character MCP retries its loopback binding after a port conflict clears', 
   assert.ok(address && typeof address !== 'string');
   const directory = await mkdtemp(path.join(os.tmpdir(), 'desktop-char-character-reconnect-'));
   const configFilePath = path.join(directory, 'desktop-char.config.json');
+  const profileDirectory = path.join(directory, 'tts-mcp-profiles');
   t.after(() => rm(directory, { recursive: true, force: true }));
+  await writeTtsProfile(profileDirectory, 'local', {});
   await writeFile(configFilePath, JSON.stringify({
-    ttsMcp: { autoStart: false, activeProfile: 'local', profiles: { local: {} } },
+    ttsMcp: { autoStart: false, profile: 'local' },
     characterMcp: {
       autoStart: true,
       port: address.port,
@@ -193,7 +199,10 @@ test('character MCP retries its loopback binding after a port conflict clears', 
 test('controller automatically applies a saved config file revision', async t => {
   const directory = await mkdtemp(path.join(os.tmpdir(), 'desktop-char-config-watch-'));
   const configFilePath = path.join(directory, 'desktop-char.config.json');
+  const profileDirectory = path.join(directory, 'tts-mcp-profiles');
   t.after(() => rm(directory, { recursive: true, force: true }));
+  await writeTtsProfile(profileDirectory, 'local', {});
+  await writeTtsProfile(profileDirectory, 'external-local', externalTtsProfile({ timeoutMs: 12_345 }));
   const controller = createMcpServicesController({
     configFilePath,
     env: {
@@ -207,13 +216,7 @@ test('controller automatically applies a saved config file revision', async t =>
   await writeFile(configFilePath, JSON.stringify({
     ttsMcp: {
       autoStart: false,
-      activeProfile: 'external-local',
-      profiles: {
-        'external-local': {
-          lifecycle: { type: 'external' },
-          connection: { timeoutMs: 12_345 },
-        },
-      },
+      profile: 'external-local',
     },
     characterMcp: { autoStart: false, path: '/watched-mcp' },
   }), 'utf8');
@@ -234,31 +237,52 @@ async function waitFor(predicate, timeoutMs = 4_000) {
 function managedLocalTtsConfig(port, options = {}) {
   return {
     autoStart: options.autoStart ?? true,
-    activeProfile: 'local',
-    profiles: {
-      local: {
-        lifecycle: {
-          type: 'managed',
-          start: {
-            executable: process.execPath,
-            args: [localTtsServer],
-            cwd: repositoryRoot,
-            env: {
-              DESKTOP_CHAR_TTS_LOCAL_MCP_HOST: '127.0.0.1',
-              DESKTOP_CHAR_TTS_LOCAL_MCP_PORT: String(port),
-              DESKTOP_CHAR_TTS_LOCAL_DELAY_MS: String(options.delayMs ?? 1),
-              DESKTOP_CHAR_TTS_LOCAL_RATE: String(options.rate ?? 1),
-            },
-          },
-          startupTimeoutMs: 5_000,
-          shutdownTimeoutMs: 2_000,
-          healthIntervalMs: 100,
-        },
-        connection: { url: `http://127.0.0.1:${port}/mcp`, timeoutMs: 1_000 },
-        ...(options.reconnect ? { reconnect: options.reconnect } : {}),
-      },
-    },
+    profile: 'local',
   };
+}
+
+function managedLocalTtsProfile(port, options = {}) {
+  return {
+    lifecycle: {
+      type: 'managed',
+      start: {
+        executable: process.execPath,
+        args: [localTtsServer],
+        cwd: repositoryRoot,
+        env: {
+          DESKTOP_CHAR_TTS_LOCAL_MCP_HOST: '127.0.0.1',
+          DESKTOP_CHAR_TTS_LOCAL_MCP_PORT: String(port),
+          DESKTOP_CHAR_TTS_LOCAL_DELAY_MS: String(options.delayMs ?? 1),
+          DESKTOP_CHAR_TTS_LOCAL_RATE: String(options.rate ?? 1),
+        },
+      },
+      startupTimeoutMs: 5_000,
+      shutdownTimeoutMs: 2_000,
+      healthIntervalMs: 100,
+    },
+    connection: { url: `http://127.0.0.1:${port}/mcp`, timeoutMs: 1_000 },
+    ...(options.reconnect ? { reconnect: options.reconnect } : {}),
+  };
+}
+
+function externalTtsProfile(options = {}) {
+  return {
+    lifecycle: { type: 'external' },
+    ...(options.url || options.timeoutMs ? { connection: {
+      ...(options.url ? { url: options.url } : {}),
+      ...(options.timeoutMs ? { timeoutMs: options.timeoutMs } : {}),
+    } } : {}),
+    ...(options.reconnect ? { reconnect: options.reconnect } : {}),
+  };
+}
+
+async function writeTtsProfile(directory, name, profile) {
+  await fsMkdir(directory, { recursive: true });
+  await writeFile(path.join(directory, `${name}.json`), JSON.stringify({
+    $schema: '../../apps/desktop/public/schemas/desktop-char.tts-mcp-profile.schema.json',
+    version: 1,
+    ...profile,
+  }), 'utf8');
 }
 
 async function reservePort() {

@@ -48,7 +48,7 @@ JSON 中明确提供的字段 > 进程环境变量 > 内置默认值
 
 `npm run desktop` 是唯一桌面启动入口；原 `desktop:mcp` 包装脚本已经移除。`DESKTOP_CHAR_CONFIG_PATH` 可快速切换整份设备配置，少量环境变量只保留为启动引导和迁移期 fallback。配置文件不存在时使用内置的 managed Local TTS 参考 Provider。
 
-完整样例和 JSON Schema 见 [`desktop-char.config.example.json`](../desktop-char.config.example.json)。`ttsMcp` 当前固定为多 Profile 结构，顶层示例如下：
+完整样例和 JSON Schema 见 [`desktop-char.config.example.json`](../desktop-char.config.example.json)。`ttsMcp` 当前只选择 profile 名，具体 TTS Profile 从独立文件加载。顶层示例如下：
 
 ```json
 {
@@ -64,28 +64,7 @@ JSON 中明确提供的字段 > 进程环境变量 > 内置默认值
   "character": { "profile": "models/Mao/DesktopChar.character.json" },
   "ttsMcp": {
     "autoStart": true,
-    "activeProfile": "local",
-    "profiles": {
-      "local": {
-        "lifecycle": {
-          "type": "managed",
-          "start": {
-            "executable": "node",
-            "args": ["local-tts-mcp/server.mjs"],
-            "cwd": ".",
-            "env": { "DESKTOP_CHAR_TTS_LOCAL_MCP_PORT": "8766" }
-          }
-        },
-        "connection": {
-          "transport": "streamable-http",
-          "url": "http://127.0.0.1:8766/mcp",
-          "timeoutMs": 30000
-        },
-        "contract": { "profile": "desktop-char.tts.streaming", "version": 1 },
-        "synthesis": { "format": "pcm_s16le", "voice": "jrpg-blip" },
-        "reconnect": { "initialDelayMs": 500, "maximumDelayMs": 10000 }
-      }
-    }
+    "profile": "local"
   },
   "characterMcp": {
     "autoStart": true,
@@ -96,6 +75,8 @@ JSON 中明确提供的字段 > 进程环境变量 > 内置默认值
   }
 }
 ```
+
+对应的 TTS Profile 文件放在 `tts-mcp-profiles/<name>.json`。例如 `tts-mcp-profiles/local.json` 可承载 Local TTS 的 managed 启动参数；把根配置里的 `ttsMcp.profile` 从 `local` 改成 `qwen`，即可切到 `tts-mcp-profiles/qwen.json`。
 
 `autoStart` 只决定本次应用启动后的初始期望状态。用户在右键菜单做出的启停选择属于当前进程的应用状态，普通配置重载不会被文件中的 `autoStart` 反向覆盖。
 

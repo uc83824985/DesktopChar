@@ -119,10 +119,7 @@ Windows 通常对应 `%APPDATA%/DesktopChar/config.json`。程序只通过 Elect
     "profile": "models/Mao/DesktopChar.character.json"
   },
   "ttsMcp": {
-    "activeProfile": "local",
-    "profiles": {
-      "local": {}
-    }
+    "profile": "local"
   },
   "characterMcp": {}
 }
@@ -251,7 +248,7 @@ CharacterProfileController -- asset revision ---+--> validate complete candidate
 - `DESKTOP_CHAR_TTS_SAMPLE_RATE_HZ`
 - `DESKTOP_CHAR_TTS_CHANNELS`
 
-当 Electron 托管该参考 Provider 时，这些值通过当前活动 profile 的 `ttsMcp.profiles.<name>.lifecycle.start.env` 传给独立子进程；MCP Adapter 不读取它们。只有用户在命令行独立运行 `local-tts-mcp` 时才需要在 shell 中设置。若后续为独立服务增加配置文件，应使用它自己的 `local-tts-mcp.config.json`，而不是让服务反向依赖 DesktopChar 的整份配置。
+当 Electron 托管该参考 Provider 时，这些值通过被选中 profile 文件里的 `lifecycle.start.env` 传给独立子进程；MCP Adapter 不读取它们。只有用户在命令行独立运行 `local-tts-mcp` 时才需要在 shell 中设置。若后续为独立服务增加配置文件，应使用它自己的 `local-tts-mcp.config.json`，而不是让服务反向依赖 DesktopChar 的整份配置。
 
 ## 迁移期环境变量兼容
 

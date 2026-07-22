@@ -4,6 +4,8 @@ import path from 'node:path';
 
 const AUDIO_FORMATS = new Set(['wav', 'mp3', 'ogg', 'opus', 'pcm_s16le', 'pcm_f32le']);
 const LOOPBACK_HOSTS = new Set(['127.0.0.1', 'localhost', '::1']);
+const TTS_PROFILE_DIRECTORY = 'tts-mcp-profiles';
+const DEFAULT_TTS_PROFILE_NAME = 'local';
 
 export function resolveDesktopConfigPath(env = process.env, cwd = process.cwd(), defaultFilePath) {
   const configuredPath = env.DESKTOP_CHAR_CONFIG_PATH ?? env.DESKTOP_CHAR_MCP_CONFIG_PATH;
@@ -14,6 +16,7 @@ export function resolveDesktopConfigPath(env = process.env, cwd = process.cwd(),
 
 export async function loadDesktopConfig(options = {}) {
   const env = options.env ?? process.env;
+  const cwd = options.cwd ?? process.cwd();
   const filePath = options.filePath ?? resolveDesktopConfigPath(env, options.cwd, options.defaultFilePath);
   let fileConfig = {};
   let exists = true;
@@ -28,14 +31,22 @@ export async function loadDesktopConfig(options = {}) {
     else if (error instanceof SyntaxError) throw new TypeError(`Desktop config is not valid JSON: ${error.message}`, { cause: error });
     else throw error;
   }
+  const ttsProfileName = requestedTtsProfileName(optionalRecord(fileConfig.ttsMcp, 'ttsMcp'));
+  const ttsProfile = await loadTtsProfileConfig(ttsProfileName, { configFilePath: filePath, cwd });
   return {
     filePath,
     exists,
-    config: normalizeDesktopConfig(fileConfig, env),
+    config: normalizeDesktopConfig(fileConfig, env, {
+      ttsProfileName: ttsProfileName,
+      ttsProfileConfig: ttsProfile.config,
+      ttsProfilePath: ttsProfile.filePath,
+      cwd,
+      configFilePath: filePath,
+    }),
   };
 }
 
-export function normalizeDesktopConfig(fileConfig = {}, env = {}) {
+export function normalizeDesktopConfig(fileConfig = {}, env = {}, options = {}) {
   if (!isRecord(fileConfig)) throw new TypeError('Desktop config root must be an object');
   assertKnownKeys(fileConfig, ['$schema', 'version', 'interaction', 'window', 'agentHttp', 'character', 'ttsMcp', 'characterMcp'], 'Desktop config');
   if (fileConfig.$schema !== undefined) text(fileConfig.$schema, '$schema');
@@ -54,8 +65,9 @@ export function normalizeDesktopConfig(fileConfig = {}, env = {}) {
   const characterProfile = optionalRecord(fileConfig.character, 'character');
   assertKnownKeys(characterProfile, ['profile'], 'character');
   const tts = optionalRecord(fileConfig.ttsMcp, 'ttsMcp');
-  assertKnownKeys(tts, ['autoStart', 'activeProfile', 'profiles'], 'ttsMcp');
-  const { activeProfileName, profileConfig: selectedTtsProfile } = resolveSelectedTtsProfile(tts);
+  assertKnownKeys(tts, ['autoStart', 'profile'], 'ttsMcp');
+  const selectedTtsProfileName = options.ttsProfileName ?? requestedTtsProfileName(tts);
+  const selectedTtsProfile = normalizeSelectedTtsProfile(options.ttsProfileConfig ?? defaultLocalTtsProfile(), selectedTtsProfileName);
   const lifecycle = optionalRecord(selectedTtsProfile.lifecycle, 'ttsMcp.lifecycle');
   assertKnownKeys(lifecycle, ['type', 'start', 'startupTimeoutMs', 'shutdownTimeoutMs', 'healthIntervalMs', 'restartOnFailure'], 'ttsMcp.lifecycle');
   const launch = optionalRecord(lifecycle.start, 'ttsMcp.lifecycle.start');
@@ -135,7 +147,8 @@ export function normalizeDesktopConfig(fileConfig = {}, env = {}) {
     },
     tts: {
       autoStart: boolean(tts.autoStart ?? env.DESKTOP_CHAR_TTS_MCP_ENABLED, true, 'ttsMcp.autoStart'),
-      ...(activeProfileName ? { activeProfile: activeProfileName } : {}),
+      profile: selectedTtsProfileName,
+      ...(options.ttsProfilePath ? { profilePath: options.ttsProfilePath } : {}),
       lifecycle: {
         type: lifecycleType,
         ...(lifecycleType === 'managed' ? {
@@ -206,6 +219,31 @@ export const loadMcpServicesConfig = loadDesktopConfig;
 export const normalizeMcpServicesConfig = normalizeDesktopConfig;
 export const watchMcpServicesConfig = watchDesktopConfig;
 
+export async function loadTtsProfileConfig(profileName, options = {}) {
+  const candidates = ttsProfileCandidates(profileName, options);
+  let lastError;
+  for (const filePath of candidates) {
+    try {
+      const text = await readFile(filePath, 'utf8');
+      const parsed = JSON.parse(text);
+      if (!isRecord(parsed)) throw new TypeError(`TTS profile ${profileName} must be an object`);
+      return { filePath, config: parsed };
+    }
+    catch (error) {
+      if (error && typeof error === 'object' && error.code === 'ENOENT') {
+        lastError = error;
+        continue;
+      }
+      if (error instanceof SyntaxError) {
+        throw new TypeError(`TTS profile ${profileName} is not valid JSON: ${error.message}`, { cause: error });
+      }
+      throw error;
+    }
+  }
+  const searched = candidates.map(candidate => candidate.replaceAll('\\', '/')).join(', ');
+  throw new Error(`TTS profile ${profileName} was not found in: ${searched}`, { cause: lastError });
+}
+
 function reconnectConfig(value, label) {
   assertKnownKeys(value, ['initialDelayMs', 'maximumDelayMs'], label);
   const initialDelayMs = positive(value.initialDelayMs, 500, `${label}.initialDelayMs`);
@@ -214,31 +252,37 @@ function reconnectConfig(value, label) {
   return { initialDelayMs, maximumDelayMs };
 }
 
-function resolveSelectedTtsProfile(tts) {
-  const profiles = optionalRecord(tts.profiles, 'ttsMcp.profiles');
-  for (const [name, profile] of Object.entries(profiles)) {
-    if (!name.trim()) throw new TypeError('ttsMcp.profiles contains an empty profile name');
-    const candidate = optionalRecord(profile, `ttsMcp.profiles.${name}`);
-    assertKnownKeys(candidate, ['lifecycle', 'connection', 'contract', 'synthesis', 'reconnect'], `ttsMcp.profiles.${name}`);
-  }
-  const profileNames = Object.keys(profiles);
-  if (!profileNames.length) {
-    if (Object.keys(tts).length > 0) {
-      throw new TypeError('ttsMcp must use activeProfile + profiles; the single-profile shape is no longer supported');
-    }
-    if (tts.activeProfile !== undefined) {
-      throw new TypeError('ttsMcp.profiles is required when ttsMcp.activeProfile is provided');
-    }
-    return { activeProfileName: 'local', profileConfig: {} };
-  }
-  if (tts.activeProfile === undefined) throw new TypeError('ttsMcp.activeProfile is required when ttsMcp.profiles is configured');
-  const activeProfileName = text(tts.activeProfile, 'ttsMcp.activeProfile');
-  if (!Object.hasOwn(profiles, activeProfileName)) {
-    throw new TypeError(`ttsMcp.activeProfile selects an unknown profile: ${activeProfileName}`);
-  }
+function requestedTtsProfileName(tts) {
+  if (Object.keys(tts).length === 0) return DEFAULT_TTS_PROFILE_NAME;
+  return text(tts.profile ?? DEFAULT_TTS_PROFILE_NAME, 'ttsMcp.profile');
+}
+
+function normalizeSelectedTtsProfile(value, profileName) {
+  const profile = optionalRecord(value, `tts profile ${profileName}`);
+  assertKnownKeys(profile, ['$schema', 'version', 'lifecycle', 'connection', 'contract', 'synthesis', 'reconnect'], `tts profile ${profileName}`);
+  if (profile.$schema !== undefined) text(profile.$schema, `tts profile ${profileName}.$schema`);
+  const version = profile.version ?? 1;
+  if (version !== 1) throw new TypeError(`tts profile ${profileName} version must be 1`);
+  return profile;
+}
+
+function ttsProfileCandidates(profileName, options = {}) {
+  const configFilePath = options.configFilePath ? path.resolve(options.configFilePath) : undefined;
+  const cwd = path.resolve(options.cwd ?? process.cwd());
+  const filenames = [`${profileName}.json`];
+  const directories = [];
+  if (configFilePath) directories.push(path.resolve(path.dirname(configFilePath), TTS_PROFILE_DIRECTORY));
+  directories.push(path.resolve(cwd, TTS_PROFILE_DIRECTORY));
+  return [...new Set(directories)].flatMap(directory => filenames.map(filename => path.join(directory, filename)));
+}
+
+function defaultLocalTtsProfile() {
   return {
-    activeProfileName,
-    profileConfig: optionalRecord(profiles[activeProfileName], `ttsMcp.profiles.${activeProfileName}`),
+    lifecycle: { type: 'managed' },
+    connection: { transport: 'streamable-http' },
+    contract: { profile: 'desktop-char.tts.streaming', version: 1 },
+    synthesis: { format: 'pcm_s16le', voice: 'jrpg-blip', rate: 1 },
+    reconnect: { initialDelayMs: 500, maximumDelayMs: 10_000 },
   };
 }
 

@@ -91,6 +91,8 @@ let agentServer;
 let agentServerSignature = '';
 let agentServerOperation = Promise.resolve();
 let desktopStarted = false;
+let shutdownCompleted = false;
+let shutdownPromise;
 let agentRuntimeState = { ready: false, snapshot: null };
 let pointerPresentation = { passthrough: true, cursor: 'default' };
 let pointerPresentationApplied = false;
@@ -155,15 +157,14 @@ else {
 }
 
 app.on('window-all-closed', () => app.quit());
-app.on('before-quit', () => {
-  if (cursorTimer) clearInterval(cursorTimer);
-  if (cursorRefreshTimer) clearTimeout(cursorRefreshTimer);
-  cancelAvatarPresentation();
-  desktopTray?.destroy();
-  desktopTray = null;
-  void agentServer?.close().catch(() => {});
-  void mcpServices.close().catch(() => {});
+app.on('before-quit', event => {
+  if (shutdownCompleted) return;
+  event.preventDefault();
+  void requestShutdown('before-quit');
 });
+
+process.once('SIGINT', () => { void requestShutdown('SIGINT'); });
+process.once('SIGTERM', () => { void requestShutdown('SIGTERM'); });
 
 function registerRendererProtocol() {
   protocol.handle('desktop-char', request => {
@@ -177,6 +178,39 @@ function registerRendererProtocol() {
       ? net.fetch(pathToFileURL(filePath).toString())
       : new Response('Invalid path', { status: 400 });
   });
+}
+
+async function requestShutdown(reason) {
+  if (shutdownCompleted) return;
+  if (!shutdownPromise) {
+    shutdownPromise = (async () => {
+      safeLog('[desktop-char] shutdown start', { reason });
+      if (cursorTimer) clearInterval(cursorTimer);
+      cursorTimer = undefined;
+      if (cursorRefreshTimer) clearTimeout(cursorRefreshTimer);
+      cursorRefreshTimer = undefined;
+      cancelAvatarPresentation();
+      desktopTray?.destroy();
+      desktopTray = null;
+      await Promise.allSettled([
+        agentServer?.close().catch(() => {}),
+        mcpServices.close().catch(() => {}),
+      ]);
+      shutdownCompleted = true;
+      safeLog('[desktop-char] shutdown complete', { reason });
+    })();
+  }
+  await shutdownPromise.catch(error => {
+    safeError('[desktop-char] shutdown failed', error);
+  });
+  if (!app.isReady()) {
+    process.exit(0);
+    return;
+  }
+  if (!app.isQuitting) {
+    app.isQuitting = true;
+    app.quit();
+  }
 }
 
 function createAvatarWindow() {

@@ -82,7 +82,7 @@ export interface AgentRuntimeState {
 
 export interface DesktopTtsConfig {
   lifecycle: 'external' | 'managed';
-  activeProfile?: string;
+  profile?: string;
   provider: string | null;
   mcpUrl: string;
   timeoutMs: number;
