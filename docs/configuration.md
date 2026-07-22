@@ -180,6 +180,8 @@ CharacterProfileController -- asset revision ---+--> validate complete candidate
 - Avatar Runtime 通过 `runtime.effect-config-revised` 一类事件接收配置，保存当前 effect revision，并按字段的应用策略更新内部 Policy。旧 revision 的异步结果不能覆盖新 revision。
 - 纯参数更新不得重建 Avatar Runtime、清空计划、重置 gaze 开关、打断音频、重新创建窗口或使当前 Scene generation 失效。
 
+角色右键菜单将手动入口放在独立的“应用配置 · rN”分区并命名为“重新加载配置”。它与自动监听调用同一加载事务，只提供立即复核、错误反馈和监听异常时的恢复路径；“MCP 服务”分区只保留两端启停与连接测试，避免把统一应用配置误表达为 MCP 私有状态。
+
 效果参数按应用边界分级：
 
 | 参数类别 | 示例 | 运行时应用规则 |

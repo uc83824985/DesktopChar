@@ -867,7 +867,7 @@ function registerDevelopmentUi(): void {
       if (!services) return null;
       const runtimeIdle = runtime?.getSnapshot().state === 'idle';
       return {
-        label: `MCP 服务 · 配置 r${services.config.revision}`,
+        label: 'MCP 服务',
         items: [
           {
             type: 'checkbox', id: 'character-mcp-enabled',
@@ -891,15 +891,28 @@ function registerDevelopmentUi(): void {
               && !mcpTransitioning(services.tts),
             invoke: testAllMcpServices,
           },
-          {
-            type: 'action', id: 'mcp-config-reload',
-            label: '重新加载 MCP',
-            enabled: runtimeIdle
-              && !mcpTransitioning(services.character)
-              && !mcpTransitioning(services.tts),
-            invoke: reloadMcpServices,
-          },
         ],
+      };
+    },
+  });
+  if (desktopShell) immediateUi.register({
+    id: 'desktop.application-config',
+    target: '*',
+    order: 950,
+    build: () => {
+      const services = mcpServicesState;
+      if (!services) return null;
+      const status = services.config.status === 'error'
+        ? `r${services.config.revision} · 错误`
+        : `r${services.config.revision}`;
+      return {
+        label: `应用配置 · ${status}`,
+        items: [{
+          type: 'action', id: 'desktop-config-reload',
+          label: '重新加载配置',
+          enabled: !mcpTransitioning(services.character) && !mcpTransitioning(services.tts),
+          invoke: reloadDesktopConfig,
+        }],
       };
     },
   });
@@ -935,17 +948,17 @@ async function testAllMcpServices(): Promise<void> {
   });
 }
 
-async function reloadMcpServices(): Promise<void> {
+async function reloadDesktopConfig(): Promise<void> {
   if (!desktopShell) return;
   const previousRevision = mcpServicesState?.config.revision;
   try {
-    const next = await desktopShell.reloadMcpServices();
+    const next = await desktopShell.reloadDesktopConfig();
     applyMcpServicesState(next);
     const revisionStatus = previousRevision === undefined || next.config.revision !== previousRevision
       ? '已更新'
       : '无变化';
-    showMcpNotification(
-      `MCP 重新加载完成：配置 r${next.config.revision}（${revisionStatus}）。`
+    showConfigNotification(
+      `配置重新加载完成：r${next.config.revision}（${revisionStatus}）。`
       + `${formatMcpServiceState('角色接入 MCP', next.character)}。`
       + `${formatMcpServiceState('语音合成 MCP', next.tts)}。`,
     );
@@ -964,7 +977,7 @@ async function reloadMcpServices(): Promise<void> {
       ? `。现有${formatMcpServiceState('角色接入 MCP', current.character)}`
         + `。${formatMcpServiceState('语音合成 MCP', current.tts)}`
       : '';
-    showMcpNotification(`MCP 重新加载失败：${details}${serviceStatus}。`);
+    showConfigNotification(`配置重新加载失败：${details}${serviceStatus}。`);
   }
 }
 
@@ -999,7 +1012,7 @@ function summarizeMcpDetails(details: unknown): string {
   return text.length > 60 ? `${text.slice(0, 57)}...` : text;
 }
 
-function showMcpNotification(text: string): void {
+function showConfigNotification(text: string): void {
   if (!runtime || runtime.getSnapshot().state !== 'idle') return;
   runtime.dispatch({
     type: 'presentation.chat-bubble-requested',

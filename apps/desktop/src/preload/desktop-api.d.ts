@@ -59,7 +59,7 @@ export interface DesktopCharApi {
   callTtsMcpTool(name: string, args: Record<string, unknown>, options?: { timeoutMs?: number }): Promise<McpCallToolResult>;
   getMcpServicesState(): Promise<McpServicesState>;
   setMcpServiceEnabled(service: McpServiceId, enabled: boolean): Promise<McpServicesState>;
-  reloadMcpServices(): Promise<McpServicesState>;
+  reloadDesktopConfig(): Promise<McpServicesState>;
   testMcpService(service: McpServiceId): Promise<McpServiceTest>;
   testAllMcpServices(): Promise<Record<McpServiceId, McpServiceTest>>;
   onMcpServicesState(callback: (state: McpServicesState) => void): () => void;

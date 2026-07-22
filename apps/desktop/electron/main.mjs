@@ -44,7 +44,7 @@ const channels = {
   mcpCallTool: 'tts-mcp:call-tool',
   mcpServicesGet: 'mcp-services:get-state',
   mcpServicesSetEnabled: 'mcp-services:set-enabled',
-  mcpServicesReload: 'mcp-services:reload',
+  desktopConfigReload: 'desktop-config:reload',
   mcpServicesTest: 'mcp-services:test',
   mcpServicesTestAll: 'mcp-services:test-all',
   mcpServicesState: 'mcp-services:state',
@@ -435,7 +435,7 @@ function registerIpc() {
     requireAvatarSender(event);
     return mcpServices.setEnabled(service, enabled);
   });
-  ipcMain.handle(channels.mcpServicesReload, event => {
+  ipcMain.handle(channels.desktopConfigReload, event => {
     requireAvatarSender(event);
     return mcpServices.reload('ui');
   });

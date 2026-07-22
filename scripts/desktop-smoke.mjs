@@ -89,16 +89,19 @@ try {
     headings: [...document.querySelectorAll('.scene-context-menu__heading')].map(node => node.textContent),
     gazeChecked: document.querySelector('[data-item-id="gaze-follow"]')?.getAttribute('aria-checked'),
     bubbleItems: [...document.querySelectorAll('[data-item-id="complete"], [data-item-id="stream"], [data-item-id="karaoke"]')].map(node => node.textContent?.trim()),
-    mcpItems: [...document.querySelectorAll('[data-item-id="character-mcp-enabled"], [data-item-id="tts-mcp-enabled"], [data-item-id="mcp-connection-test"], [data-item-id="mcp-config-reload"]')].map(node => node.getAttribute('data-item-id')),
+    mcpItems: [...document.querySelectorAll('[data-item-id="character-mcp-enabled"], [data-item-id="tts-mcp-enabled"], [data-item-id="mcp-connection-test"]')].map(node => node.getAttribute('data-item-id')),
+    configReload: document.querySelector('[data-item-id="desktop-config-reload"]')?.textContent?.trim(),
     hideAvatar: document.querySelector('[data-item-id="hide-avatar"]')?.textContent?.trim(),
   }));
   if (menu.gazeChecked !== 'true' || menu.bubbleItems.length !== 3
     || JSON.stringify(menu.mcpItems) !== JSON.stringify([
-      'character-mcp-enabled', 'tts-mcp-enabled', 'mcp-connection-test', 'mcp-config-reload',
+      'character-mcp-enabled', 'tts-mcp-enabled', 'mcp-connection-test',
     ])
+    || menu.configReload !== '重新加载配置'
     || menu.hideAvatar !== '隐藏角色'
     || !menu.headings.includes('角色设置') || !menu.headings.includes('聊天气泡测试')
-    || !menu.headings.some(label => label?.startsWith('MCP 服务 · 配置 r'))
+    || !menu.headings.includes('MCP 服务')
+    || !menu.headings.some(label => label?.startsWith('应用配置 · r'))
     || !menu.headings.includes('桌面窗口')) {
     throw new Error(`Immediate context-menu registrations are incomplete: ${JSON.stringify(menu)}`);
   }
@@ -148,15 +151,15 @@ try {
   await page.locator('[data-item-id="tts-mcp-enabled"]').click();
   await page.locator('body[data-context-menu="open"][data-tts-mcp-service="ready"] [data-item-id="tts-mcp-enabled"][aria-checked="true"]').waitFor({ timeout: 5_000 });
   assertContextMenuOrigin(await contextMenuOrigin(page), stableMenuOrigin, 'enabling speech-synthesis MCP');
-  await page.locator('[data-item-id="mcp-config-reload"]').click();
+  await page.locator('[data-item-id="desktop-config-reload"]').click();
   await page.locator('body[data-context-menu="closed"][data-speech-bubble="complete"]').waitFor({ timeout: 5_000 });
   const reloadBubble = await page.locator('#speech-bubble').textContent();
-  if (!reloadBubble?.includes('MCP 重新加载完成')
-    || !/配置 r\d+（无变化）/.test(reloadBubble)
+  if (!reloadBubble?.includes('配置重新加载完成')
+    || !/r\d+（无变化）/.test(reloadBubble)
     || !reloadBubble.includes('角色接入 MCP：已连接')
     || !reloadBubble.includes('语音合成 MCP：已连接')
     || !reloadBubble.includes('角色接入 MCP：已连接。\n语音合成 MCP：已连接')) {
-    throw new Error(`MCP reload result did not use the character chat bubble: ${reloadBubble}`);
+    throw new Error(`Config reload result did not use the character chat bubble: ${reloadBubble}`);
   }
   await page.evaluate(() => document.querySelector('#avatar')?.dispatchEvent(
     new KeyboardEvent('keydown', { key: 'ContextMenu', bubbles: true }),
