@@ -24,6 +24,8 @@
 
 Electron 壳层在领域链路之外：main 独占原生窗口位置、包围盒、置顶和鼠标穿透；preload 只提供受控 IPC；renderer 将点击转换为 Runtime Event，将拖动转换为窗口命令。透明悬浮窗口的交互取舍见 [透明桌面悬浮壳设计](desktop-shell.md)。
 
+配置同样按所有权拆分：用户偏好与服务连接进入应用 JSON，模型入口、能力白名单、GazeProfile 和 LipSyncProfile 进入随资产分发的 CharacterProfile JSON，窗口位置等易变值进入程序自动维护的状态文件。main 独占配置 revision、校验、文件监听和原子写入，Renderer 只能发送白名单 patch intent。所有效果参数必须有带 revision 的运行时重载路径：帧级参数由 Runtime 平滑切换，任务默认值从下一任务生效，模型等结构变化在 idle 边界原子替换；完整分级及保留的环境变量见 [配置所有权与 JSON 重构方案](configuration.md)。
+
 应用接入层同时包含语音合成 MCP Client（技术标识 TTS）与角色接入 MCP Server（技术标识 `characterMcp`）。Electron main 的服务控制器独占两端连接、配置 revision、热重载与重连状态；角色接入 MCP 和兼容 Agent HTTP 最终只向 renderer 发送相同的白名单 `PerformancePlan / interrupt` 命令。完整生命周期与工具见 [MCP 服务生命周期与角色接入接口](mcp-services.md)。
 
 ## 运行链路

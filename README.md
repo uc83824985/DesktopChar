@@ -14,7 +14,7 @@
 - `packages/transport`、`packages/config`：传输和配置边界。
 - `local-tts-mcp`：可独立运行的真实 Streamable HTTP MCP/HTTP PCM 参考服务；默认固定音高 `jrpg-blip` 按字生成提示音、标点停顿及 sample-aligned 文本 cue，并保留确定性变化音调 `jrpg-blip-varied`。
 
-详细设计见 [架构文档](docs/architecture.md)、[Avatar Runtime](docs/avatar-runtime.md) 和 [Scene Engine 抽象](docs/scene-engine.md)。
+详细设计见 [架构文档](docs/architecture.md)、[Avatar Runtime](docs/avatar-runtime.md)、[Scene Engine 抽象](docs/scene-engine.md) 和 [配置所有权与 JSON 重构方案](docs/configuration.md)。
 
 角色级视线校准及资源修改边界见 [GazeProfile 工作流](docs/gaze-calibration.md)；透明区穿透、角色点击/拖动和窗口包围盒同步见 [透明桌面悬浮壳](docs/desktop-shell.md)。
 动态场景 UI 使用与 Scene Frame 同 revision 的框架无关 Surface，参考项目取舍和引擎/应用边界见 [桌面 UI 引擎层设计](docs/desktop-ui-engine.md)。
@@ -35,6 +35,8 @@ npm start
 ```
 
 `npm start` 会同时启动根目录的本地语音合成 MCP（TTS）服务和网页前台；`npm run desktop` 则由 Electron 自动在随机 loopback 端口启动同一服务实现。
+
+桌面端用户参数统一从 JSON 读取。开发期可执行 `Copy-Item desktop-char.config.example.json desktop-char.config.json` 后修改；模型入口、GazeProfile 和 LipSyncProfile 位于模型目录旁的 `DesktopChar.character.json`。字段、热重载范围和仍保留为环境变量的启动项见 [配置所有权与 JSON 重构方案](docs/configuration.md)。
 
 浏览器会自动打开 `http://127.0.0.1:5173`。看到“Runtime 已就绪”后，可测试本地语音合成 MCP、动作事件和鼠标视线跟随。UI 只向 Runtime 提交事件，模型参数由 Runtime Effects 驱动。
 

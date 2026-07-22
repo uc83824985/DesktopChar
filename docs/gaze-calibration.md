@@ -55,7 +55,7 @@ Runtime 只持有激活状态和标准化视线目标，映射结果仍通过 Ga
 
 离线读取 `Mao.moc3` 后，`ParamAngleY` 和 `ParamEyeBallY` 的参数范围及关键点均为对称值；同幅输入下眼球网格变化基本对称，但头部向下的网格变化约为向上的 1.52 倍。因此弱抬头主要来自资源已制作形变不对称，不是 Runtime 方向映射错误。
 
-当前 `MAO_CHARACTER_CONFIG` 使用以下补偿：
+当前 `models/Mao/DesktopChar.character.json` 的 `gazeProfile` 使用以下补偿：
 
 - 向下头部端点限制为 `-20`，向上保留 `30`；
 - 向上的 head/eye 曲线稍提前响应；

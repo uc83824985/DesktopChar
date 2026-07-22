@@ -99,7 +99,7 @@ DESKTOP_CHAR_TTS_CHANNELS=1
 
 音色峰值为旧版的 70%（`0.224`）。默认 `jrpg-blip` 的所有字素固定使用 560 Hz 基频；可选 `jrpg-blip-varied` 保留旧版逐字变化效果，从 500、560、620、680 Hz 中按字素稳定映射。同一段文本每次得到相同音高序列，因此可重复测试，它不是运行时随机数。两种 voice 的字速、音量、cue 与取消语义完全相同。波形由正弦基频和少量二、三次谐波构成，并使用 6 ms 淡入与 14 ms 淡出，不混入有采样跳变的方波成分。
 
-桌面角色默认通过 Runtime 的角色级 `LipSyncProfile.gain=2.5` 放大口型响应：`0.224` 的真实 PCM 电平约映射为 `0.56` 的嘴部开合，但扬声器音量不变。可用 `DESKTOP_CHAR_LIP_SYNC_GAIN` 覆盖桌面装配值；该配置属于客户端表现层，不属于 MCP 合成参数。
+桌面角色通过资产侧 `DesktopChar.character.json` 的 `LipSyncProfile.gain=2.5` 放大口型响应：`0.224` 的真实 PCM 电平约映射为 `0.56` 的嘴部开合，但扬声器音量不变。该配置属于客户端角色资产校准，不属于 MCP 合成参数。
 
 `DESKTOP_CHAR_TTS_LOCAL_RATE` 配置服务端默认语速，范围为 `0.5..2.0`，`1` 是标准速度，值越大越快。MCP 单次请求中的 `rate` 优先于服务默认值；无论采用哪一层配置，响应中的 `requested_rate`、`effective_rate`、`duration_ms` 和 cue 时间都会反映最终速率。示例：
 

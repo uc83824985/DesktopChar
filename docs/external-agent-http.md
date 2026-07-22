@@ -285,7 +285,7 @@ HTTP JSON 和 Streamable HTTP MCP 链路均按 UTF-8 传输；官方 MCP Client 
 
 ## 语音合成 MCP 接入上下文
 
-当前应用 case 的 `local_tts_mcp` 选项默认自动启动根目录 [`local-tts-mcp`](../local-tts-mcp/README.md) 真实参考服务，并由 Electron main 通过官方 SDK 建立 Streamable HTTP MCP session；Renderer 只装配 `McpTtsAdapter`，本地与远端共享工具参数、流响应、取消和播放器契约。设置 `DESKTOP_CHAR_TTS_MODE=mcp` 后切换为 `external_tts_mcp`：只会把 session URL 改为外部服务并停止自动启动本地服务。远端不可用时不会静默回退到本地。
+当前应用 case 的 `local_tts_mcp` 选项默认自动启动根目录 [`local-tts-mcp`](../local-tts-mcp/README.md) 真实参考服务，并由 Electron main 通过官方 SDK 建立 Streamable HTTP MCP session；Renderer 只装配 `McpTtsAdapter`，本地与远端共享工具参数、流响应、取消和播放器契约。把 `desktop-char.config.json` 的 `ttsMcp.mode` 设为 `mcp` 后切换为 `external_tts_mcp`：只会把 session URL 改为外部服务并停止自动启动本地服务。远端不可用时不会静默回退到本地。
 
 真实接入边界为：
 
@@ -307,29 +307,42 @@ concrete MCP session transport
 - URI、base64 audio、viseme、amplitude 和可选 `text_cues` 结构归一化；
 - 超时、AbortSignal、MCP tool error 和迟到结果处理。
 
-`local_tts_mcp` 的主要环境配置为：
+`local_tts_mcp` 的桌面应用配置为：
 
-```text
-DESKTOP_CHAR_TTS_MODE=local
-DESKTOP_CHAR_TTS_LOCAL_RATE=1
-DESKTOP_CHAR_TTS_LOCAL_CHAR_MS=232
-DESKTOP_CHAR_TTS_VOICE=<jrpg-blip 或 jrpg-blip-varied>
-DESKTOP_CHAR_LIP_SYNC_GAIN=2.5
+```json
+{
+  "ttsMcp": {
+    "mode": "local",
+    "voice": "jrpg-blip",
+    "local": {
+      "defaultRate": 1,
+      "durationPerCharacterMs": 232
+    }
+  },
+  "character": {
+    "profile": "models/Mao/DesktopChar.character.json"
+  }
+}
 ```
 
-`DESKTOP_CHAR_TTS_LOCAL_RATE` 范围是 `0.5..2.0`；`DESKTOP_CHAR_LIP_SYNC_GAIN` 只改变 Runtime 的嘴型映射，不改变 PCM 播放音量。`external_tts_mcp` 的环境配置为：
+`ttsMcp.local.defaultRate` 范围是 `0.5..2.0`；角色口型增益位于资产 Profile 的 `lipSyncProfile.gain`，不改变 PCM 播放音量。`external_tts_mcp` 的应用配置为：
 
-```text
-DESKTOP_CHAR_TTS_MODE=mcp
-DESKTOP_CHAR_TTS_MCP_URL=http://127.0.0.1:8766/mcp
-DESKTOP_CHAR_TTS_MCP_TOOL=tts_open_stream
-DESKTOP_CHAR_TTS_MCP_CANCEL_TOOL=tts_cancel_synthesis
-DESKTOP_CHAR_TTS_REQUEST_ID_ARGUMENT=request_id
-DESKTOP_CHAR_TTS_TEXT_ARGUMENT=text
-DESKTOP_CHAR_TTS_TIMEOUT_MS=30000
-DESKTOP_CHAR_TTS_FORMAT=pcm_s16le
-DESKTOP_CHAR_TTS_VOICE=<optional>
+```json
+{
+  "ttsMcp": {
+    "mode": "mcp",
+    "url": "http://127.0.0.1:8766/mcp",
+    "toolName": "tts_open_stream",
+    "cancelToolName": "tts_cancel_synthesis",
+    "requestIdArgument": "request_id",
+    "textArgument": "text",
+    "timeoutMs": 30000,
+    "format": "pcm_s16le"
+  }
+}
 ```
+
+旧环境变量在迁移期仍作为 JSON 缺省字段的 fallback；独立启动 `local-tts-mcp` 时使用的进程变量不受桌面应用配置迁移影响。完整边界见 [配置所有权与 JSON 重构方案](configuration.md)。
 
 MCP session 生命周期由 Electron main 管理，renderer 不直接持有子进程或远程认证信息。若 MCP 服务不可用，renderer 不会阻塞窗口显示；TTS 健康检查会标记不可用，实际提交表演时会进入可恢复失败。
 
