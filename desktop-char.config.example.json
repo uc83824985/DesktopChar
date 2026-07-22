@@ -21,23 +21,40 @@
   },
   "ttsMcp": {
     "autoStart": true,
-    "mode": "local",
-    "url": "http://127.0.0.1:8766/mcp",
-    "toolName": "tts_open_stream",
-    "cancelToolName": "tts_cancel_synthesis",
-    "timeoutMs": 30000,
-    "requestIdArgument": "request_id",
-    "textArgument": "text",
-    "format": "pcm_s16le",
-    "local": {
-      "host": "127.0.0.1",
-      "port": 0,
-      "delayMs": 15,
-      "defaultRate": 1,
-      "durationPerCharacterMs": 232,
-      "minimumDurationMs": 500,
-      "sampleRateHz": 24000,
-      "channels": 1
+    "lifecycle": {
+      "type": "managed",
+      "start": {
+        "executable": "node",
+        "args": ["local-tts-mcp/server.mjs"],
+        "cwd": ".",
+        "env": {
+          "DESKTOP_CHAR_TTS_LOCAL_MCP_HOST": "127.0.0.1",
+          "DESKTOP_CHAR_TTS_LOCAL_MCP_PORT": "8766",
+          "DESKTOP_CHAR_TTS_LOCAL_DELAY_MS": "15",
+          "DESKTOP_CHAR_TTS_LOCAL_RATE": "1",
+          "DESKTOP_CHAR_TTS_LOCAL_CHAR_MS": "232",
+          "DESKTOP_CHAR_TTS_LOCAL_MIN_MS": "500",
+          "DESKTOP_CHAR_TTS_SAMPLE_RATE_HZ": "24000",
+          "DESKTOP_CHAR_TTS_CHANNELS": "1"
+        }
+      },
+      "startupTimeoutMs": 120000,
+      "shutdownTimeoutMs": 10000,
+      "healthIntervalMs": 10000,
+      "restartOnFailure": true
+    },
+    "connection": {
+      "transport": "streamable-http",
+      "url": "http://127.0.0.1:8766/mcp",
+      "timeoutMs": 30000
+    },
+    "contract": {
+      "profile": "desktop-char.tts.streaming",
+      "version": 1
+    },
+    "synthesis": {
+      "format": "pcm_s16le",
+      "voice": "jrpg-blip"
     },
     "reconnect": {
       "initialDelayMs": 500,

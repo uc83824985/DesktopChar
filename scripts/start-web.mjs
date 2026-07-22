@@ -1,30 +1,38 @@
 import path from 'node:path';
 import { createServer, preview } from 'vite';
-import { createLocalTtsMcpService } from '../local-tts-mcp/service.mjs';
+import { Client } from '@modelcontextprotocol/sdk/client/index.js';
+import { StreamableHTTPClientTransport } from '@modelcontextprotocol/sdk/client/streamableHttp.js';
+import { startManagedProcess } from '../apps/desktop/electron/managed-process.mjs';
+import { parseTtsStatusResult, validateTtsMcpTools } from '../tts-mcp-profile/contract.mjs';
 
 const previewMode = process.argv.includes('--preview');
 const open = !process.argv.includes('--no-open');
 const port = environmentPort(process.env.DESKTOP_CHAR_TTS_LOCAL_MCP_PORT, 8766);
-const service = createLocalTtsMcpService({
-  host: '127.0.0.1',
-  port,
-  delayMs: environmentNumber(process.env.DESKTOP_CHAR_TTS_LOCAL_DELAY_MS, 15, true),
-  defaultRate: environmentRate(process.env.DESKTOP_CHAR_TTS_LOCAL_RATE, 1),
-  durationPerCharacterMs: environmentNumber(process.env.DESKTOP_CHAR_TTS_LOCAL_CHAR_MS, 232),
-  minimumDurationMs: environmentNumber(process.env.DESKTOP_CHAR_TTS_LOCAL_MIN_MS, 500),
-  sampleRateHz: environmentNumber(process.env.DESKTOP_CHAR_TTS_SAMPLE_RATE_HZ, 24_000),
-  channels: environmentNumber(process.env.DESKTOP_CHAR_TTS_CHANNELS, 1),
+const rootDirectory = process.cwd();
+const mcpUrl = `http://127.0.0.1:${port}/mcp`;
+const ttsProcess = await startManagedProcess({
+  executable: process.execPath,
+  args: [path.join(rootDirectory, 'local-tts-mcp/server.mjs')],
+  cwd: rootDirectory,
+  env: {
+    ...process.env,
+    DESKTOP_CHAR_TTS_LOCAL_MCP_HOST: '127.0.0.1',
+    DESKTOP_CHAR_TTS_LOCAL_MCP_PORT: String(port),
+  },
 });
-const address = await service.listen();
+const ttsConnection = await connectTtsProvider(mcpUrl, ttsProcess, 10_000);
 const configFile = path.resolve('apps/desktop/vite.config.ts');
 const root = path.resolve('apps/desktop');
-const ttsQuery = `?ttsMcpUrl=${encodeURIComponent(address.mcpUrl)}`;
+const ttsQueryParameters = new URLSearchParams({ ttsMcpUrl: mcpUrl });
+const testFixtures = ttsConnection.status.capabilities?.test_fixtures;
+if (Array.isArray(testFixtures) && testFixtures.length) ttsQueryParameters.set('ttsTestFixtures', testFixtures.join(','));
+const ttsQuery = `?${ttsQueryParameters}`;
 const web = previewMode
   ? await preview({ root, configFile, preview: { open: open ? `/${ttsQuery}` : false } })
   : await createServer({ root, configFile, server: { open: open ? `/${ttsQuery}` : false } });
 if (!previewMode) await web.listen();
 web.printUrls();
-console.log(`[local-tts-mcp] ${address.mcpUrl}`);
+console.log(`[local-tts-mcp] ${mcpUrl}`);
 if (!open && port !== 8766) console.log(`[desktop-char] open the web UI with ${ttsQuery}`);
 
 let closing = false;
@@ -32,7 +40,8 @@ async function close() {
   if (closing) return;
   closing = true;
   await web.close();
-  await service.close();
+  await ttsConnection.client.close().catch(() => {});
+  await ttsProcess.close(5_000);
 }
 process.once('SIGINT', () => void close().finally(() => process.exit(0)));
 process.once('SIGTERM', () => void close().finally(() => process.exit(0)));
@@ -46,20 +55,25 @@ function environmentPort(value, fallback) {
   return parsed;
 }
 
-function environmentNumber(value, fallback, allowZero = false) {
-  if (value === undefined || value === '') return fallback;
-  const parsed = Number(value);
-  if (!Number.isFinite(parsed) || (allowZero ? parsed < 0 : parsed <= 0)) {
-    throw new TypeError(`value must be ${allowZero ? 'non-negative' : 'positive'}`);
+async function connectTtsProvider(url, process, timeoutMs) {
+  const deadline = Date.now() + timeoutMs;
+  let lastError;
+  while (Date.now() < deadline) {
+    if (process.exitInfo) throw new Error(`local-tts-mcp exited before readiness: ${process.exitInfo.stderrTail || process.exitInfo.stdoutTail}`);
+    const client = new Client({ name: 'desktop-char-web-supervisor', version: '0.1.0' });
+    try {
+      await client.connect(new StreamableHTTPClientTransport(new URL(url)));
+      const tools = await client.listTools();
+      validateTtsMcpTools(tools.tools);
+      const status = parseTtsStatusResult(await client.callTool({ name: 'tts_status', arguments: {} }));
+      return { client, status };
+    }
+    catch (error) {
+      lastError = error;
+      await client.close().catch(() => {});
+      await new Promise(resolve => setTimeout(resolve, 100));
+    }
   }
-  return parsed;
-}
-
-function environmentRate(value, fallback) {
-  if (value === undefined || value === '') return fallback;
-  const parsed = Number(value);
-  if (!Number.isFinite(parsed) || parsed < 0.5 || parsed > 2) {
-    throw new TypeError('DESKTOP_CHAR_TTS_LOCAL_RATE must be from 0.5 to 2');
-  }
-  return parsed;
+  await process.close(2_000);
+  throw new Error(`local-tts-mcp did not become ready: ${lastError instanceof Error ? lastError.message : String(lastError)}`);
 }

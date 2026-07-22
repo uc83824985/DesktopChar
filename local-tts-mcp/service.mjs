@@ -5,10 +5,16 @@ import { createMcpExpressApp } from '@modelcontextprotocol/sdk/server/express.js
 import { StreamableHTTPServerTransport } from '@modelcontextprotocol/sdk/server/streamableHttp.js';
 import { isInitializeRequest } from '@modelcontextprotocol/sdk/types.js';
 import * as z from 'zod/v4';
+import {
+  TTS_MCP_PROFILE,
+  TTS_MCP_PROFILE_VERSION,
+  TTS_MCP_TOOLS,
+} from '../tts-mcp-profile/contract.mjs';
 import { createJrpgBlipPcmStream, createJrpgBlipPlan, JRPG_BLIP_VOICE, JRPG_BLIP_VOICES } from './jrpg-blip.mjs';
 
-const OPEN_TOOL = 'tts_open_stream';
-const CANCEL_TOOL = 'tts_cancel_synthesis';
+const STATUS_TOOL = TTS_MCP_TOOLS.status;
+const OPEN_TOOL = TTS_MCP_TOOLS.openStream;
+const CANCEL_TOOL = TTS_MCP_TOOLS.cancelSynthesis;
 const KNOWN_TONE_FIXTURE = 'known-tone-v1';
 const KNOWN_TONE_DURATION_MS = 1_600;
 const KNOWN_TONE_PULSES = [
@@ -129,6 +135,47 @@ export function createLocalTtsMcpService(options = {}) {
 
   function createMcpServer() {
     const mcp = new McpServer({ name: 'desktop-char-local-tts', version: '1.0.0' });
+    mcp.registerTool(STATUS_TOOL, {
+      title: 'Get TTS Provider readiness',
+      description: 'Returns the DesktopChar streaming TTS Profile identity and whether this Provider can accept synthesis requests. This call never loads a model or mutates synthesis state.',
+      inputSchema: {},
+      outputSchema: {
+        profile: z.literal(TTS_MCP_PROFILE),
+        profile_version: z.literal(TTS_MCP_PROFILE_VERSION),
+        provider: z.string().min(1),
+        status: z.enum(['ready', 'degraded', 'unavailable']),
+        accepting_requests: z.boolean(),
+        capabilities: z.object({
+          streaming: z.boolean(),
+          cancellation: z.boolean(),
+          formats: z.array(z.string().min(1)),
+          voices: z.array(z.string().min(1)),
+          text_cues: z.boolean(),
+          test_fixtures: z.array(z.string().min(1)),
+        }),
+        message: z.string().optional(),
+      },
+    }, async () => {
+      const status = {
+        profile: TTS_MCP_PROFILE,
+        profile_version: TTS_MCP_PROFILE_VERSION,
+        provider: 'desktop-char-local-tts',
+        status: 'ready',
+        accepting_requests: true,
+        capabilities: {
+          streaming: true,
+          cancellation: true,
+          formats: ['pcm_s16le'],
+          voices: [...JRPG_BLIP_VOICES],
+          text_cues: true,
+          test_fixtures: [KNOWN_TONE_FIXTURE],
+        },
+      };
+      return {
+        content: [{ type: 'text', text: `${status.provider} ready` }],
+        structuredContent: status,
+      };
+    });
     mcp.registerTool(OPEN_TOOL, {
       title: 'Open streaming TTS audio',
       description: 'Creates a single-use HTTP PCM stream. The reference voice emits one JRPG-style blip per grapheme and returns sample-aligned text cues.',

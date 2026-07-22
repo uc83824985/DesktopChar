@@ -7,9 +7,26 @@ import { createLocalTtsMcpService } from './service.mjs';
 test('official MCP client opens a real single-use HTTP PCM stream', async t => {
   const fixture = await startFixture(t, { delayMs: 0, chunkDelayMs: 0 });
   const tools = await fixture.client.listTools();
-  assert.deepEqual(tools.tools.map(tool => tool.name), ['tts_open_stream', 'tts_cancel_synthesis']);
+  assert.deepEqual(tools.tools.map(tool => tool.name), ['tts_status', 'tts_open_stream', 'tts_cancel_synthesis']);
   assert.ok(tools.tools.every(tool => tool.inputSchema && tool.outputSchema));
-  assert.deepEqual(tools.tools[0].inputSchema.properties.voice.enum, ['jrpg-blip', 'jrpg-blip-varied']);
+  assert.deepEqual(tools.tools[1].inputSchema.properties.voice.enum, ['jrpg-blip', 'jrpg-blip-varied']);
+
+  const health = await fixture.client.callTool({ name: 'tts_status', arguments: {} });
+  assert.deepEqual(health.structuredContent, {
+    profile: 'desktop-char.tts.streaming',
+    profile_version: 1,
+    provider: 'desktop-char-local-tts',
+    status: 'ready',
+    accepting_requests: true,
+    capabilities: {
+      streaming: true,
+      cancellation: true,
+      formats: ['pcm_s16le'],
+      voices: ['jrpg-blip', 'jrpg-blip-varied'],
+      text_cues: true,
+      test_fixtures: ['known-tone-v1'],
+    },
+  });
 
   const result = await fixture.client.callTool({
     name: 'tts_open_stream',

@@ -13,19 +13,28 @@ import {
 
 test('MCP config merges environment bootstrap with JSON overrides', () => {
   const config = normalizeMcpServicesConfig({
-    ttsMcp: { mode: 'local', autoStart: false, local: { port: 0, defaultRate: 0.8 }, reconnect: { initialDelayMs: 20, maximumDelayMs: 40 } },
+    ttsMcp: {
+      autoStart: false,
+      lifecycle: {
+        type: 'managed',
+        start: { executable: process.execPath, args: ['provider.mjs'], cwd: '.', env: { PROVIDER_RATE: '0.8' } },
+      },
+      connection: { url: 'http://127.0.0.1:9876/mcp' },
+      synthesis: { voice: 'test-voice' },
+      reconnect: { initialDelayMs: 20, maximumDelayMs: 40 },
+    },
     characterMcp: { autoStart: true, port: 0, path: '/character-mcp' },
   }, {
     DESKTOP_CHAR_TTS_MODE: 'mcp',
     DESKTOP_CHAR_TTS_MCP_URL: 'http://127.0.0.1:9999/from-env',
-    DESKTOP_CHAR_TTS_MCP_TOOL: 'voice.generate',
   });
-  assert.equal(config.tts.mode, 'local');
+  assert.equal(config.tts.lifecycle.type, 'managed');
   assert.equal(config.tts.autoStart, false);
-  assert.equal(config.tts.toolName, 'voice.generate');
-  assert.equal(config.tts.local.defaultRate, 0.8);
+  assert.equal(config.tts.connection.url, 'http://127.0.0.1:9876/mcp');
+  assert.equal(config.tts.lifecycle.start.env.PROVIDER_RATE, '0.8');
+  assert.equal(config.tts.synthesis.voice, 'test-voice');
   assert.equal(config.character.path, '/character-mcp');
-  assert.equal(Object.isFrozen(config.tts.local), true);
+  assert.equal(Object.isFrozen(config.tts.lifecycle.start), true);
 });
 
 test('desktop config owns interaction, window, agent and character profile settings', () => {
@@ -66,8 +75,21 @@ test('desktop config path prefers the new bootstrap variable and validates appli
 test('MCP config rejects unsafe server binding and malformed reconnect policy', () => {
   assert.throws(() => normalizeMcpServicesConfig({ characterMcp: { host: '0.0.0.0' } }), /loopback/);
   assert.throws(() => normalizeMcpServicesConfig({ ttsMcp: { reconnect: { initialDelayMs: 50, maximumDelayMs: 10 } } }), /at least/);
-  assert.throws(() => normalizeMcpServicesConfig({ ttsMcp: { format: 'aac' } }), /unsupported/);
-  assert.throws(() => normalizeMcpServicesConfig({ ttsMcp: { local: { channels: 2 } } }), /must be 1/);
+  assert.throws(() => normalizeMcpServicesConfig({ ttsMcp: { synthesis: { format: 'aac' } } }), /unsupported/);
+  assert.throws(() => normalizeMcpServicesConfig({ ttsMcp: { lifecycle: { type: 'embedded' } } }), /managed or external/);
+  assert.throws(() => normalizeMcpServicesConfig({ ttsMcp: { contract: { version: 2 } } }), /unsupported/);
+  assert.throws(() => normalizeMcpServicesConfig({}, { DESKTOP_CHAR_TTS_MCP_TOOL: 'voice.generate' }), /fixed by the DesktopChar TTS Profile/);
+  assert.throws(() => normalizeMcpServicesConfig({ ttsMcp: { lifecycle: { start: { executable: 'node', env: { INVALID: 1 } } } } }), /must be a string/);
+});
+
+test('managed Local TTS uses one host and port for its process and endpoint defaults', () => {
+  const config = normalizeMcpServicesConfig({}, {
+    DESKTOP_CHAR_TTS_LOCAL_MCP_HOST: '127.0.0.1',
+    DESKTOP_CHAR_TTS_LOCAL_MCP_PORT: '19876',
+  });
+  assert.equal(config.tts.lifecycle.type, 'managed');
+  assert.equal(config.tts.lifecycle.start.env.DESKTOP_CHAR_TTS_LOCAL_MCP_PORT, '19876');
+  assert.equal(config.tts.connection.url, 'http://127.0.0.1:19876/mcp');
 });
 
 test('MCP config loader tolerates a missing file and watcher observes later edits', async t => {

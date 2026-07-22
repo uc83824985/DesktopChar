@@ -6,7 +6,6 @@
   "scripts": {
     "start": "node scripts/start-web.mjs",
     "desktop": "npm run build && electron apps/desktop/electron/main.mjs",
-    "desktop:mcp": "powershell -NoProfile -ExecutionPolicy Bypass -File scripts/desktop-mcp-tts.ps1",
     "dev": "node scripts/start-web.mjs --no-open",
     "build": "vite build apps/desktop --config apps/desktop/vite.config.ts",
     "preview": "npm run build && node scripts/start-web.mjs --preview",

@@ -14,17 +14,7 @@ import {
 
 export interface McpTtsAdapterOptions {
   client: McpClientPort;
-  toolName?: string;
-  cancelToolName?: string;
   timeoutMs?: number;
-  requestIdArgument?: string;
-  textArgument?: string;
-  deliveryArgument?: string;
-  voiceArgument?: string;
-  languageArgument?: string;
-  instructionArgument?: string;
-  rateArgument?: string;
-  formatArgument?: string;
   providerName?: string;
   formats?: TtsAudioFormat[];
   deliveryModes?: Array<'stream' | 'artifact'>;
@@ -36,10 +26,7 @@ export interface McpTtsAdapterOptions {
 
 export class McpTtsAdapter implements TtsAdapter {
   private readonly client: McpClientPort;
-  private readonly toolName: string;
-  private readonly cancelToolName: string | undefined;
   private readonly timeoutMs: number;
-  private readonly argumentNames: Record<'requestId' | 'text' | 'delivery' | 'voice' | 'language' | 'instruction' | 'rate' | 'format', string>;
   private readonly providerName: string;
   private readonly advertisedFormats: TtsAudioFormat[];
   private readonly deliveryModes: Array<'stream' | 'artifact'>;
@@ -50,15 +37,7 @@ export class McpTtsAdapter implements TtsAdapter {
 
   constructor(options: McpTtsAdapterOptions) {
     this.client = options.client;
-    this.toolName = options.toolName ?? 'tts_open_stream';
-    this.cancelToolName = options.cancelToolName ?? 'tts_cancel_synthesis';
     this.timeoutMs = positive(options.timeoutMs ?? 30_000, 'timeoutMs');
-    this.argumentNames = {
-      requestId: options.requestIdArgument ?? 'request_id', text: options.textArgument ?? 'text',
-      delivery: options.deliveryArgument ?? 'delivery', voice: options.voiceArgument ?? 'voice',
-      language: options.languageArgument ?? 'language', instruction: options.instructionArgument ?? 'instruction',
-      rate: options.rateArgument ?? 'rate', format: options.formatArgument ?? 'format',
-    };
     this.providerName = options.providerName ?? 'mcp';
     this.advertisedFormats = options.formats ?? ['pcm_s16le', 'wav'];
     this.deliveryModes = options.deliveryModes ?? ['stream', 'artifact'];
@@ -74,19 +53,19 @@ export class McpTtsAdapter implements TtsAdapter {
     if (!text) throw new TtsAdapterError('tts-invalid-request', 'TTS text must not be empty', false);
     const startedAt = performance.now();
     const args: Record<string, unknown> = {
-      [this.argumentNames.requestId]: request.requestId,
-      [this.argumentNames.text]: text,
-      [this.argumentNames.delivery]: request.delivery ?? 'stream-preferred',
+      request_id: request.requestId,
+      text,
+      delivery: request.delivery ?? 'stream-preferred',
     };
-    if (request.voice) args[this.argumentNames.voice] = request.voice;
-    if (request.language) args[this.argumentNames.language] = request.language;
-    if (request.instruction) args[this.argumentNames.instruction] = request.instruction;
-    if (request.rate !== undefined) args[this.argumentNames.rate] = request.rate;
-    if (request.format) args[this.argumentNames.format] = request.format;
-    logEntry(this.logger, 'info', 'tts.prepare.started', this.providerName, { requestId: request.requestId, data: { tool: this.toolName, textLength: text.length, delivery: request.delivery ?? 'stream-preferred' } });
+    if (request.voice) args.voice = request.voice;
+    if (request.language) args.language = request.language;
+    if (request.instruction) args.instruction = request.instruction;
+    if (request.rate !== undefined) args.rate = request.rate;
+    if (request.format) args.format = request.format;
+    logEntry(this.logger, 'info', 'tts.prepare.started', this.providerName, { requestId: request.requestId, data: { tool: 'tts_open_stream', textLength: text.length, delivery: request.delivery ?? 'stream-preferred' } });
     try {
       const result = await withTimeout(
-        signal => this.client.callTool(this.toolName, args, { signal, timeoutMs: this.timeoutMs }),
+        signal => this.client.callTool('tts_open_stream', args, { signal, timeoutMs: this.timeoutMs }),
         this.timeoutMs,
         request.signal,
       );
@@ -94,7 +73,7 @@ export class McpTtsAdapter implements TtsAdapter {
       const audio = normalizeResult(result, request);
       logEntry(this.logger, 'info', 'tts.source.ready', this.providerName, {
         requestId: request.requestId, durationMs: performance.now() - startedAt,
-        data: { tool: this.toolName, delivery: audio.delivery, audioDurationMs: audio.durationMs, hasVisemes: Boolean(audio.visemes?.length), hasAmplitude: Boolean(audio.amplitude?.length) },
+        data: { tool: 'tts_open_stream', delivery: audio.delivery, audioDurationMs: audio.durationMs, hasVisemes: Boolean(audio.visemes?.length), hasAmplitude: Boolean(audio.amplitude?.length) },
       });
       return audio;
     }
@@ -102,20 +81,23 @@ export class McpTtsAdapter implements TtsAdapter {
       const error = normalizeMcpError(cause);
       logEntry(this.logger, error.code === 'tts-aborted' ? 'warn' : 'error', 'tts.prepare.failed', this.providerName, {
         requestId: request.requestId, durationMs: performance.now() - startedAt,
-        data: { tool: this.toolName, code: error.code, message: error.message },
+        data: { tool: 'tts_open_stream', code: error.code, message: error.message },
       });
       throw error;
     }
   }
 
   async cancel(requestId: string): Promise<void> {
-    if (!this.cancelToolName) return;
     const result = await withTimeout(
-      signal => this.client.callTool(this.cancelToolName!, { [this.argumentNames.requestId]: requestId }, { signal, timeoutMs: this.timeoutMs }),
+      signal => this.client.callTool('tts_cancel_synthesis', { request_id: requestId }, { signal, timeoutMs: this.timeoutMs }),
       this.timeoutMs,
     );
     if (result.isError) throw new TtsAdapterError('tts-mcp-cancel-error', toolErrorMessage(result));
-    logEntry(this.logger, 'info', 'tts.cancel.requested', this.providerName, { requestId, data: { tool: this.cancelToolName } });
+    const cancellation = result.structuredContent;
+    if (!cancellation || cancellation.request_id !== requestId || typeof cancellation.cancelled !== 'boolean') {
+      throw new TtsAdapterError('tts-mcp-invalid-response', 'tts_cancel_synthesis must return matching request_id and boolean cancelled');
+    }
+    logEntry(this.logger, 'info', 'tts.cancel.requested', this.providerName, { requestId, data: { tool: 'tts_cancel_synthesis' } });
   }
 
   async capabilities(): Promise<TtsCapabilities> {
@@ -124,7 +106,7 @@ export class McpTtsAdapter implements TtsAdapter {
       supportsVoices: true, supportsLanguages: true, supportsInstructions: true,
       supportsVisemes: this.advertisesVisemes, supportsAmplitude: this.advertisesAmplitude,
       supportsTextCues: this.advertisesTextCues,
-      streaming: this.deliveryModes.includes('stream'), cancellation: this.cancelToolName ? 'request' : 'none',
+      streaming: this.deliveryModes.includes('stream'), cancellation: 'request',
     };
   }
 
@@ -132,17 +114,32 @@ export class McpTtsAdapter implements TtsAdapter {
     const startedAt = performance.now();
     try {
       const tools = await withTimeout(signal => this.client.listTools({ signal, timeoutMs: this.timeoutMs }), this.timeoutMs);
-      const synthesis = tools.find(tool => tool.name === this.toolName);
-      const available = Boolean(synthesis);
-      const schemaKnown = Boolean(synthesis?.outputSchema);
+      const names = new Set(tools.map(tool => tool.name));
+      const requiredNames = ['tts_status', 'tts_open_stream', 'tts_cancel_synthesis'];
+      const missing = requiredNames.filter(name => !names.has(name));
+      const schemasKnown = requiredNames.every(name => {
+        const tool = tools.find(candidate => candidate.name === name);
+        return Boolean(tool?.inputSchema && tool.outputSchema);
+      });
+      const statusResult = missing.length ? undefined : await withTimeout(
+        signal => this.client.callTool('tts_status', {}, { signal, timeoutMs: this.timeoutMs }),
+        this.timeoutMs,
+      );
+      const status = statusResult?.structuredContent;
+      const profileReady = status?.profile === 'desktop-char.tts.streaming'
+        && status.profile_version === 1
+        && status.status === 'ready'
+        && status.accepting_requests === true;
+      const available = missing.length === 0 && schemasKnown && profileReady;
       const report: TtsHealthReport = {
-        status: available ? (schemaKnown ? 'ready' : 'degraded') : 'unavailable', provider: this.providerName,
+        status: available ? 'ready' : 'unavailable', provider: this.providerName,
         latencyMs: performance.now() - startedAt,
-        details: available
-          ? (schemaKnown ? `MCP streaming tool ${this.toolName} is available` : `MCP tool ${this.toolName} is available but has no output schema`)
-          : `MCP tool ${this.toolName} was not advertised`,
+        details: available ? 'DesktopChar streaming TTS Profile v1 is ready'
+          : missing.length ? `TTS MCP is missing required tools: ${missing.join(', ')}`
+            : !schemasKnown ? 'TTS MCP required tools must publish input and output schemas'
+              : 'tts_status did not report a ready DesktopChar streaming TTS Profile v1 Provider',
       };
-      logEntry(this.logger, report.status === 'unavailable' ? 'error' : report.status === 'degraded' ? 'warn' : 'info', 'tts.health.checked', this.providerName, { durationMs: report.latencyMs, data: { status: report.status, tool: this.toolName } });
+      logEntry(this.logger, report.status === 'unavailable' ? 'error' : 'info', 'tts.health.checked', this.providerName, { durationMs: report.latencyMs, data: { status: report.status, profile: 'desktop-char.tts.streaming', profileVersion: 1 } });
       return report;
     }
     catch (cause) {

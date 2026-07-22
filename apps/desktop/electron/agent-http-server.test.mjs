@@ -20,7 +20,7 @@ test('accepts a valid performance and interrupt on loopback HTTP', async t => {
     baseMs: 1_200, perCharacterMs: 180, minMs: 2_000, maxMs: 12_000,
   });
   assert.deepEqual(capabilities.tts, {
-    requestedMode: 'local', activeMode: 'mcp', provider: 'desktop-char-local-tts',
+    requestedMode: 'external', activeMode: 'mcp', provider: null,
   });
   const response = await fetch(`${base}/v1/performances`, {
     method: 'POST', headers: { 'content-type': 'application/json' },

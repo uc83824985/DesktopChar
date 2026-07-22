@@ -54,19 +54,48 @@ export function normalizeDesktopConfig(fileConfig = {}, env = {}) {
   const characterProfile = optionalRecord(fileConfig.character, 'character');
   assertKnownKeys(characterProfile, ['profile'], 'character');
   const tts = optionalRecord(fileConfig.ttsMcp, 'ttsMcp');
-  assertKnownKeys(tts, ['autoStart', 'mode', 'url', 'toolName', 'cancelToolName', 'timeoutMs', 'requestIdArgument', 'textArgument', 'format', 'voice', 'local', 'reconnect'], 'ttsMcp');
-  const local = optionalRecord(tts.local, 'ttsMcp.local');
-  assertKnownKeys(local, ['host', 'port', 'delayMs', 'defaultRate', 'durationPerCharacterMs', 'minimumDurationMs', 'sampleRateHz', 'channels'], 'ttsMcp.local');
+  assertKnownKeys(tts, ['autoStart', 'lifecycle', 'connection', 'contract', 'synthesis', 'reconnect'], 'ttsMcp');
+  const lifecycle = optionalRecord(tts.lifecycle, 'ttsMcp.lifecycle');
+  assertKnownKeys(lifecycle, ['type', 'start', 'startupTimeoutMs', 'shutdownTimeoutMs', 'healthIntervalMs', 'restartOnFailure'], 'ttsMcp.lifecycle');
+  const launch = optionalRecord(lifecycle.start, 'ttsMcp.lifecycle.start');
+  assertKnownKeys(launch, ['executable', 'args', 'cwd', 'env'], 'ttsMcp.lifecycle.start');
+  const connection = optionalRecord(tts.connection, 'ttsMcp.connection');
+  assertKnownKeys(connection, ['transport', 'url', 'timeoutMs'], 'ttsMcp.connection');
+  const contract = optionalRecord(tts.contract, 'ttsMcp.contract');
+  assertKnownKeys(contract, ['profile', 'version'], 'ttsMcp.contract');
+  const synthesis = optionalRecord(tts.synthesis, 'ttsMcp.synthesis');
+  assertKnownKeys(synthesis, ['format', 'voice'], 'ttsMcp.synthesis');
   const ttsReconnect = optionalRecord(tts.reconnect, 'ttsMcp.reconnect');
   const character = optionalRecord(fileConfig.characterMcp, 'characterMcp');
   assertKnownKeys(character, ['autoStart', 'host', 'port', 'path', 'reconnect'], 'characterMcp');
   const characterReconnect = optionalRecord(character.reconnect, 'characterMcp.reconnect');
-  const mode = text(tts.mode ?? env.DESKTOP_CHAR_TTS_MODE ?? 'local', 'ttsMcp.mode');
-  if (mode !== 'local' && mode !== 'mcp') throw new TypeError('ttsMcp.mode must be local or mcp');
-  const format = text(tts.format ?? env.DESKTOP_CHAR_TTS_FORMAT ?? 'pcm_s16le', 'ttsMcp.format');
+  fixedSemanticName(env.DESKTOP_CHAR_TTS_MCP_TOOL, 'tts_open_stream', 'DESKTOP_CHAR_TTS_MCP_TOOL');
+  fixedSemanticName(env.DESKTOP_CHAR_TTS_MCP_CANCEL_TOOL, 'tts_cancel_synthesis', 'DESKTOP_CHAR_TTS_MCP_CANCEL_TOOL');
+  fixedSemanticName(env.DESKTOP_CHAR_TTS_REQUEST_ID_ARGUMENT, 'request_id', 'DESKTOP_CHAR_TTS_REQUEST_ID_ARGUMENT');
+  fixedSemanticName(env.DESKTOP_CHAR_TTS_TEXT_ARGUMENT, 'text', 'DESKTOP_CHAR_TTS_TEXT_ARGUMENT');
+  const lifecycleType = ttsLifecycleType(lifecycle.type ?? env.DESKTOP_CHAR_TTS_LIFECYCLE, env.DESKTOP_CHAR_TTS_MODE);
+  const format = text(synthesis.format ?? env.DESKTOP_CHAR_TTS_FORMAT ?? 'pcm_s16le', 'ttsMcp.synthesis.format');
   if (!AUDIO_FORMATS.has(format)) throw new TypeError('ttsMcp.format is unsupported');
-  const voice = optionalText(tts.voice ?? env.DESKTOP_CHAR_TTS_VOICE, 'ttsMcp.voice');
-  const ttsUrl = httpUrl(tts.url ?? env.DESKTOP_CHAR_TTS_MCP_URL ?? 'http://127.0.0.1:8766/mcp', 'ttsMcp.url');
+  const voice = optionalText(synthesis.voice ?? env.DESKTOP_CHAR_TTS_VOICE, 'ttsMcp.synthesis.voice');
+  const transport = text(connection.transport ?? 'streamable-http', 'ttsMcp.connection.transport');
+  if (transport !== 'streamable-http') throw new TypeError('ttsMcp.connection.transport must be streamable-http');
+  const profile = text(contract.profile ?? 'desktop-char.tts.streaming', 'ttsMcp.contract.profile');
+  if (profile !== 'desktop-char.tts.streaming') throw new TypeError('ttsMcp.contract.profile is unsupported');
+  const profileVersion = positiveInteger(contract.version, 1, 'ttsMcp.contract.version');
+  if (profileVersion !== 1) throw new TypeError('ttsMcp.contract.version is unsupported');
+  const defaultLocalLaunch = Object.keys(launch).length === 0;
+  const localHost = loopbackHost(env.DESKTOP_CHAR_TTS_LOCAL_MCP_HOST ?? '127.0.0.1', 'DESKTOP_CHAR_TTS_LOCAL_MCP_HOST');
+  const localPort = port(env.DESKTOP_CHAR_TTS_LOCAL_MCP_PORT, 8_766, 'DESKTOP_CHAR_TTS_LOCAL_MCP_PORT');
+  const defaultTtsUrl = `http://${urlHost(localHost)}:${localPort}/mcp`;
+  const ttsUrl = httpUrl(connection.url ?? env.DESKTOP_CHAR_TTS_MCP_URL ?? defaultTtsUrl, 'ttsMcp.connection.url');
+  const localDelayMs = nonNegative(env.DESKTOP_CHAR_TTS_LOCAL_DELAY_MS, 15, 'DESKTOP_CHAR_TTS_LOCAL_DELAY_MS');
+  const localRate = rate(env.DESKTOP_CHAR_TTS_LOCAL_RATE, 1, 'DESKTOP_CHAR_TTS_LOCAL_RATE');
+  const localCharacterMs = positive(env.DESKTOP_CHAR_TTS_LOCAL_CHAR_MS, 232, 'DESKTOP_CHAR_TTS_LOCAL_CHAR_MS');
+  const localMinimumMs = positive(env.DESKTOP_CHAR_TTS_LOCAL_MIN_MS, 500, 'DESKTOP_CHAR_TTS_LOCAL_MIN_MS');
+  const localSampleRate = positiveInteger(env.DESKTOP_CHAR_TTS_SAMPLE_RATE_HZ, 24_000, 'DESKTOP_CHAR_TTS_SAMPLE_RATE_HZ');
+  const localChannels = monoChannels(env.DESKTOP_CHAR_TTS_CHANNELS);
+  const defaultCwd = path.resolve(process.cwd());
+  const defaultServerPath = path.resolve(defaultCwd, 'local-tts-mcp/server.mjs');
   const characterHost = loopbackHost(character.host ?? env.DESKTOP_CHAR_CHARACTER_MCP_HOST ?? '127.0.0.1', 'characterMcp.host');
   const characterPath = endpointPath(character.path ?? env.DESKTOP_CHAR_CHARACTER_MCP_PATH ?? '/mcp');
 
@@ -101,24 +130,40 @@ export function normalizeDesktopConfig(fileConfig = {}, env = {}) {
     },
     tts: {
       autoStart: boolean(tts.autoStart ?? env.DESKTOP_CHAR_TTS_MCP_ENABLED, true, 'ttsMcp.autoStart'),
-      mode,
-      url: ttsUrl,
-      toolName: text(tts.toolName ?? env.DESKTOP_CHAR_TTS_MCP_TOOL ?? 'tts_open_stream', 'ttsMcp.toolName'),
-      cancelToolName: text(tts.cancelToolName ?? env.DESKTOP_CHAR_TTS_MCP_CANCEL_TOOL ?? 'tts_cancel_synthesis', 'ttsMcp.cancelToolName'),
-      timeoutMs: positive(tts.timeoutMs ?? env.DESKTOP_CHAR_TTS_TIMEOUT_MS, 30_000, 'ttsMcp.timeoutMs'),
-      requestIdArgument: text(tts.requestIdArgument ?? env.DESKTOP_CHAR_TTS_REQUEST_ID_ARGUMENT ?? 'request_id', 'ttsMcp.requestIdArgument'),
-      textArgument: text(tts.textArgument ?? env.DESKTOP_CHAR_TTS_TEXT_ARGUMENT ?? 'text', 'ttsMcp.textArgument'),
-      format,
-      ...(voice ? { voice } : {}),
-      local: {
-        host: loopbackHost(local.host ?? env.DESKTOP_CHAR_TTS_LOCAL_MCP_HOST ?? '127.0.0.1', 'ttsMcp.local.host'),
-        port: port(local.port ?? env.DESKTOP_CHAR_TTS_LOCAL_MCP_PORT, 0, 'ttsMcp.local.port'),
-        delayMs: nonNegative(local.delayMs ?? env.DESKTOP_CHAR_TTS_LOCAL_DELAY_MS, 15, 'ttsMcp.local.delayMs'),
-        defaultRate: rate(local.defaultRate ?? env.DESKTOP_CHAR_TTS_LOCAL_RATE, 1, 'ttsMcp.local.defaultRate'),
-        durationPerCharacterMs: positive(local.durationPerCharacterMs ?? env.DESKTOP_CHAR_TTS_LOCAL_CHAR_MS, 232, 'ttsMcp.local.durationPerCharacterMs'),
-        minimumDurationMs: positive(local.minimumDurationMs ?? env.DESKTOP_CHAR_TTS_LOCAL_MIN_MS, 500, 'ttsMcp.local.minimumDurationMs'),
-        sampleRateHz: positiveInteger(local.sampleRateHz ?? env.DESKTOP_CHAR_TTS_SAMPLE_RATE_HZ, 24_000, 'ttsMcp.local.sampleRateHz'),
-        channels: monoChannels(local.channels ?? env.DESKTOP_CHAR_TTS_CHANNELS),
+      lifecycle: {
+        type: lifecycleType,
+        ...(lifecycleType === 'managed' ? {
+          start: {
+            executable: text(launch.executable ?? process.execPath, 'ttsMcp.lifecycle.start.executable'),
+            args: stringArray(launch.args ?? [defaultServerPath], 'ttsMcp.lifecycle.start.args'),
+            cwd: path.resolve(text(launch.cwd ?? defaultCwd, 'ttsMcp.lifecycle.start.cwd')),
+            env: environmentRecord(launch.env ?? (defaultLocalLaunch ? {
+              ELECTRON_RUN_AS_NODE: '1',
+              DESKTOP_CHAR_TTS_LOCAL_MCP_HOST: localHost,
+              DESKTOP_CHAR_TTS_LOCAL_MCP_PORT: String(localPort),
+              DESKTOP_CHAR_TTS_LOCAL_DELAY_MS: String(localDelayMs),
+              DESKTOP_CHAR_TTS_LOCAL_RATE: String(localRate),
+              DESKTOP_CHAR_TTS_LOCAL_CHAR_MS: String(localCharacterMs),
+              DESKTOP_CHAR_TTS_LOCAL_MIN_MS: String(localMinimumMs),
+              DESKTOP_CHAR_TTS_SAMPLE_RATE_HZ: String(localSampleRate),
+              DESKTOP_CHAR_TTS_CHANNELS: String(localChannels),
+            } : {}), 'ttsMcp.lifecycle.start.env'),
+          },
+        } : {}),
+        startupTimeoutMs: positive(lifecycle.startupTimeoutMs, 120_000, 'ttsMcp.lifecycle.startupTimeoutMs'),
+        shutdownTimeoutMs: positive(lifecycle.shutdownTimeoutMs, 10_000, 'ttsMcp.lifecycle.shutdownTimeoutMs'),
+        healthIntervalMs: positive(lifecycle.healthIntervalMs, 10_000, 'ttsMcp.lifecycle.healthIntervalMs'),
+        restartOnFailure: boolean(lifecycle.restartOnFailure, true, 'ttsMcp.lifecycle.restartOnFailure'),
+      },
+      connection: {
+        transport,
+        url: ttsUrl,
+        timeoutMs: positive(connection.timeoutMs ?? env.DESKTOP_CHAR_TTS_TIMEOUT_MS, 30_000, 'ttsMcp.connection.timeoutMs'),
+      },
+      contract: { profile, version: profileVersion },
+      synthesis: {
+        format,
+        ...(voice ? { voice } : {}),
       },
       reconnect: reconnectConfig(ttsReconnect, 'ttsMcp.reconnect'),
     },
@@ -193,6 +238,38 @@ function optionalText(value, label) {
   return text(value, label);
 }
 
+function fixedSemanticName(value, expected, label) {
+  if (value === undefined || value === '') return;
+  if (text(value, label) !== expected) throw new TypeError(`${label} is fixed by the DesktopChar TTS Profile and must be ${expected}`);
+}
+
+function ttsLifecycleType(value, legacyValue) {
+  const requested = value ?? legacyValue ?? 'managed';
+  if (requested === 'managed' || requested === 'local') return 'managed';
+  if (requested === 'external' || requested === 'mcp') return 'external';
+  throw new TypeError('ttsMcp.lifecycle.type must be managed or external');
+}
+
+function stringArray(value, label) {
+  if (!Array.isArray(value)) throw new TypeError(`${label} must be an array`);
+  return value.map((item, index) => {
+    if (typeof item !== 'string') throw new TypeError(`${label}[${index}] must be a string`);
+    return item;
+  });
+}
+
+function urlHost(host) {
+  return host.includes(':') ? `[${host}]` : host;
+}
+
+function environmentRecord(value, label) {
+  if (!isRecord(value)) throw new TypeError(`${label} must be an object`);
+  return Object.fromEntries(Object.entries(value).map(([key, item]) => {
+    if (!key || typeof item !== 'string') throw new TypeError(`${label}.${key || '<empty>'} must be a string`);
+    return [key, item];
+  }));
+}
+
 function assetPath(value, label) {
   const result = text(value, label).replaceAll('\\', '/');
   if (result.startsWith('/') || /^[a-z][a-z\d+.-]*:/iu.test(result) || result.split('/').includes('..')) {
@@ -247,8 +324,8 @@ function boundedInteger(value, fallback, minimum, maximum, label) {
 }
 
 function monoChannels(value) {
-  const result = positiveInteger(value, 1, 'ttsMcp.local.channels');
-  if (result !== 1) throw new TypeError('ttsMcp.local.channels must be 1 for the reference Provider');
+  const result = positiveInteger(value, 1, 'DESKTOP_CHAR_TTS_CHANNELS');
+  if (result !== 1) throw new TypeError('DESKTOP_CHAR_TTS_CHANNELS must be 1 for the reference Provider');
   return result;
 }
 

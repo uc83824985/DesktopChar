@@ -81,20 +81,18 @@ export interface AgentRuntimeState {
 }
 
 export interface DesktopTtsConfig {
-  mode: 'local' | 'mcp';
+  lifecycle: 'external' | 'managed';
+  provider: string | null;
   mcpUrl: string;
-  mcpTool: string;
-  mcpCancelTool: string;
   timeoutMs: number;
-  requestIdArgument: string;
-  textArgument: string;
   format: import('../../../../packages/tts-mcp-adapter/src/index.ts').TtsAudioFormat;
+  testFixtures: string[];
   voice?: string;
 }
 
 export type McpServiceId = 'tts' | 'character';
 export type McpServicePhase = 'disabled' | 'starting' | 'ready' | 'degraded' | 'reload-pending'
-  | 'reloading' | 'reconnecting' | 'stopping';
+  | 'reloading' | 'reconnecting' | 'stopping' | 'failed';
 
 export interface McpServiceTest {
   status: 'passed' | 'failed';
@@ -108,6 +106,8 @@ export interface McpServiceState {
   desiredEnabled: boolean;
   phase: McpServicePhase;
   provider: string | null;
+  processId: number | null;
+  capabilities: Record<string, unknown> | null;
   endpoint: string | null;
   configRevision: number;
   reconnectAttempt: number;

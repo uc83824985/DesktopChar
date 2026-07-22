@@ -37,8 +37,9 @@ try {
     throw new Error(`Tray icon must expose a native 24px representation at 150% DPI: ${JSON.stringify(initial.tray)}`);
   }
   if (!initial.mousePassthrough) throw new Error('Floating window must start in desktop passthrough mode');
-  if (initial.tts?.mode !== 'local' || !/^http:\/\/127\.0\.0\.1:\d+\/mcp$/.test(initial.tts?.mcpUrl ?? '')) {
-    throw new Error(`Desktop local TTS must use a real loopback MCP endpoint: ${JSON.stringify(initial.tts)}`);
+  if (initial.tts?.lifecycle !== 'managed' || initial.tts?.provider !== 'desktop-char-local-tts'
+    || !/^http:\/\/127\.0\.0\.1:\d+\/mcp$/.test(initial.tts?.mcpUrl ?? '')) {
+    throw new Error(`Desktop managed TTS must use a Profile-compatible loopback MCP endpoint: ${JSON.stringify(initial.tts)}`);
   }
   if (initial.mcpServices?.tts?.phase !== 'ready' || initial.mcpServices?.character?.phase !== 'ready'
     || !/^http:\/\/127\.0\.0\.1:\d+\/mcp$/.test(initial.mcpServices.character.endpoint ?? '')) {

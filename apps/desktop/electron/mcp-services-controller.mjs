@@ -1,7 +1,12 @@
 import { Client } from '@modelcontextprotocol/sdk/client/index.js';
 import { StreamableHTTPClientTransport } from '@modelcontextprotocol/sdk/client/streamableHttp.js';
-import { createLocalTtsMcpService } from '../../../local-tts-mcp/service.mjs';
+import {
+  TTS_MCP_TOOLS,
+  parseTtsStatusResult,
+  validateTtsMcpTools,
+} from '../../../tts-mcp-profile/contract.mjs';
 import { createCharacterMcpService, CHARACTER_MCP_TOOLS } from './character-mcp-service.mjs';
+import { startManagedProcess } from './managed-process.mjs';
 import {
   loadDesktopConfig,
   resolveDesktopConfigPath,
@@ -11,9 +16,9 @@ import {
 export function createMcpServicesController(options = {}) {
   const env = options.env ?? process.env;
   const configFilePath = options.configFilePath ?? resolveDesktopConfigPath(env, options.cwd, options.defaultFilePath);
-  const createTtsService = options.createLocalTtsService ?? createLocalTtsMcpService;
   const createCharacterService = options.createCharacterService ?? createCharacterMcpService;
   const connectClient = options.connectClient ?? connectMcpClient;
+  const launchTtsProcess = options.launchTtsProcess ?? startManagedProcess;
   const onStateChanged = options.onStateChanged ?? (() => {});
   const onDesktopConfigChanged = options.onDesktopConfigChanged ?? (() => {});
   const onCharacterCommand = options.onCharacterCommand ?? (() => {});
@@ -26,9 +31,11 @@ export function createMcpServicesController(options = {}) {
   let stopWatching;
   let reloadTimer;
   let ttsReconnectTimer;
+  let ttsHealthTimer;
   let characterReconnectTimer;
   let ttsSession;
-  let localTtsService;
+  let ttsProcess;
+  let activeTtsStatus;
   let characterService;
   let activeTtsConfig;
   let avatarState = { ready: false, snapshot: null };
@@ -55,7 +62,7 @@ export function createMcpServicesController(options = {}) {
   }
 
   function emit() {
-    state.tts.runtimeConfig = ttsRuntimeConfig(activeTtsConfig ?? config?.tts, state.tts.endpoint);
+    state.tts.runtimeConfig = ttsRuntimeConfig(activeTtsConfig ?? config?.tts, state.tts.endpoint, activeTtsStatus);
     onStateChanged(snapshot());
   }
 
@@ -152,7 +159,7 @@ export function createMcpServicesController(options = {}) {
   async function listTtsTools(options = {}) {
     await waitForTtsSession();
     try {
-      const result = await ttsSession.client.listTools(undefined, { timeout: options.timeoutMs ?? config.tts.timeoutMs });
+      const result = await ttsSession.client.listTools(undefined, { timeout: options.timeoutMs ?? config.tts.connection.timeoutMs });
       return result.tools;
     }
     catch (error) {
@@ -168,7 +175,7 @@ export function createMcpServicesController(options = {}) {
       return await ttsSession.client.callTool(
         { name, arguments: args },
         undefined,
-        { timeout: options.timeoutMs ?? config.tts.timeoutMs, signal: options.signal },
+        { timeout: options.timeoutMs ?? config.tts.connection.timeoutMs, signal: options.signal },
       );
     }
     catch (error) {
@@ -188,7 +195,7 @@ export function createMcpServicesController(options = {}) {
   }
 
   function currentTtsConfig() {
-    return ttsRuntimeConfig(activeTtsConfig ?? config?.tts, state.tts.endpoint);
+    return ttsRuntimeConfig(activeTtsConfig ?? config?.tts, state.tts.endpoint, activeTtsStatus);
   }
 
   function currentDesktopConfig() {
@@ -201,6 +208,7 @@ export function createMcpServicesController(options = {}) {
     stopWatching = undefined;
     if (reloadTimer) clearTimeout(reloadTimer);
     clearReconnect('tts');
+    clearTtsHealthCheck();
     clearReconnect('character');
     return enqueue(async () => {
       await Promise.allSettled([closeTtsResources(), closeCharacterResources()]);
@@ -267,37 +275,45 @@ export function createMcpServicesController(options = {}) {
     state.tts.lastError = null;
     emit();
     await closeTtsResources();
-    let candidateLocal;
+    let candidateProcess;
     let candidateSession;
     try {
-      let endpoint = config.tts.url;
-      if (config.tts.mode === 'local') {
-        candidateLocal = createTtsService(config.tts.local);
-        const address = await candidateLocal.listen();
-        endpoint = address.mcpUrl;
+      const endpoint = config.tts.connection.url;
+      if (config.tts.lifecycle.type === 'managed') {
+        candidateProcess = await launchTtsProcess(config.tts.lifecycle.start, {
+          onOutput: options.onTtsProcessOutput,
+        });
       }
-      candidateSession = await connectClient(endpoint, {
-        name: 'desktop-char-tts-supervisor',
-        version: options.version ?? '0.1.0',
-        timeoutMs: Math.min(config.tts.timeoutMs, 10_000),
-      });
-      const result = await candidateSession.client.listTools(undefined, { timeout: config.tts.timeoutMs });
-      const tool = result.tools.find(item => item.name === config.tts.toolName);
-      if (!tool) throw new Error(`语音合成 MCP 未发布工具 ${config.tts.toolName}`);
-      localTtsService = candidateLocal;
+      candidateSession = config.tts.lifecycle.type === 'managed'
+        ? await connectManagedTts(endpoint, candidateProcess, config.tts)
+        : await connectClient(endpoint, {
+          name: 'desktop-char-tts-supervisor',
+          version: options.version ?? '0.1.0',
+          timeoutMs: Math.min(config.tts.connection.timeoutMs, 10_000),
+        });
+      const inspection = await inspectTtsProvider(candidateSession.client, config.tts.connection.timeoutMs);
+      ttsProcess = candidateProcess;
       ttsSession = candidateSession;
+      activeTtsStatus = inspection.status;
       activeTtsConfig = config.tts;
-      state.tts.phase = tool.outputSchema ? 'ready' : 'degraded';
+      state.tts.phase = 'ready';
       state.tts.endpoint = endpoint;
-      state.tts.provider = config.tts.mode === 'local' ? 'desktop-char-local-tts' : 'external-tts-mcp';
+      state.tts.provider = inspection.status.provider;
+      state.tts.processId = candidateProcess?.pid ?? null;
+      state.tts.capabilities = inspection.status.capabilities;
       state.tts.reconnectAttempt = 0;
       state.tts.nextReconnectAt = null;
       state.tts.lastError = null;
       setTtsContext(config.tts, endpoint, state.tts.phase);
+      observeManagedTtsExit(candidateProcess);
+      scheduleTtsHealthCheck();
       emit();
     }
     catch (error) {
-      await Promise.allSettled([candidateSession?.client.close(), candidateLocal?.close()]);
+      await Promise.allSettled([
+        candidateSession?.client.close(),
+        candidateProcess?.close(config.tts.lifecycle.shutdownTimeoutMs),
+      ]);
       await handleTtsFailure(error);
     }
   }
@@ -311,6 +327,8 @@ export function createMcpServicesController(options = {}) {
     state.tts.phase = 'disabled';
     state.tts.endpoint = null;
     state.tts.provider = null;
+    state.tts.processId = null;
+    state.tts.capabilities = null;
     state.tts.reconnectAttempt = 0;
     state.tts.nextReconnectAt = null;
     setTtsContext(config?.tts, null, 'disabled');
@@ -368,10 +386,11 @@ export function createMcpServicesController(options = {}) {
   async function testTtsConnection() {
     if (!ttsSession) await startTts('connection-test');
     if (!ttsSession) throw new Error(state.tts.lastError ?? '语音合成 MCP session 不可用');
-    const result = await ttsSession.client.listTools(undefined, { timeout: config.tts.timeoutMs });
-    const tool = result.tools.find(item => item.name === config.tts.toolName);
-    if (!tool) throw new Error(`语音合成 MCP 未发布工具 ${config.tts.toolName}`);
-    return `${result.tools.length} tools; ${config.tts.toolName} available`;
+    const inspection = await inspectTtsProvider(ttsSession.client, config.tts.connection.timeoutMs);
+    activeTtsStatus = inspection.status;
+    state.tts.provider = inspection.status.provider;
+    state.tts.capabilities = inspection.status.capabilities;
+    return `${inspection.catalog.toolCount} tools; ${inspection.status.provider} ready; Profile v${inspection.status.profile_version}`;
   }
 
   async function testCharacterConnection() {
@@ -406,8 +425,18 @@ export function createMcpServicesController(options = {}) {
     await closeTtsResources();
     state.tts.lastError = errorMessage(error);
     state.tts.endpoint = null;
-    setTtsContext(config?.tts, null, 'reconnecting');
-    scheduleReconnect('tts');
+    state.tts.provider = null;
+    state.tts.processId = null;
+    state.tts.capabilities = null;
+    if (config?.tts.lifecycle.type === 'managed' && !config.tts.lifecycle.restartOnFailure) {
+      state.tts.phase = 'failed';
+      setTtsContext(config?.tts, null, 'failed');
+      emit();
+    }
+    else {
+      setTtsContext(config?.tts, null, 'reconnecting');
+      scheduleReconnect('tts');
+    }
   }
 
   async function handleCharacterFailure(error) {
@@ -447,12 +476,16 @@ export function createMcpServicesController(options = {}) {
   }
 
   async function closeTtsResources() {
+    clearTtsHealthCheck();
     const session = ttsSession;
-    const local = localTtsService;
+    const process = ttsProcess;
+    const processConfig = activeTtsConfig ?? config?.tts;
     ttsSession = undefined;
-    localTtsService = undefined;
+    ttsProcess = undefined;
+    activeTtsStatus = undefined;
+    activeTtsConfig = undefined;
     await session?.client.close().catch(() => {});
-    await local?.close().catch(() => {});
+    await process?.close(processConfig?.lifecycle.shutdownTimeoutMs).catch(() => {});
   }
 
   async function closeCharacterResources() {
@@ -462,12 +495,69 @@ export function createMcpServicesController(options = {}) {
   }
 
   function setTtsContext(ttsConfig, endpoint, phase) {
-    ttsContext.requestedMode = ttsConfig?.mode ?? 'local';
+    ttsContext.requestedMode = ttsConfig?.lifecycle.type ?? 'managed';
     ttsContext.activeMode = phase === 'ready' || phase === 'degraded' ? 'mcp' : phase;
-    ttsContext.provider = ttsConfig?.mode === 'local' ? 'desktop-char-local-tts' : 'external-tts-mcp';
-    ttsContext.mcpTool = ttsConfig?.toolName ?? 'tts_open_stream';
-    ttsContext.mcpCancelTool = ttsConfig?.cancelToolName ?? 'tts_cancel_synthesis';
+    ttsContext.provider = activeTtsStatus?.provider ?? null;
+    ttsContext.mcpTool = TTS_MCP_TOOLS.openStream;
+    ttsContext.mcpCancelTool = TTS_MCP_TOOLS.cancelSynthesis;
     ttsContext.transport = endpoint;
+  }
+
+  async function connectManagedTts(endpoint, process, ttsConfig) {
+    const deadline = Date.now() + ttsConfig.lifecycle.startupTimeoutMs;
+    let lastError;
+    while (Date.now() < deadline) {
+      if (process.exitInfo) throw managedProcessExitError(process.exitInfo);
+      try {
+        return await connectClient(endpoint, {
+          name: 'desktop-char-tts-supervisor',
+          version: options.version ?? '0.1.0',
+          timeoutMs: Math.min(ttsConfig.connection.timeoutMs, 2_000),
+        });
+      }
+      catch (error) {
+        lastError = error;
+        await delay(100);
+      }
+    }
+    throw new Error(`Managed TTS MCP did not become available within ${ttsConfig.lifecycle.startupTimeoutMs} ms: ${errorMessage(lastError)}`);
+  }
+
+  function observeManagedTtsExit(process) {
+    if (!process) return;
+    void process.exited.then(info => {
+      if (ttsProcess !== process || disposed || !state.tts.desiredEnabled) return;
+      void enqueue(() => handleTtsFailure(managedProcessExitError(info)));
+    });
+  }
+
+  function scheduleTtsHealthCheck() {
+    clearTtsHealthCheck();
+    const session = ttsSession;
+    if (!session || disposed || !state.tts.desiredEnabled) return;
+    ttsHealthTimer = setTimeout(() => {
+      ttsHealthTimer = undefined;
+      void enqueue(async () => {
+        if (ttsSession !== session || disposed || !state.tts.desiredEnabled) return;
+        try {
+          activeTtsStatus = await readTtsStatus(session.client, config.tts.connection.timeoutMs);
+          state.tts.provider = activeTtsStatus.provider;
+          state.tts.capabilities = activeTtsStatus.capabilities;
+          setTtsContext(activeTtsConfig, state.tts.endpoint, state.tts.phase);
+          scheduleTtsHealthCheck();
+          emit();
+        }
+        catch (error) {
+          await handleTtsFailure(error);
+        }
+      });
+    }, activeTtsConfig?.lifecycle.healthIntervalMs ?? config.tts.lifecycle.healthIntervalMs);
+    ttsHealthTimer.unref?.();
+  }
+
+  function clearTtsHealthCheck() {
+    if (ttsHealthTimer) clearTimeout(ttsHealthTimer);
+    ttsHealthTimer = undefined;
   }
 
   function enqueue(task) {
@@ -522,6 +612,8 @@ function serviceState(id) {
     desiredEnabled: false,
     phase: 'disabled',
     provider: null,
+    processId: null,
+    capabilities: null,
     endpoint: null,
     configRevision: 0,
     reconnectAttempt: 0,
@@ -532,19 +624,45 @@ function serviceState(id) {
   };
 }
 
-function ttsRuntimeConfig(config, endpoint) {
+function ttsRuntimeConfig(config, endpoint, status) {
   if (!config) return null;
   return {
-    mode: config.mode,
-    mcpUrl: endpoint ?? config.url,
-    mcpTool: config.toolName,
-    mcpCancelTool: config.cancelToolName,
-    timeoutMs: config.timeoutMs,
-    requestIdArgument: config.requestIdArgument,
-    textArgument: config.textArgument,
-    format: config.format,
-    ...(config.voice ? { voice: config.voice } : {}),
+    lifecycle: config.lifecycle.type,
+    provider: status?.provider ?? null,
+    mcpUrl: endpoint ?? config.connection.url,
+    timeoutMs: config.connection.timeoutMs,
+    format: config.synthesis.format,
+    testFixtures: Array.isArray(status?.capabilities?.test_fixtures) ? [...status.capabilities.test_fixtures] : [],
+    ...(config.synthesis.voice ? { voice: config.synthesis.voice } : {}),
   };
+}
+
+async function inspectTtsProvider(client, timeoutMs) {
+  const result = await client.listTools(undefined, { timeout: timeoutMs });
+  const catalog = validateTtsMcpTools(result.tools);
+  const status = await readTtsStatus(client, timeoutMs);
+  return { catalog, status };
+}
+
+async function readTtsStatus(client, timeoutMs) {
+  const result = await client.callTool(
+    { name: TTS_MCP_TOOLS.status, arguments: {} },
+    undefined,
+    { timeout: timeoutMs },
+  );
+  return parseTtsStatusResult(result);
+}
+
+function managedProcessExitError(info) {
+  const detail = info?.stderrTail?.trim() || info?.stdoutTail?.trim();
+  return new Error(`Managed TTS MCP process exited (code=${String(info?.code)}, signal=${String(info?.signal)})${detail ? `: ${detail}` : ''}`);
+}
+
+function delay(ms) {
+  return new Promise(resolve => {
+    const timer = setTimeout(resolve, ms);
+    timer.unref?.();
+  });
 }
 
 function requireServiceId(value) {

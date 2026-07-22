@@ -74,27 +74,51 @@
       "additionalProperties": false,
       "properties": {
         "autoStart": { "type": "boolean" },
-        "mode": { "enum": ["local", "mcp"] },
-        "url": { "type": "string", "format": "uri" },
-        "toolName": { "type": "string", "minLength": 1 },
-        "cancelToolName": { "type": "string", "minLength": 1 },
-        "timeoutMs": { "type": "number", "exclusiveMinimum": 0 },
-        "requestIdArgument": { "type": "string", "minLength": 1 },
-        "textArgument": { "type": "string", "minLength": 1 },
-        "format": { "enum": ["wav", "mp3", "ogg", "opus", "pcm_s16le", "pcm_f32le"] },
-        "voice": { "type": "string", "minLength": 1 },
-        "local": {
+        "lifecycle": {
           "type": "object",
           "additionalProperties": false,
           "properties": {
-            "host": { "enum": ["127.0.0.1", "localhost", "::1"] },
-            "port": { "type": "integer", "minimum": 0, "maximum": 65535 },
-            "delayMs": { "type": "number", "minimum": 0 },
-            "defaultRate": { "type": "number", "minimum": 0.5, "maximum": 2 },
-            "durationPerCharacterMs": { "type": "number", "exclusiveMinimum": 0 },
-            "minimumDurationMs": { "type": "number", "exclusiveMinimum": 0 },
-            "sampleRateHz": { "type": "integer", "exclusiveMinimum": 0 },
-            "channels": { "const": 1 }
+            "type": { "enum": ["external", "managed"] },
+            "start": {
+              "type": "object",
+              "additionalProperties": false,
+              "required": ["executable"],
+              "properties": {
+                "executable": { "type": "string", "minLength": 1 },
+                "args": { "type": "array", "items": { "type": "string" } },
+                "cwd": { "type": "string", "minLength": 1 },
+                "env": { "type": "object", "additionalProperties": { "type": "string" } }
+              }
+            },
+            "startupTimeoutMs": { "type": "number", "exclusiveMinimum": 0 },
+            "shutdownTimeoutMs": { "type": "number", "exclusiveMinimum": 0 },
+            "healthIntervalMs": { "type": "number", "exclusiveMinimum": 0 },
+            "restartOnFailure": { "type": "boolean" }
+          }
+        },
+        "connection": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "transport": { "const": "streamable-http" },
+            "url": { "type": "string", "format": "uri" },
+            "timeoutMs": { "type": "number", "exclusiveMinimum": 0 }
+          }
+        },
+        "contract": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "profile": { "const": "desktop-char.tts.streaming" },
+            "version": { "const": 1 }
+          }
+        },
+        "synthesis": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "format": { "enum": ["wav", "mp3", "ogg", "opus", "pcm_s16le", "pcm_f32le"] },
+            "voice": { "type": "string", "minLength": 1 }
           }
         },
         "reconnect": { "$ref": "#/$defs/reconnect" }

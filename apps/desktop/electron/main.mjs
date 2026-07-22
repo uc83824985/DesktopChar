@@ -104,9 +104,9 @@ const dragWindowApi = requestedDragWindowApi !== 'setBounds' && nativeWindowPosi
   ? 'native-set-window-pos'
   : 'setBounds';
 const ttsContext = {
-  requestedMode: 'local',
+  requestedMode: 'managed',
   activeMode: 'disabled',
-  provider: 'desktop-char-local-tts',
+  provider: null,
   mcpTool: 'tts_open_stream',
   mcpCancelTool: 'tts_cancel_synthesis',
   transport: null,

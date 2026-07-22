@@ -9,7 +9,7 @@ import {
 } from '../src/index.ts';
 
 test('MCP adapter maps streaming arguments and normalizes snake-case PCM descriptors', async () => {
-  const client = new VirtualMcpClient([{ name: 'tts_open_stream', outputSchema: { type: 'object' } }], () => ({
+  const client = new VirtualMcpClient(profileTools(), call => call.name === 'tts_status' ? statusResult() : ({
     content: [],
     structuredContent: { stream: {
       request_id: 'r-stream', stream_url: 'http://127.0.0.1/audio/r-stream', delivery: 'stream',
@@ -34,9 +34,9 @@ test('MCP adapter maps streaming arguments and normalizes snake-case PCM descrip
   assert.equal((await adapter.health()).status, 'ready');
 });
 
-test('MCP health is degraded when a tool has no output schema', async () => {
+test('MCP health is unavailable when the required Profile is incomplete', async () => {
   const client = new VirtualMcpClient([{ name: 'tts_open_stream' }], () => ({ content: [] }));
-  assert.equal((await new McpTtsAdapter({ client }).health()).status, 'degraded');
+  assert.equal((await new McpTtsAdapter({ client }).health()).status, 'unavailable');
 });
 
 test('MCP adapter retains standard audio block and text JSON artifact compatibility', async () => {
@@ -82,7 +82,9 @@ test('MCP adapter distinguishes tool failures, malformed payloads, timeout, and 
   const timeout = new McpTtsAdapter({ timeoutMs: 10, client: new VirtualMcpClient([], () => new Promise(() => undefined)) });
   await assert.rejects(timeout.prepare({ requestId: 'e3', text: 'a' }), error => error instanceof TtsAdapterError && error.code === 'tts-timeout');
 
-  const cancelClient = new VirtualMcpClient([], () => ({ content: [] }));
+  const cancelClient = new VirtualMcpClient([], () => ({
+    content: [], structuredContent: { request_id: 'r-cancel', cancelled: true },
+  }));
   await new McpTtsAdapter({ client: cancelClient }).cancel('r-cancel');
   assert.deepEqual(cancelClient.calls[0], { name: 'tts_cancel_synthesis', args: { request_id: 'r-cancel' } });
 });
@@ -93,7 +95,7 @@ test('runtime effect handler requests a stream source and emits Runtime facts', 
     structuredContent: call.name === 'tts_open_stream' ? { stream: {
       request_id: 'g3:s1', stream_url: 'http://127.0.0.1/audio/g3-s1', delivery: 'stream',
       codec: 'pcm_s16le', sample_rate_hz: 24_000, channels: 1,
-    } } : { cancelled: true },
+    } } : { request_id: 'g3:s1', cancelled: true },
   }));
   const adapter = new McpTtsAdapter({ client });
   const handler = new TtsRuntimeEffectHandler(adapter);
@@ -110,3 +112,22 @@ test('runtime effect handler requests a stream source and emits Runtime facts', 
   assert.deepEqual(client.calls[1], { name: 'tts_cancel_synthesis', args: { request_id: 'g3:s1' } });
   assert.equal(handler.handle({ type: 'audio.stop', generation: 3 }, event => events.push(event)), false);
 });
+
+function profileTools() {
+  return ['tts_status', 'tts_open_stream', 'tts_cancel_synthesis'].map(name => ({
+    name,
+    inputSchema: { type: 'object' },
+    outputSchema: { type: 'object' },
+  }));
+}
+
+function statusResult() {
+  return {
+    content: [],
+    structuredContent: {
+      profile: 'desktop-char.tts.streaming', profile_version: 1,
+      provider: 'fixture', status: 'ready', accepting_requests: true,
+      capabilities: { streaming: true, cancellation: true, formats: ['pcm_s16le'], voices: [], text_cues: false, test_fixtures: [] },
+    },
+  };
+}

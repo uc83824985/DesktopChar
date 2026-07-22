@@ -73,7 +73,7 @@ export function createAgentCapabilities(currentState, ttsContext) {
       textInput: 'complete-plan',
     },
     avatar: currentState.snapshot?.capabilities ?? null,
-    tts: ttsContext ?? { requestedMode: 'local', activeMode: 'mcp', provider: 'desktop-char-local-tts' },
+    tts: ttsContext ?? { requestedMode: 'external', activeMode: 'mcp', provider: null },
   };
 }
 

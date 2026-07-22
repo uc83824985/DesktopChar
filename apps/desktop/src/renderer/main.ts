@@ -273,11 +273,11 @@ try {
   reloadableTtsAdapter.configure(tts.adapter, shellState?.tts ?? browserTtsConfig(), ttsOperational);
   currentLipSyncProfile = characterConfig.lipSyncProfile;
   knownToneAvailable = tts.supportsKnownToneFixture && ttsOperational;
-  if (!knownToneAvailable) tone.title = '先验铃声验收仅由 local-tts-mcp 参考服务提供';
+  if (!knownToneAvailable) tone.title = '当前 TTS MCP 未声明 known-tone-v1 测试能力';
   ttsEffects = new TtsRuntimeEffectHandler(reloadableTtsAdapter);
   audioPlayer = createRuntimeAudioPlayer(tts.openStream);
   audioPlayer.subscribe(handleTonePlaybackEvent);
-  document.body.dataset.ttsMode = shellState?.tts.mode ?? 'local';
+  document.body.dataset.ttsMode = shellState?.tts.lifecycle ?? 'external';
   document.body.dataset.ttsHealth = 'checking';
 
   model = await Live2DModel.from(characterConfig.modelJsonUrl, { autoInteract: false });
@@ -553,8 +553,8 @@ function applyMcpServicesState(next: McpServicesState): void {
       ttsConfigSignature = signature;
     }
     else reloadableTtsAdapter.setEnabled(operational);
-    knownToneAvailable = config.mode === 'local' && operational;
-    document.body.dataset.ttsMode = config.mode;
+    knownToneAvailable = config.testFixtures.includes('known-tone-v1') && operational;
+    document.body.dataset.ttsMode = config.lifecycle;
   }
   else {
     reloadableTtsAdapter.setEnabled(false);
@@ -567,7 +567,7 @@ function applyMcpServicesState(next: McpServicesState): void {
   document.body.dataset.ttsMcpTest = next.tts.lastTest?.status ?? 'untested';
   document.body.dataset.characterMcpTest = next.character.lastTest?.status ?? 'untested';
   document.body.dataset.ttsHealth = operational ? next.tts.phase : 'unavailable';
-  tone.title = knownToneAvailable ? '' : '先验铃声验收仅由已连接的 local-tts-mcp 参考服务提供';
+  tone.title = knownToneAvailable ? '' : '当前 TTS MCP 未声明 known-tone-v1 测试能力';
   const busy = runtime?.getSnapshot().state !== 'idle';
   speak.disabled = busy || !operational;
   tone.disabled = busy || !knownToneAvailable;
@@ -586,18 +586,14 @@ function createTtsComposition(config: DesktopTtsConfig | undefined): TtsComposit
   const baseClient = desktopShell
     ? createDesktopShellMcpClient(desktopShell)
     : createBrowserMcpClient(settings.mcpUrl);
-  const supportsKnownToneFixture = settings.mode === 'local';
+  const supportsKnownToneFixture = settings.testFixtures.includes('known-tone-v1');
   const client = supportsKnownToneFixture
     ? createKnownToneFixtureMcpClient(baseClient, settings)
     : baseClient;
   const adapter = new McpTtsAdapter({
     client,
-    toolName: settings.mcpTool,
-    cancelToolName: settings.mcpCancelTool,
     timeoutMs: settings.timeoutMs,
-    requestIdArgument: settings.requestIdArgument,
-    textArgument: settings.textArgument,
-    providerName: settings.mode === 'local' ? 'desktop-char-local-tts' : 'qwen3-tts-mcp',
+    providerName: settings.provider ?? 'tts-mcp',
     formats: [settings.format],
     deliveryModes: ['stream'],
     supportsAmplitude: false,
@@ -618,9 +614,9 @@ function createKnownToneFixtureMcpClient(
   return {
     listTools: options => client.listTools(options),
     callTool(name, args, options) {
-      const requestId = args[config.requestIdArgument];
+      const requestId = args.request_id;
       const segmentId = typeof requestId === 'string' ? segmentIdFromRequestId(requestId) : '';
-      return client.callTool(name, name === config.mcpTool && knownToneSegments.has(segmentId)
+      return client.callTool(name, name === 'tts_open_stream' && knownToneSegments.has(segmentId)
         ? { ...args, test_fixture: 'known-tone-v1' }
         : args, options);
     },
@@ -628,20 +624,19 @@ function createKnownToneFixtureMcpClient(
 }
 
 function browserTtsConfig(): DesktopTtsConfig {
-  const configuredUrl = new URLSearchParams(location.search).get('ttsMcpUrl') ?? 'http://127.0.0.1:8766/mcp';
+  const parameters = new URLSearchParams(location.search);
+  const configuredUrl = parameters.get('ttsMcpUrl') ?? 'http://127.0.0.1:8766/mcp';
   const url = new URL(configuredUrl);
   if (url.protocol !== 'http:' || !['127.0.0.1', 'localhost', '::1'].includes(url.hostname)) {
     throw new Error('Browser test TTS MCP URL must use a loopback HTTP origin');
   }
   return {
-    mode: 'local',
+    lifecycle: 'external',
+    provider: 'browser-tts-mcp',
     mcpUrl: url.href,
-    mcpTool: DEFAULT_TTS_CONFIG.mcp.toolName,
-    mcpCancelTool: DEFAULT_TTS_CONFIG.mcp.cancelToolName,
     timeoutMs: DEFAULT_TTS_CONFIG.mcp.timeoutMs,
-    requestIdArgument: DEFAULT_TTS_CONFIG.mcp.requestIdArgument,
-    textArgument: DEFAULT_TTS_CONFIG.mcp.textArgument,
     format: DEFAULT_TTS_CONFIG.mcp.format,
+    testFixtures: (parameters.get('ttsTestFixtures') ?? '').split(',').map(value => value.trim()).filter(Boolean),
   };
 }
 
@@ -991,7 +986,7 @@ function mcpPhaseLabel(service: McpServiceState): string {
   const labels: Record<McpServiceState['phase'], string> = {
     disabled: '已禁用', starting: '启动中', ready: '已连接', degraded: '可用（契约不完整）',
     'reload-pending': '等待空闲后重载', reloading: '重载中', reconnecting: `重连中 #${service.reconnectAttempt}`,
-    stopping: '停止中',
+    stopping: '停止中', failed: '不可用',
   };
   return labels[service.phase];
 }
