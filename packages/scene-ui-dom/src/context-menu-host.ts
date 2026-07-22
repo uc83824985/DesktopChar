@@ -205,9 +205,16 @@ function sectionSignature(sections: ReturnType<ImmediateUiRegistry['resolve']>):
 
 function clampToViewport(menu: HTMLElement): void {
   const margin = 8;
-  const bounds = menu.getBoundingClientRect();
-  const left = Math.max(margin, Math.min(bounds.left, window.innerWidth - bounds.width - margin));
-  const top = Math.max(margin, Math.min(bounds.top, window.innerHeight - bounds.height - margin));
+  // getBoundingClientRect() includes the menu's entry transform. Measuring
+  // during the scale/translate animation and measuring again after an async
+  // checkbox refresh made the menu appear to grow and permanently re-clamp
+  // upward. Offset geometry is the stable, untransformed fixed-position box.
+  const parsedLeft = Number.parseFloat(menu.style.left);
+  const parsedTop = Number.parseFloat(menu.style.top);
+  const requestedLeft = Number.isFinite(parsedLeft) ? parsedLeft : menu.offsetLeft;
+  const requestedTop = Number.isFinite(parsedTop) ? parsedTop : menu.offsetTop;
+  const left = Math.max(margin, Math.min(requestedLeft, window.innerWidth - menu.offsetWidth - margin));
+  const top = Math.max(margin, Math.min(requestedTop, window.innerHeight - menu.offsetHeight - margin));
   menu.style.left = `${left}px`;
   menu.style.top = `${top}px`;
 }

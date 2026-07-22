@@ -101,14 +101,20 @@ try {
     || !menu.headings.includes('桌面窗口')) {
     throw new Error(`Immediate context-menu registrations are incomplete: ${JSON.stringify(menu)}`);
   }
+  await page.waitForTimeout(120);
+  const stableMenuOrigin = await contextMenuOrigin(page);
   await page.locator('[data-item-id="character-mcp-enabled"]').click();
   await page.locator('body[data-context-menu="open"][data-character-mcp-service="disabled"] [data-item-id="character-mcp-enabled"][aria-checked="false"]').waitFor({ timeout: 5_000 });
+  assertContextMenuOrigin(await contextMenuOrigin(page), stableMenuOrigin, 'disabling character MCP');
   await page.locator('[data-item-id="character-mcp-enabled"]').click();
   await page.locator('body[data-context-menu="open"][data-character-mcp-service="ready"] [data-item-id="character-mcp-enabled"][aria-checked="true"]').waitFor({ timeout: 5_000 });
+  assertContextMenuOrigin(await contextMenuOrigin(page), stableMenuOrigin, 'enabling character MCP');
   await page.locator('[data-item-id="tts-mcp-enabled"]').click();
   await page.locator('body[data-context-menu="open"][data-tts-mcp-service="disabled"] [data-item-id="tts-mcp-enabled"][aria-checked="false"]').waitFor({ timeout: 5_000 });
+  assertContextMenuOrigin(await contextMenuOrigin(page), stableMenuOrigin, 'disabling TTS MCP');
   await page.locator('[data-item-id="tts-mcp-enabled"]').click();
   await page.locator('body[data-context-menu="open"][data-tts-mcp-service="ready"] [data-item-id="tts-mcp-enabled"][aria-checked="true"]').waitFor({ timeout: 5_000 });
+  assertContextMenuOrigin(await contextMenuOrigin(page), stableMenuOrigin, 'enabling TTS MCP');
   await page.locator('[data-item-id="mcp-connection-test"]').click();
   await page.locator('body[data-context-menu="closed"][data-tts-mcp-test="passed"][data-character-mcp-test="passed"][data-speech-bubble="complete"]').waitFor({ timeout: 5_000 });
   const mcpTestBubble = await page.locator('#speech-bubble').textContent();
@@ -312,6 +318,19 @@ async function chatBubbleLayout(page) {
       textAlign: style.textAlign,
     };
   });
+}
+
+async function contextMenuOrigin(page) {
+  return page.locator('.scene-context-menu').evaluate(menu => {
+    const rect = menu.getBoundingClientRect();
+    return { x: rect.x, y: rect.y };
+  });
+}
+
+function assertContextMenuOrigin(actual, expected, phase, epsilon = 0.5) {
+  if (Math.abs(actual.x - expected.x) > epsilon || Math.abs(actual.y - expected.y) > epsilon) {
+    throw new Error(`Context menu moved while ${phase}: ${JSON.stringify({ expected, actual })}`);
+  }
 }
 
 function sameRect(left, right, epsilon = 0.5) {
