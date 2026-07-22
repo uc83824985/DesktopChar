@@ -27,6 +27,8 @@ export interface KnownToneAcceptanceOptions {
   levelTolerance?: number;
   silenceLimit?: number;
   lipSyncGain?: number;
+  /** Delay after a pulse end before a visually smoothed track must be silent. */
+  silenceSettleMs?: number;
 }
 
 export interface KnownToneAcceptanceResult {
@@ -103,6 +105,7 @@ export function evaluateKnownToneAcceptance(
   const levelTolerance = positive(options.levelTolerance ?? 0.12, 'levelTolerance');
   const silenceLimit = positive(options.silenceLimit ?? 0.08, 'silenceLimit');
   const lipSyncGain = positive(options.lipSyncGain ?? 1, 'lipSyncGain');
+  const silenceSettleMs = nonNegative(options.silenceSettleMs ?? 50, 'silenceSettleMs');
   const ordered = [...samples].sort((left, right) => left.atMs - right.atMs);
   const issues: string[] = [];
   const observedToneLevels: number[] = [];
@@ -132,9 +135,13 @@ export function evaluateKnownToneAcceptance(
     if (endError > timingToleranceMs) issues.push(`tone ${index + 1} ends ${endError.toFixed(1)} ms away from schedule`);
   }
 
-  const silenceWindows = [
-    [50, 150], [450, 550], [900, 1_000], [1_450, 1_550],
-  ] as const;
+  const silenceWindows: Array<readonly [number, number]> = [[50, 150]];
+  for (const [index, pulse] of KNOWN_TONE_PULSES.entries()) {
+    const nextStartMs = KNOWN_TONE_PULSES[index + 1]?.startMs ?? KNOWN_TONE_DURATION_MS;
+    const startMs = pulse.endMs + silenceSettleMs;
+    const endMs = nextStartMs - 25;
+    if (startMs <= endMs) silenceWindows.push([startMs, endMs]);
+  }
   const silenceValues = silenceWindows.flatMap(([startMs, endMs]) => (
     valuesIn(ordered, startMs, endMs).map(sample => sample.value)
   ));

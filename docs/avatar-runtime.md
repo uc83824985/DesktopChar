@@ -306,7 +306,11 @@ Expression
 Base
 ```
 
-其中 `ParamMouthOpenY` 默认由 Mouth 独占。播放器上报未经增益的真实 `playback.level`；Runtime 通过角色级 `LipSyncProfile.gain` 将同一电平映射到模型开合并钳制到 `0..1`。当前 Mao 的 `DesktopChar.character.json` 将增益校准为 `2.5`；它不能修改扬声器音量或播放器事实事件。
+其中 `ParamMouthOpenY` 默认由 Mouth 独占。播放器上报未经增益、带实际播放位置的 `playback.level`；Runtime 内部的 `LipSyncEnvelope` 先按角色级 `LipSyncProfile.gain` 映射到 `0..1`，再使用快速 attack、短峰值保持和较慢 release 生成最终嘴部参数。当前 Mao 的校准值为 `gain=2.5`、`attackMs=30`、`releaseMs=100`、`peakHoldMs=25`。
+
+`attackMs` 和 `releaseMs` 定义为完成 90% 响应所需时间，而不是额外延迟：输入上升时嘴部在首个 25ms 电平周期内明显张开，输入下降时跨多个播放时点逐步闭合。`peakHoldMs` 只保存最近短峰值，防止本地逐字提示音退化成单帧开合。包络以 `playback.positionMs` 计算，不依赖 IPC/事件抵达的墙钟间隔，因此调度抖动不会改变同一音频时间线的口型曲线。
+
+该平滑属于 Runtime 状态，不修改声音、不修改 Player 的原始电平，也不允许 Renderer 二次平滑。将三个时间参数设为 `0` 可恢复直接电平映射，主要用于诊断对照。未来具备 viseme 数据时，viseme 可增加 MouthForm 轨道，但电平包络仍作为所有 TTS Provider 的通用回退。
 
 眼部跟随是 Runtime 持有的持续模式：模型具备 gaze 能力时默认开启，`user.look-target-changed` 只更新目标；在显式收到 `user.gaze-follow-disabled` 前，提交计划、中断、说话和原生 motion 都不能清除 gaze 层，Gaze 最终拥有 `ParamAngleX/Y` 与 `ParamEyeBallX/Y`。关闭后才释放这些参数给原生 motion/idle。
 
@@ -409,7 +413,7 @@ interrupt(...)
 - Mixer 按 Base、Expression、Gesture、Gaze、Mouth 顺序合成并过滤模型不支持的参数；
 - Gaze 是可显式进入/退出的持续模式，默认开启且跨 plan、speech、motion 和 interrupt 保持；
 - 角色级 GazeProfile 已支持四个头眼轴、正负方向独立端点/曲线以及中心死区；Mao 的纵向配置已按资源非对称表现校准；
-- Runtime 支持 TTS 并行就绪、sequence 顺序播放、单轨 Player、动作 cue、amplitude mouth、中断和错误回流；
+- Runtime 支持 TTS 并行就绪、sequence 顺序播放、单轨 Player、动作 cue、带非对称包络的 amplitude mouth、中断和错误回流；
 - Fake Effect Executor 覆盖了 TTS、Player 和 Renderer 的端到端行为。
 - Live2D 前台已使用真实 Mao 模型验证帧末参数应用、PCM 口型、原生 `TapBody` motion 和持续眼部跟随。
 

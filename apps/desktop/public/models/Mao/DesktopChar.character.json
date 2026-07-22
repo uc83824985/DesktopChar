@@ -30,5 +30,10 @@
       "deadZone": 0.01
     }
   },
-  "lipSyncProfile": { "gain": 2.5 }
+  "lipSyncProfile": {
+    "gain": 2.5,
+    "attackMs": 30,
+    "releaseMs": 100,
+    "peakHoldMs": 25
+  }
 }

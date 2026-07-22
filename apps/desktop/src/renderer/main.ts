@@ -2,7 +2,8 @@ import { ShaderSystem } from '@pixi/core';
 import { install as installCspShaderCompiler } from '@pixi/unsafe-eval';
 import { Application, Renderer, Ticker } from 'pixi.js';
 import { Live2DModel, MotionPriority } from 'pixi-live2d-display/cubism4';
-import type { AvatarEvent, RuntimeEffect, SpeechBubbleMode } from '../../../../packages/contracts/src/index.ts';
+import { DEFAULT_LIP_SYNC_PROFILE } from '../../../../packages/contracts/src/index.ts';
+import type { AvatarEvent, LipSyncProfile, RuntimeEffect, SpeechBubbleMode } from '../../../../packages/contracts/src/index.ts';
 import type { AmplitudeSample } from '../../../../packages/contracts/src/index.ts';
 import {
   KNOWN_TONE_PULSES,
@@ -85,7 +86,7 @@ interface ToneSyncTrace extends KnownToneResponseTrace {
 }
 interface ToneAcceptanceRun {
   segmentId: string;
-  lipSyncGain: number;
+  lipSyncProfile: LipSyncProfile;
   playerLevels: AmplitudeSample[];
   modelLevels: AmplitudeSample[];
   traces: ToneSyncTrace[];
@@ -149,7 +150,7 @@ let knownToneAvailable = false;
 let mcpServicesState: McpServicesState | undefined;
 let ttsConfigSignature = '';
 const reloadableTtsAdapter = new ReloadableTtsAdapter();
-let currentLipSyncGain = 1;
+let currentLipSyncProfile: LipSyncProfile = { ...DEFAULT_LIP_SYNC_PROFILE };
 let desktopBounds: { x: number; y: number; width: number; height: number } | undefined;
 let pointerPresentation: PointerPresentation | undefined;
 let pixelPicker: AsyncPixelCoveragePicker | undefined;
@@ -270,7 +271,7 @@ try {
   mcpServicesState = shellState?.mcpServices;
   const ttsOperational = desktopShell ? isOperationalMcpService(mcpServicesState?.tts) : true;
   reloadableTtsAdapter.configure(tts.adapter, shellState?.tts ?? browserTtsConfig(), ttsOperational);
-  currentLipSyncGain = characterConfig.lipSyncProfile.gain;
+  currentLipSyncProfile = characterConfig.lipSyncProfile;
   knownToneAvailable = tts.supportsKnownToneFixture && ttsOperational;
   if (!knownToneAvailable) tone.title = '先验铃声验收仅由 local-tts-mcp 参考服务提供';
   ttsEffects = new TtsRuntimeEffectHandler(reloadableTtsAdapter);
@@ -295,7 +296,7 @@ try {
     } }),
     effects: { execute },
     gazeProfile: characterConfig.gazeProfile,
-    lipSyncProfile: { gain: currentLipSyncGain },
+    lipSyncProfile: characterConfig.lipSyncProfile,
   });
   runtime.dispatch({ type: 'renderer.ready', capabilities: {
     emotions: characterConfig.allowedEmotions,
@@ -413,7 +414,7 @@ function submitToneAcceptance(): void {
   const segmentId = `known-tone-${suffix}`;
   knownToneSegments.add(segmentId);
   toneAcceptance = {
-    segmentId, lipSyncGain: currentLipSyncGain, playerLevels: [], modelLevels: [], traces: [],
+    segmentId, lipSyncProfile: { ...currentLipSyncProfile }, playerLevels: [], modelLevels: [], traces: [],
     lastLoggedBucket: -1, lastLoggedPhase: '',
   };
   pendingToneTraces.length = 0;
@@ -574,6 +575,7 @@ function applyMcpServicesState(next: McpServicesState): void {
 }
 
 function isOperationalMcpService(service: McpServiceState | undefined = mcpServicesState?.tts): boolean {
+  if (!desktopShell) return true;
   return service?.desiredEnabled === true
     && (service.phase === 'ready' || service.phase === 'degraded' || service.phase === 'reload-pending');
 }
@@ -1082,7 +1084,10 @@ function applyRuntimeFrame(): void {
 function finishToneAcceptance(active: ToneAcceptanceRun): void {
   if (toneAcceptance !== active) return;
   const player = evaluateKnownToneAcceptance(active.playerLevels);
-  const model = evaluateKnownToneAcceptance(active.modelLevels, { lipSyncGain: active.lipSyncGain });
+  const model = evaluateKnownToneAcceptance(active.modelLevels, {
+    lipSyncGain: active.lipSyncProfile.gain,
+    silenceSettleMs: active.lipSyncProfile.peakHoldMs + 25 + active.lipSyncProfile.releaseMs * 1.2,
+  });
   const response = evaluateKnownToneResponseTiming(active.traces);
   const passed = player.passed && model.passed && response.passed;
   const metrics = { passed, player, model, response };

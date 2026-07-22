@@ -166,7 +166,20 @@ export interface GazeProfile {
 
 export interface LipSyncProfile {
   gain: number;
+  /** Time for the mouth envelope to complete 90% of an opening transition. */
+  attackMs: number;
+  /** Time for the mouth envelope to complete 90% of a closing transition. */
+  releaseMs: number;
+  /** Keeps a recent peak briefly so short audio pulses are not reduced to one frame. */
+  peakHoldMs: number;
 }
+
+export const DEFAULT_LIP_SYNC_PROFILE: Readonly<LipSyncProfile> = Object.freeze({
+  gain: 1,
+  attackMs: 30,
+  releaseMs: 100,
+  peakHoldMs: 25,
+});
 
 export interface AvatarSnapshot {
   state: AvatarState;

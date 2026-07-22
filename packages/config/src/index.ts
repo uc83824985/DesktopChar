@@ -1,4 +1,10 @@
-import type { AvatarAction, Emotion, GazeProfile, LipSyncProfile } from '../../contracts/src/index.ts';
+import {
+  DEFAULT_LIP_SYNC_PROFILE,
+  type AvatarAction,
+  type Emotion,
+  type GazeProfile,
+  type LipSyncProfile,
+} from '../../contracts/src/index.ts';
 
 export interface CharacterConfig {
   id: string;
@@ -90,8 +96,13 @@ function gazeDirection(value: unknown, label: string): GazeProfile['headX']['neg
 
 function lipSyncProfile(value: unknown): LipSyncProfile {
   const profile = record(value, 'Character profile lipSyncProfile');
-  assertKnownKeys(profile, ['gain'], 'Character profile lipSyncProfile');
-  return { gain: positiveNumber(profile.gain, 'lipSyncProfile.gain') };
+  assertKnownKeys(profile, ['gain', 'attackMs', 'releaseMs', 'peakHoldMs'], 'Character profile lipSyncProfile');
+  return {
+    gain: positiveNumber(profile.gain, 'lipSyncProfile.gain'),
+    attackMs: optionalNonNegativeNumber(profile.attackMs, DEFAULT_LIP_SYNC_PROFILE.attackMs, 'lipSyncProfile.attackMs'),
+    releaseMs: optionalNonNegativeNumber(profile.releaseMs, DEFAULT_LIP_SYNC_PROFILE.releaseMs, 'lipSyncProfile.releaseMs'),
+    peakHoldMs: optionalNonNegativeNumber(profile.peakHoldMs, DEFAULT_LIP_SYNC_PROFILE.peakHoldMs, 'lipSyncProfile.peakHoldMs'),
+  };
 }
 
 function resolveProfileAsset(profileUrl: string, reference: string): string {
@@ -144,6 +155,10 @@ function nonNegativeNumber(value: unknown, label: string): number {
   const result = finiteNumber(value, label);
   if (result < 0) throw new TypeError(`${label} must be non-negative`);
   return result;
+}
+
+function optionalNonNegativeNumber(value: unknown, fallback: number, label: string): number {
+  return value === undefined ? fallback : nonNegativeNumber(value, label);
 }
 
 function assertKnownKeys(value: Record<string, unknown>, allowed: string[], label: string): void {

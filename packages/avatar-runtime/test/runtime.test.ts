@@ -28,7 +28,7 @@ function createRuntimeWithLipSyncGain(effects: ControlledEffects, gain: number):
     planner: new DefaultAvatarPlanner(),
     mixer: new ParameterMixer({ ranges: { ParamMouthOpenY: { min: 0, max: 1 } } }),
     effects,
-    lipSyncProfile: { gain },
+    lipSyncProfile: { gain, attackMs: 0, releaseMs: 0, peakHoldMs: 0 },
   });
   runtime.dispatch({ type: 'renderer.ready', capabilities });
   return runtime;
@@ -144,7 +144,10 @@ test('playback clock drives timeline, motion, and amplitude mouth frames', () =>
   effects.progress(200);
   assert.deepEqual(effects.motions, ['nod-0']);
   assert.equal(runtime.getSnapshot().gesture.action, 'nod');
-  assert.equal(effects.frames.at(-1)?.ParamMouthOpenY, 0.8);
+  const openingValue = effects.frames.at(-1)?.ParamMouthOpenY ?? 0;
+  assert.ok(openingValue > 0.1 && openingValue < 0.8);
+  effects.progress(230);
+  assert.ok((effects.frames.at(-1)?.ParamMouthOpenY ?? 0) > openingValue);
 });
 
 test('stream playback levels drive mouth frames while buffering remains a player fact', () => {

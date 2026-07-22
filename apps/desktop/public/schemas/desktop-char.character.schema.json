@@ -51,7 +51,12 @@
       "type": "object",
       "additionalProperties": false,
       "required": ["gain"],
-      "properties": { "gain": { "type": "number", "exclusiveMinimum": 0 } }
+      "properties": {
+        "gain": { "type": "number", "exclusiveMinimum": 0 },
+        "attackMs": { "type": "number", "minimum": 0 },
+        "releaseMs": { "type": "number", "minimum": 0 },
+        "peakHoldMs": { "type": "number", "minimum": 0 }
+      }
     }
   },
   "$defs": {

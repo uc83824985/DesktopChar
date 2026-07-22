@@ -1,15 +1,16 @@
-import type {
-  AmplitudeSample,
-  AudioSource,
-  AvatarEvent,
-  AvatarSnapshot,
-  GazeProfile,
-  LipSyncProfile,
-  ParameterValue,
-  PerformancePlan,
-  PerformanceSegment,
-  RuntimeEffect,
-  SpeechBubbleState,
+import {
+  DEFAULT_LIP_SYNC_PROFILE,
+  type AmplitudeSample,
+  type AudioSource,
+  type AvatarEvent,
+  type AvatarSnapshot,
+  type GazeProfile,
+  type LipSyncProfile,
+  type ParameterValue,
+  type PerformancePlan,
+  type PerformanceSegment,
+  type RuntimeEffect,
+  type SpeechBubbleState,
 } from '../../contracts/src/index.ts';
 import type { AvatarPlanner, RuntimePolicy } from './planner.ts';
 import type { ParameterLayers } from './mixer.ts';
@@ -17,6 +18,7 @@ import { ParameterMixer } from './mixer.ts';
 import { createInitialSnapshot, reduceAvatarSnapshot } from './reducer.ts';
 import { PerformanceTimeline } from './timeline.ts';
 import { DEFAULT_GAZE_PROFILE, mapGazeTarget, validateGazeProfile } from './gaze-profile.ts';
+import { LipSyncEnvelope, validateLipSyncProfile } from './lip-sync-envelope.ts';
 import {
   DEFAULT_SPEECH_BUBBLE_DISMISS_DELAY_MS,
   estimateTextFallbackDurationMs,
@@ -50,15 +52,15 @@ export class AvatarRuntime {
   private readonly options: AvatarRuntimeOptions;
   private readonly gazeProfile: GazeProfile;
   private readonly lipSyncProfile: LipSyncProfile;
+  private readonly lipSyncEnvelope: LipSyncEnvelope;
 
   constructor(options: AvatarRuntimeOptions) {
     this.options = options;
     this.gazeProfile = options.gazeProfile ?? DEFAULT_GAZE_PROFILE;
     validateGazeProfile(this.gazeProfile);
-    this.lipSyncProfile = options.lipSyncProfile ?? { gain: 1 };
-    if (!Number.isFinite(this.lipSyncProfile.gain) || this.lipSyncProfile.gain <= 0) {
-      throw new RangeError('lipSyncProfile.gain must be positive and finite');
-    }
+    this.lipSyncProfile = options.lipSyncProfile ?? { ...DEFAULT_LIP_SYNC_PROFILE };
+    validateLipSyncProfile(this.lipSyncProfile);
+    this.lipSyncEnvelope = new LipSyncEnvelope(this.lipSyncProfile);
   }
 
   getSnapshot(): AvatarSnapshot {
@@ -137,6 +139,7 @@ export class AvatarRuntime {
       this.failedSequences.add(acceptedEvent.sequence);
     }
     else if (acceptedEvent.type === 'playback.started') {
+      this.lipSyncEnvelope.reset(acceptedEvent.positionMs);
       const segment = this.segmentById(acceptedEvent.segmentId);
       if (segment) {
         this.timeline = new PerformanceTimeline(segment);
@@ -150,7 +153,7 @@ export class AvatarRuntime {
     }
     else if (acceptedEvent.type === 'playback.level') {
       if (this.snapshot.playback.status === 'paused') return;
-      this.applyMouthValue(acceptedEvent.value);
+      this.applyMouthValue(acceptedEvent.value, acceptedEvent.positionMs);
     }
     else if (acceptedEvent.type === 'playback.paused') {
       this.timeline?.pause();
@@ -162,6 +165,7 @@ export class AvatarRuntime {
       this.timeline?.cancel();
       this.timeline = null;
       this.currentSource = null;
+      this.lipSyncEnvelope.reset(acceptedEvent.positionMs);
       this.layers.mouth = neutralMouthLayer();
       this.emitFrame();
       this.nextSegmentIndex++;
@@ -170,6 +174,7 @@ export class AvatarRuntime {
       this.timeline?.cancel();
       this.timeline = null;
       this.currentSource = null;
+      this.lipSyncEnvelope.reset();
       this.layers.mouth = neutralMouthLayer();
       this.emitFrame();
       this.nextSegmentIndex++;
@@ -182,6 +187,7 @@ export class AvatarRuntime {
       this.textFallback = null;
       this.readyAudio.clear();
       this.failedSequences.clear();
+      this.lipSyncEnvelope.reset();
       this.layers = performanceLayersWithGaze(this.layers.gaze);
       this.emitFrame();
     }
@@ -331,12 +337,12 @@ export class AvatarRuntime {
 
   private applyMouth(positionMs: number): void {
     const mouthOpen = sampleAmplitude(this.currentSource?.amplitude, positionMs);
-    this.applyMouthValue(mouthOpen);
+    this.applyMouthValue(mouthOpen, positionMs);
   }
 
-  private applyMouthValue(value: number): void {
+  private applyMouthValue(value: number, positionMs: number): void {
     this.layers.mouth = {
-      ParamMouthOpenY: { value: Math.max(0, Math.min(1, value * this.lipSyncProfile.gain)) },
+      ParamMouthOpenY: { value: this.lipSyncEnvelope.update(value, positionMs) },
     };
     this.emitFrame();
   }

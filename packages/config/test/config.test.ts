@@ -10,6 +10,10 @@ test('Mao asset-side profile compensates its authored gaze and lip response', as
   assert.equal(profile.gazeProfile.headY.negative.limit, -20);
   assert.equal(profile.gazeProfile.headY.positive.limit, 30);
   assert.equal(profile.lipSyncProfile.gain, 2.5);
+  assert.deepEqual(
+    { attackMs: profile.lipSyncProfile.attackMs, releaseMs: profile.lipSyncProfile.releaseMs, peakHoldMs: profile.lipSyncProfile.peakHoldMs },
+    { attackMs: 30, releaseMs: 100, peakHoldMs: 25 },
+  );
 });
 
 test('character profile rejects path traversal and unregistered capabilities', () => {
@@ -30,6 +34,15 @@ test('character profile rejects path traversal and unregistered capabilities', (
   assert.throws(() => parseCharacterConfig({ ...valid, model: '../secret' }), /relative/);
   assert.throws(() => parseCharacterConfig({ ...valid, allowedActions: ['execute-script'] }), /unsupported/);
   assert.throws(() => parseCharacterConfig({ ...valid, lipSynProfile: { gain: 2 } }), /unknown field/);
+  const defaults = parseCharacterConfig(valid);
+  assert.deepEqual(
+    { attackMs: defaults.lipSyncProfile.attackMs, releaseMs: defaults.lipSyncProfile.releaseMs, peakHoldMs: defaults.lipSyncProfile.peakHoldMs },
+    { attackMs: 30, releaseMs: 100, peakHoldMs: 25 },
+  );
+  assert.throws(
+    () => parseCharacterConfig({ ...valid, lipSyncProfile: { gain: 1, releaseMs: -1 } }),
+    /releaseMs must be non-negative/,
+  );
 });
 
 test('loads local MCP defaults and remote MCP binding variables', () => {

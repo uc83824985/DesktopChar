@@ -62,11 +62,27 @@ models/Mao/
       "deadZone": 0.01
     }
   },
-  "lipSyncProfile": { "gain": 2.5 }
+  "lipSyncProfile": {
+    "gain": 2.5,
+    "attackMs": 30,
+    "releaseMs": 100,
+    "peakHoldMs": 25
+  }
 }
 ```
 
 原先 `packages/config` 中硬编码的 `MAO_CHARACTER_CONFIG` 已迁移到该文件。`DESKTOP_CHAR_LIP_SYNC_GAIN` 也已退出常规配置入口，因为相同音频电平在不同模型上的嘴部表现是资产校准结果，而不是全局音频服务参数。
+
+`LipSyncProfile` 的字段所有权如下：
+
+| 字段 | 含义 | 当前 Mao 值 |
+| --- | --- | ---: |
+| `gain` | 原始播放电平到模型开口幅度的倍率 | 2.5 |
+| `attackMs` | 张嘴完成 90% 响应所需时间 | 30 |
+| `releaseMs` | 闭嘴完成 90% 响应所需时间 | 100 |
+| `peakHoldMs` | 短电平峰值的保持时间 | 25 |
+
+三个时间字段允许为 `0`，用于关闭对应过渡并进行直接电平映射诊断。旧角色 Profile 若只声明 `gain`，解析器会补全上述通用时间默认值；未知字段、负时间和非正 gain 会拒绝加载。
 
 ## 应用配置 JSON
 
