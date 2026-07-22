@@ -24,6 +24,8 @@ TTS MCP / Response Planner
 
 Electron 壳层在领域链路之外：main 独占原生窗口位置、包围盒、置顶和鼠标穿透；preload 只提供受控 IPC；renderer 将点击转换为 Runtime Event，将拖动转换为窗口命令。透明悬浮窗口的交互取舍见 [透明桌面悬浮壳设计](desktop-shell.md)。
 
+应用接入层同时包含 TTS MCP Client 与角色 MCP Server。Electron main 的服务控制器独占两端连接、配置 revision、热重载与重连状态；角色 MCP 和兼容 Agent HTTP 最终只向 renderer 发送相同的白名单 `PerformancePlan / interrupt` 命令。完整生命周期与工具见 [MCP 服务生命周期与角色控制接口](mcp-services.md)。
+
 ## 运行链路
 
 1. 上游提交由若干 `PerformanceSegment` 组成的表演计划。
@@ -109,6 +111,6 @@ config -> contracts
 3. 已完成流式优先 TTS Adapter、PCM 播放时钟、电平口型和先验提示音验收。
 4. 已完成角色级 GazeProfile，并对 Mao 的纵向非对称表现做运行时校准。
 5. 已完成 Electron 透明窗口、安全 preload、透明区穿透、角色点击/拖动和 bounds 同步。
-6. 后续接入真实 Agent/语音输入与可用的 TTS MCP/HTTP 服务；这些模块仍只通过 Event/Effect 端口连接。
+6. 已接入可动态启停的 TTS MCP Client、角色 MCP Server 与兼容 Agent HTTP；后续 ASR/真实 Agent 仍只通过 Event/Effect 端口连接。
 
-外部 Agent 的第一版应用装配已使用 `127.0.0.1` HTTP 控制面接收完整 `PerformancePlan` 和中断请求，由 Electron main 转为白名单 IPC，再由 renderer 提交 Runtime；Agent 通过 Runtime snapshot 判断实际播放完成。接口和真实 TTS MCP transport 注入边界见 [外部 Agent 本地 HTTP 接入指南](external-agent-http.md)。
+外部 Agent 可通过角色 MCP 或兼容的 `127.0.0.1` HTTP 控制面发送完整 `PerformancePlan` 和中断请求，由 Electron main 转为白名单 IPC，再由 renderer 提交 Runtime；Agent 通过 Runtime snapshot 判断实际播放完成。角色 MCP 工具与动态服务管理见 [MCP 服务生命周期](mcp-services.md)，HTTP 请求结构见 [外部 Agent 本地 HTTP 接入指南](external-agent-http.md)。

@@ -19,10 +19,11 @@
 角色级视线校准及资源修改边界见 [GazeProfile 工作流](docs/gaze-calibration.md)；透明区穿透、角色点击/拖动和窗口包围盒同步见 [透明桌面悬浮壳](docs/desktop-shell.md)。
 动态场景 UI 使用与 Scene Frame 同 revision 的框架无关 Surface，参考项目取舍和引擎/应用边界见 [桌面 UI 引擎层设计](docs/desktop-ui-engine.md)。
 角色语音可通过应用层聊天气泡以完整、渐进追加或 KTV 高亮方式投影，契约和 Agent 示例见 [角色聊天气泡](docs/speech-bubble.md)。
+TTS MCP Client 与角色自身 MCP Server 均支持右键动态启停、JSON 配置热重载、指数退避重连和官方 Client 连接测试，配置及角色工具见 [MCP 服务生命周期与角色控制接口](docs/mcp-services.md)。
 
 可独立运行的样例见 [Local TTS MCP reference service](local-tts-mcp/README.md)；Adapter、流式 MCP/HTTP 绑定和真实服务接入契约见 [TTS Adapter 文档](docs/tts-adapter.md)；MCP 侧新增语速、sample 时间线和可选生成事件时参照 [Qwen3-TTS MCP 流式扩展说明](docs/tts-mcp-streaming-extension.md)；Qwen3-TTS 当前公开推理接口的流式能力核对见 [Qwen3-TTS 阅读记录](docs/references/qwen3-tts.md)。
 
-外部 Agent 可通过 Electron 随附的 loopback HTTP 控制面提交完整表演计划、发起中断并轮询 Runtime 状态；协议、PowerShell 示例与 TTS MCP 注入边界见 [外部 Agent 本地 HTTP 接入指南](docs/external-agent-http.md)。
+外部 Agent 可通过角色 MCP 或兼容的 loopback HTTP 控制面提交完整表演计划、发起中断并读取 Runtime 状态；HTTP 协议与 PowerShell 示例见 [外部 Agent 本地 HTTP 接入指南](docs/external-agent-http.md)。
 
 ## 一键前台测试
 

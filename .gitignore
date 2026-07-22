@@ -9,6 +9,7 @@ coverage/
 .env
 .env.*
 !.env.example
+desktop-char.config.json
 
 # Editors and operating systems
 .idea/

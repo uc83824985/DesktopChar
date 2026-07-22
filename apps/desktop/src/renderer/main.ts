@@ -26,10 +26,24 @@ import {
   ImmediateUiRegistry,
   formatChatBubbleFragment,
 } from '../../../../packages/scene-ui-dom/src/index.ts';
-import type { McpCallOptions, McpCallToolResult, McpClientPort, TtsAdapter } from '../../../../packages/tts-mcp-adapter/src/index.ts';
+import type {
+  McpCallOptions,
+  McpCallToolResult,
+  McpClientPort,
+  TtsAdapter,
+  TtsCapabilities,
+  TtsHealthReport,
+  TtsSynthesisRequest,
+} from '../../../../packages/tts-mcp-adapter/src/index.ts';
 import { JsonConsoleTtsLogger, McpTtsAdapter, TtsRuntimeEffectHandler } from '../../../../packages/tts-mcp-adapter/src/index.ts';
 import './style.css';
-import type { DesktopTtsConfig, PointerPresentation } from '../preload/desktop-api.d.ts';
+import type {
+  DesktopTtsConfig,
+  McpServiceId,
+  McpServiceState,
+  McpServicesState,
+  PointerPresentation,
+} from '../preload/desktop-api.d.ts';
 
 installCspShaderCompiler({ ShaderSystem });
 Live2DModel.registerTicker(Ticker);
@@ -73,6 +87,52 @@ interface ToneAcceptanceRun {
   lastLoggedBucket: number;
   lastLoggedPhase: string;
 }
+
+class ReloadableTtsAdapter implements TtsAdapter {
+  private current: { adapter: TtsAdapter; defaults: Pick<TtsSynthesisRequest, 'voice' | 'format'> } | undefined;
+  private enabled = false;
+
+  configure(adapter: TtsAdapter, config: DesktopTtsConfig, enabled: boolean): void {
+    this.current = {
+      adapter,
+      defaults: {
+        ...(config.voice ? { voice: config.voice } : {}),
+        ...(config.format ? { format: config.format } : {}),
+      },
+    };
+    this.enabled = enabled;
+  }
+
+  setEnabled(enabled: boolean): void {
+    this.enabled = enabled;
+  }
+
+  async prepare(request: TtsSynthesisRequest) {
+    const current = this.requireCurrent();
+    return await current.adapter.prepare({ ...request, ...current.defaults });
+  }
+
+  async cancel(requestId: string): Promise<void> {
+    await this.requireCurrent().adapter.cancel(requestId);
+  }
+
+  async capabilities(): Promise<TtsCapabilities> {
+    return await this.requireCurrent().adapter.capabilities();
+  }
+
+  health(): Promise<TtsHealthReport> {
+    if (!this.current || !this.enabled) return Promise.resolve({
+      status: 'unavailable', provider: 'desktop-char-mcp-services', latencyMs: 0, details: 'TTS MCP service is disabled',
+    });
+    return this.current.adapter.health();
+  }
+
+  private requireCurrent() {
+    if (!this.current || !this.enabled) throw new Error('TTS MCP service is not ready');
+    return this.current;
+  }
+}
+
 let model: Live2DModel | undefined;
 let runtime: AvatarRuntime | undefined;
 let playbackTimer: ReturnType<typeof setInterval> | undefined;
@@ -81,6 +141,9 @@ let motionRequestToken = 0;
 let toneAcceptance: ToneAcceptanceRun | null = null;
 let applyingToneTrace: ToneSyncTrace | null = null;
 let knownToneAvailable = false;
+let mcpServicesState: McpServicesState | undefined;
+let ttsConfigSignature = '';
+const reloadableTtsAdapter = new ReloadableTtsAdapter();
 let currentLipSyncGain = MAO_CHARACTER_CONFIG.lipSyncProfile.gain;
 let desktopBounds: { x: number; y: number; width: number; height: number } | undefined;
 let pointerPresentation: PointerPresentation | undefined;
@@ -192,13 +255,13 @@ function handleTonePlaybackEvent(event: AvatarEvent): void {
 try {
   const shellState = desktopShell ? await desktopShell.ready() : undefined;
   const tts = createTtsComposition(shellState?.tts);
+  mcpServicesState = shellState?.mcpServices;
+  const ttsOperational = desktopShell ? isOperationalMcpService(mcpServicesState?.tts) : true;
+  reloadableTtsAdapter.configure(tts.adapter, shellState?.tts ?? browserTtsConfig(), ttsOperational);
   currentLipSyncGain = shellState?.lipSync.gain ?? MAO_CHARACTER_CONFIG.lipSyncProfile.gain;
-  knownToneAvailable = tts.supportsKnownToneFixture;
+  knownToneAvailable = tts.supportsKnownToneFixture && ttsOperational;
   if (!knownToneAvailable) tone.title = '先验铃声验收仅由 local-tts-mcp 参考服务提供';
-  ttsEffects = new TtsRuntimeEffectHandler(tts.adapter, {
-    format: shellState?.tts.format ?? DEFAULT_TTS_CONFIG.mcp.format,
-    ...(shellState?.tts.voice ? { voice: shellState.tts.voice } : {}),
-  });
+  ttsEffects = new TtsRuntimeEffectHandler(reloadableTtsAdapter);
   audioPlayer = createRuntimeAudioPlayer(tts.openStream);
   audioPlayer.subscribe(handleTonePlaybackEvent);
   document.body.dataset.ttsMode = shellState?.tts.mode ?? 'local';
@@ -235,8 +298,9 @@ try {
     document.body.dataset.runtimeState = snapshot.state;
     document.body.dataset.gazeFollow = snapshot.gaze.active ? 'enabled' : 'disabled';
     const busy = snapshot.state !== 'idle';
-    for (const button of [speak, motion]) button.disabled = busy;
-    tone.disabled = busy || !knownToneAvailable;
+    speak.disabled = busy || !isOperationalMcpService();
+    motion.disabled = busy;
+    tone.disabled = busy || !knownToneAvailable || !isOperationalMcpService();
     reset.disabled = false;
     gaze.disabled = !(snapshot.capabilities?.supportsGaze ?? false);
     gaze.textContent = snapshot.gaze.active ? '眼部跟随：开' : '眼部跟随：关';
@@ -247,7 +311,7 @@ try {
     renderSpeechBubble(snapshot);
     contextMenuHost.refresh();
   });
-  void tts.adapter.health().then(report => {
+  void reloadableTtsAdapter.health().then(report => {
     document.body.dataset.ttsHealth = report.status;
   }).catch(error => {
     document.body.dataset.ttsHealth = 'unavailable';
@@ -291,6 +355,10 @@ try {
       data: { source: 'keyboard' },
     });
   });
+
+  desktopShell?.onMcpServicesState(state => applyMcpServicesState(state));
+  if (mcpServicesState) applyMcpServicesState(mcpServicesState);
+  void desktopShell?.getMcpServicesState().then(state => applyMcpServicesState(state));
   window.addEventListener('beforeunload', () => {
     contextMenuHost.dispose();
     for (const timer of speechBubbleDismissTimers.values()) clearTimeout(timer);
@@ -455,6 +523,44 @@ interface TtsComposition {
   adapter: TtsAdapter;
   openStream: PcmStreamResolver;
   supportsKnownToneFixture: boolean;
+}
+
+function applyMcpServicesState(next: McpServicesState): void {
+  mcpServicesState = next;
+  const config = next.tts.runtimeConfig;
+  const operational = isOperationalMcpService(next.tts);
+  if (config) {
+    const signature = JSON.stringify(config);
+    if (signature !== ttsConfigSignature) {
+      const composition = createTtsComposition(config);
+      reloadableTtsAdapter.configure(composition.adapter, config, operational);
+      ttsConfigSignature = signature;
+    }
+    else reloadableTtsAdapter.setEnabled(operational);
+    knownToneAvailable = config.mode === 'local' && operational;
+    document.body.dataset.ttsMode = config.mode;
+  }
+  else {
+    reloadableTtsAdapter.setEnabled(false);
+    knownToneAvailable = false;
+  }
+  document.body.dataset.ttsMcpService = next.tts.phase;
+  document.body.dataset.characterMcpService = next.character.phase;
+  document.body.dataset.mcpConfigRevision = String(next.config.revision);
+  document.body.dataset.mcpConfigStatus = next.config.status;
+  document.body.dataset.ttsMcpTest = next.tts.lastTest?.status ?? 'untested';
+  document.body.dataset.characterMcpTest = next.character.lastTest?.status ?? 'untested';
+  document.body.dataset.ttsHealth = operational ? next.tts.phase : 'unavailable';
+  tone.title = knownToneAvailable ? '' : '先验铃声验收仅由已连接的 local-tts-mcp 参考服务提供';
+  const busy = runtime?.getSnapshot().state !== 'idle';
+  speak.disabled = busy || !operational;
+  tone.disabled = busy || !knownToneAvailable;
+  contextMenuHost.refresh();
+}
+
+function isOperationalMcpService(service: McpServiceState | undefined = mcpServicesState?.tts): boolean {
+  return service?.desiredEnabled === true
+    && (service.phase === 'ready' || service.phase === 'degraded' || service.phase === 'reload-pending');
 }
 
 function createTtsComposition(config: DesktopTtsConfig | undefined): TtsComposition {
@@ -738,6 +844,52 @@ function registerDevelopmentUi(): void {
     },
   });
   if (desktopShell) immediateUi.register({
+    id: 'desktop.mcp-services',
+    target: '*',
+    order: 900,
+    build: () => {
+      const services = mcpServicesState;
+      if (!services) return null;
+      const runtimeIdle = runtime?.getSnapshot().state === 'idle';
+      return {
+        label: `MCP 服务 · 配置 r${services.config.revision}`,
+        items: [
+          {
+            type: 'checkbox', id: 'tts-mcp-enabled',
+            label: `TTS MCP · ${mcpPhaseLabel(services.tts)}`,
+            checked: services.tts.desiredEnabled,
+            enabled: runtimeIdle && !mcpTransitioning(services.tts),
+            invoke: enabled => setMcpServiceEnabled('tts', enabled),
+          },
+          {
+            type: 'action', id: 'tts-mcp-test',
+            label: mcpTestLabel('测试 TTS 连接', services.tts),
+            enabled: isOperationalMcpService(services.tts),
+            invoke: () => testMcpService('tts'),
+          },
+          {
+            type: 'checkbox', id: 'character-mcp-enabled',
+            label: `角色 MCP · ${mcpPhaseLabel(services.character)}`,
+            checked: services.character.desiredEnabled,
+            enabled: !mcpTransitioning(services.character),
+            invoke: enabled => setMcpServiceEnabled('character', enabled),
+          },
+          {
+            type: 'action', id: 'character-mcp-test',
+            label: mcpTestLabel('测试角色连接', services.character),
+            enabled: isOperationalMcpService(services.character),
+            invoke: () => testMcpService('character'),
+          },
+          {
+            type: 'action', id: 'mcp-config-reload',
+            label: services.config.status === 'error' ? '重新加载 MCP 配置（当前有错误）' : '重新加载 MCP 配置',
+            invoke: reloadMcpServices,
+          },
+        ],
+      };
+    },
+  });
+  if (desktopShell) immediateUi.register({
     id: 'desktop.window-settings',
     target: '*',
     order: 1_000,
@@ -750,6 +902,40 @@ function registerDevelopmentUi(): void {
       ],
     }),
   });
+}
+
+async function setMcpServiceEnabled(service: McpServiceId, enabled: boolean): Promise<void> {
+  if (!desktopShell) return;
+  applyMcpServicesState(await desktopShell.setMcpServiceEnabled(service, enabled));
+}
+
+async function testMcpService(service: McpServiceId): Promise<void> {
+  if (!desktopShell) return;
+  await desktopShell.testMcpService(service);
+  applyMcpServicesState(await desktopShell.getMcpServicesState());
+}
+
+async function reloadMcpServices(): Promise<void> {
+  if (!desktopShell) return;
+  applyMcpServicesState(await desktopShell.reloadMcpServices());
+}
+
+function mcpTransitioning(service: McpServiceState): boolean {
+  return ['starting', 'reloading', 'stopping'].includes(service.phase);
+}
+
+function mcpPhaseLabel(service: McpServiceState): string {
+  const labels: Record<McpServiceState['phase'], string> = {
+    disabled: '已禁用', starting: '启动中', ready: '已连接', degraded: '可用（契约不完整）',
+    'reload-pending': '等待空闲后重载', reloading: '重载中', reconnecting: `重连中 #${service.reconnectAttempt}`,
+    stopping: '停止中',
+  };
+  return labels[service.phase];
+}
+
+function mcpTestLabel(prefix: string, service: McpServiceState): string {
+  if (!service.lastTest) return prefix;
+  return `${prefix} · ${service.lastTest.status === 'passed' ? '通过' : '失败'}`;
 }
 
 function openAvatarContextMenu(event: MouseEvent): void {

@@ -14,6 +14,11 @@ const channels = {
   agentState: 'agent-http:state',
   mcpListTools: 'tts-mcp:list-tools',
   mcpCallTool: 'tts-mcp:call-tool',
+  mcpServicesGet: 'mcp-services:get-state',
+  mcpServicesSetEnabled: 'mcp-services:set-enabled',
+  mcpServicesReload: 'mcp-services:reload',
+  mcpServicesTest: 'mcp-services:test',
+  mcpServicesState: 'mcp-services:state',
 };
 
 contextBridge.exposeInMainWorld('desktopChar', {
@@ -28,6 +33,15 @@ contextBridge.exposeInMainWorld('desktopChar', {
   publishAgentState: state => ipcRenderer.send(channels.agentState, state),
   listTtsMcpTools: () => ipcRenderer.invoke(channels.mcpListTools),
   callTtsMcpTool: (name, args, options) => ipcRenderer.invoke(channels.mcpCallTool, name, args, options),
+  getMcpServicesState: () => ipcRenderer.invoke(channels.mcpServicesGet),
+  setMcpServiceEnabled: (service, enabled) => ipcRenderer.invoke(channels.mcpServicesSetEnabled, service, enabled),
+  reloadMcpServices: () => ipcRenderer.invoke(channels.mcpServicesReload),
+  testMcpService: service => ipcRenderer.invoke(channels.mcpServicesTest, service),
+  onMcpServicesState(callback) {
+    const listener = (_event, state) => callback(state);
+    ipcRenderer.on(channels.mcpServicesState, listener);
+    return () => ipcRenderer.removeListener(channels.mcpServicesState, listener);
+  },
   onAgentCommand(callback) {
     const listener = (_event, command) => callback(command);
     ipcRenderer.on(channels.agentCommand, listener);

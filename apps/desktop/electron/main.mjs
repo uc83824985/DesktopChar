@@ -1,6 +1,4 @@
 import { app, BrowserWindow, ipcMain, Menu, nativeImage, net, protocol, screen, Tray } from 'electron';
-import { Client } from '@modelcontextprotocol/sdk/client/index.js';
-import { StreamableHTTPClientTransport } from '@modelcontextprotocol/sdk/client/streamableHttp.js';
 import path from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 import {
@@ -16,7 +14,7 @@ import {
 import { createAgentHttpServer, parseAgentPort } from './agent-http-server.mjs';
 import { createNativeCursorRefresh } from './cursor-refresh.mjs';
 import { createNativeWindowPosition } from './native-window-position.mjs';
-import { createLocalTtsMcpService } from '../../../local-tts-mcp/service.mjs';
+import { createMcpServicesController } from './mcp-services-controller.mjs';
 import {
   nextAvatarVisibility,
   trayIconRepresentations,
@@ -43,6 +41,11 @@ const channels = {
   agentState: 'agent-http:state',
   mcpListTools: 'tts-mcp:list-tools',
   mcpCallTool: 'tts-mcp:call-tool',
+  mcpServicesGet: 'mcp-services:get-state',
+  mcpServicesSetEnabled: 'mcp-services:set-enabled',
+  mcpServicesReload: 'mcp-services:reload',
+  mcpServicesTest: 'mcp-services:test',
+  mcpServicesState: 'mcp-services:state',
 };
 
 function safeLog(...args) {
@@ -83,8 +86,6 @@ let cursorRefreshTimer;
 let dragState = null;
 let pointerPresentation = { passthrough: true, cursor: 'default' };
 let pointerPresentationApplied = false;
-let mcpSession = null;
-let localTtsService = null;
 const nativeCursorRefresh = createNativeCursorRefresh();
 const nativeWindowPosition = createNativeWindowPosition();
 const requestedDragWindowApi = process.env.DESKTOP_CHAR_DRAG_WINDOW_API ?? 'auto';
@@ -94,26 +95,37 @@ if (!['auto', 'native', 'setBounds'].includes(requestedDragWindowApi)) {
 const dragWindowApi = requestedDragWindowApi !== 'setBounds' && nativeWindowPosition.available
   ? 'native-set-window-pos'
   : 'setBounds';
-const ttsMode = process.env.DESKTOP_CHAR_TTS_MODE ?? 'local';
-if (!['local', 'mcp'].includes(ttsMode)) throw new TypeError('DESKTOP_CHAR_TTS_MODE must be local or mcp');
 const lipSyncGain = environmentNumber('DESKTOP_CHAR_LIP_SYNC_GAIN', 2.5);
-let activeTtsMcpUrl = process.env.DESKTOP_CHAR_TTS_MCP_URL ?? 'http://127.0.0.1:8766/mcp';
-const localTtsConfig = Object.freeze({
-  delayMs: environmentNumber('DESKTOP_CHAR_TTS_LOCAL_DELAY_MS', 15, true),
-  defaultRate: environmentRate('DESKTOP_CHAR_TTS_LOCAL_RATE', 1),
-  durationPerCharacterMs: environmentNumber('DESKTOP_CHAR_TTS_LOCAL_CHAR_MS', 232),
-  minimumDurationMs: environmentNumber('DESKTOP_CHAR_TTS_LOCAL_MIN_MS', 500),
-  sampleRateHz: environmentNumber('DESKTOP_CHAR_TTS_SAMPLE_RATE_HZ', 24_000),
-  channels: environmentNumber('DESKTOP_CHAR_TTS_CHANNELS', 1),
-});
 const ttsContext = {
-  requestedMode: ttsMode,
-  activeMode: 'mcp',
-  provider: ttsMode === 'local' ? 'desktop-char-local-tts' : 'external',
-  mcpTool: process.env.DESKTOP_CHAR_TTS_MCP_TOOL ?? 'tts_open_stream',
-  mcpCancelTool: process.env.DESKTOP_CHAR_TTS_MCP_CANCEL_TOOL ?? 'tts_cancel_synthesis',
-  transport: ttsMode === 'local' ? 'starting' : activeTtsMcpUrl,
+  requestedMode: 'local',
+  activeMode: 'disabled',
+  provider: 'desktop-char-local-tts',
+  mcpTool: 'tts_open_stream',
+  mcpCancelTool: 'tts_cancel_synthesis',
+  transport: null,
 };
+let lastMcpServicesLogKey = '';
+const mcpServices = createMcpServicesController({
+  env: process.env,
+  version: app.getVersion(),
+  ttsContext,
+  onCharacterCommand(command) { avatarWindow?.webContents.send(channels.agentCommand, command); },
+  onStateChanged(state) {
+    avatarWindow?.webContents.send(channels.mcpServicesState, state);
+    const key = JSON.stringify([
+      state.config.revision, state.config.status,
+      state.tts.phase, state.tts.endpoint, state.tts.reconnectAttempt, state.tts.lastError,
+      state.character.phase, state.character.endpoint, state.character.reconnectAttempt, state.character.lastError,
+    ]);
+    if (key === lastMcpServicesLogKey) return;
+    lastMcpServicesLogKey = key;
+    safeLog('[mcp-services]', {
+      config: { revision: state.config.revision, status: state.config.status, error: state.config.error },
+      tts: serviceLogFacts(state.tts),
+      character: serviceLogFacts(state.character),
+    });
+  },
+});
 const agentServer = createAgentHttpServer({
   host: '127.0.0.1',
   port: parseAgentPort(process.env.DESKTOP_CHAR_AGENT_PORT),
@@ -126,17 +138,7 @@ if (!hasSingleInstanceLock) app.quit();
 else {
   app.on('second-instance', () => setAvatarVisibility(true));
   app.whenReady().then(async () => {
-    if (ttsMode === 'local') {
-      localTtsService = createLocalTtsMcpService({
-        host: process.env.DESKTOP_CHAR_TTS_LOCAL_MCP_HOST ?? '127.0.0.1',
-        port: environmentPort('DESKTOP_CHAR_TTS_LOCAL_MCP_PORT', 0),
-        ...localTtsConfig,
-      });
-      const address = await localTtsService.listen();
-      activeTtsMcpUrl = address.mcpUrl;
-      ttsContext.transport = activeTtsMcpUrl;
-      safeLog(`[local-tts-mcp] listening on ${activeTtsMcpUrl}`);
-    }
+    await mcpServices.start();
     if (!devUrl) registerRendererProtocol();
     registerIpc();
     createAvatarWindow();
@@ -157,9 +159,7 @@ app.on('before-quit', () => {
   desktopTray?.destroy();
   desktopTray = null;
   void agentServer.close().catch(() => {});
-  void closeMcpSession()
-    .finally(() => localTtsService?.close())
-    .catch(() => {});
+  void mcpServices.close().catch(() => {});
 });
 
 function registerRendererProtocol() {
@@ -394,12 +394,12 @@ function registerIpc() {
     requireAvatarSender(event);
     if (!isAgentState(state)) return;
     agentServer.updateState(state);
+    mcpServices.updateAvatarState(state);
   });
   ipcMain.handle(channels.mcpListTools, async event => {
     requireAvatarSender(event);
-    const session = await getMcpSession();
-    const result = await session.client.listTools(undefined, { timeout: 10_000 });
-    return result.tools.map(tool => ({
+    const tools = await mcpServices.listTtsTools({ timeoutMs: 10_000 });
+    return tools.map(tool => ({
       name: tool.name,
       description: tool.description,
       inputSchema: tool.inputSchema,
@@ -408,26 +408,24 @@ function registerIpc() {
   });
   ipcMain.handle(channels.mcpCallTool, async (event, name, args, options) => {
     requireAvatarSender(event);
-    if (typeof name !== 'string' || !name.trim() || !isPlainRecord(args)) throw new TypeError('Invalid MCP tool call');
-    const session = await getMcpSession();
-    return session.client.callTool({ name, arguments: args }, undefined, { timeout: options?.timeoutMs ?? 30_000 });
+    return mcpServices.callTtsTool(name, args, { timeoutMs: options?.timeoutMs ?? 30_000 });
   });
-}
-
-async function getMcpSession() {
-  if (mcpSession) return mcpSession;
-  const transport = new StreamableHTTPClientTransport(new URL(activeTtsMcpUrl));
-  const client = new Client({ name: 'desktop-char', version: app.getVersion() });
-  await client.connect(transport);
-  mcpSession = { client, transport };
-  return mcpSession;
-}
-
-async function closeMcpSession() {
-  const session = mcpSession;
-  mcpSession = null;
-  if (!session) return;
-  await session.client.close();
+  ipcMain.handle(channels.mcpServicesGet, event => {
+    requireAvatarSender(event);
+    return mcpServices.snapshot();
+  });
+  ipcMain.handle(channels.mcpServicesSetEnabled, (event, service, enabled) => {
+    requireAvatarSender(event);
+    return mcpServices.setEnabled(service, enabled);
+  });
+  ipcMain.handle(channels.mcpServicesReload, event => {
+    requireAvatarSender(event);
+    return mcpServices.reload('ui');
+  });
+  ipcMain.handle(channels.mcpServicesTest, (event, service) => {
+    requireAvatarSender(event);
+    return mcpServices.test(service);
+  });
 }
 
 function applyPointerPresentation(presentation, options = {}) {
@@ -510,17 +508,8 @@ function windowState() {
     tray: { available: Boolean(desktopTray), iconScaleFactors: [...trayIconScaleFactors] },
     interaction: { dragHoldDelayMs, dragWindowApi },
     lipSync: { gain: lipSyncGain },
-    tts: {
-      mode: ttsMode,
-      mcpUrl: activeTtsMcpUrl,
-      mcpTool: process.env.DESKTOP_CHAR_TTS_MCP_TOOL ?? 'tts_open_stream',
-      mcpCancelTool: process.env.DESKTOP_CHAR_TTS_MCP_CANCEL_TOOL ?? 'tts_cancel_synthesis',
-      timeoutMs: Number(process.env.DESKTOP_CHAR_TTS_TIMEOUT_MS ?? 30_000),
-      requestIdArgument: process.env.DESKTOP_CHAR_TTS_REQUEST_ID_ARGUMENT ?? 'request_id',
-      textArgument: process.env.DESKTOP_CHAR_TTS_TEXT_ARGUMENT ?? 'text',
-      format: process.env.DESKTOP_CHAR_TTS_FORMAT ?? 'pcm_s16le',
-      voice: process.env.DESKTOP_CHAR_TTS_VOICE,
-    },
+    tts: mcpServices.currentTtsConfig(),
+    mcpServices: mcpServices.snapshot(),
   };
 }
 
@@ -533,10 +522,6 @@ function isAgentState(value) {
     && (value.snapshot === null || (typeof value.snapshot === 'object' && typeof value.snapshot.state === 'string'));
 }
 
-function isPlainRecord(value) {
-  return value && typeof value === 'object' && !Array.isArray(value);
-}
-
 function environmentNumber(name, fallback, allowZero = false) {
   const value = process.env[name];
   if (value === undefined) return fallback;
@@ -547,22 +532,12 @@ function environmentNumber(name, fallback, allowZero = false) {
   return parsed;
 }
 
-function environmentPort(name, fallback) {
-  const value = process.env[name];
-  if (value === undefined || value === '') return fallback;
-  const parsed = Number(value);
-  if (!Number.isInteger(parsed) || parsed < 0 || parsed > 65_535) {
-    throw new TypeError(`${name} must be an integer from 0 to 65535`);
-  }
-  return parsed;
-}
-
-function environmentRate(name, fallback) {
-  const value = process.env[name];
-  if (value === undefined || value === '') return fallback;
-  const parsed = Number(value);
-  if (!Number.isFinite(parsed) || parsed < 0.5 || parsed > 2) {
-    throw new TypeError(`${name} must be from 0.5 to 2`);
-  }
-  return parsed;
+function serviceLogFacts(state) {
+  return {
+    desiredEnabled: state.desiredEnabled,
+    phase: state.phase,
+    endpoint: state.endpoint,
+    reconnectAttempt: state.reconnectAttempt,
+    lastError: state.lastError,
+  };
 }

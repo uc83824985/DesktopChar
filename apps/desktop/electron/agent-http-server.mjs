@@ -13,20 +13,7 @@ export function createAgentHttpServer(options) {
         return json(response, 200, { status: currentState.ready ? 'ready' : 'starting', service: 'desktop-char-agent' });
       }
       if (request.method === 'GET' && url.pathname === '/v1/capabilities') {
-        return json(response, 200, {
-          protocolVersion: 1,
-          input: ['performance-plan', 'interrupt'],
-          feedback: ['runtime-snapshot'],
-          presentation: {
-            speechBubbleModes: ['complete', 'stream', 'karaoke'],
-            supportsAuthoredCues: true,
-            playbackGated: true,
-            defaultDismissDelayMs: 800,
-            textInput: 'complete-plan',
-          },
-          avatar: currentState.snapshot?.capabilities ?? null,
-          tts: options.ttsContext ?? { requestedMode: 'local', activeMode: 'mcp', provider: 'desktop-char-local-tts' },
-        });
+        return json(response, 200, createAgentCapabilities(currentState, options.ttsContext));
       }
       if (request.method === 'GET' && url.pathname === '/v1/state') return json(response, 200, currentState);
       if (request.method === 'POST' && url.pathname === '/v1/performances') {
@@ -70,7 +57,24 @@ export function parseAgentPort(value) {
   return port;
 }
 
-function validatePerformancePlan(value) {
+export function createAgentCapabilities(currentState, ttsContext) {
+  return {
+    protocolVersion: 1,
+    input: ['performance-plan', 'interrupt'],
+    feedback: ['runtime-snapshot'],
+    presentation: {
+      speechBubbleModes: ['complete', 'stream', 'karaoke'],
+      supportsAuthoredCues: true,
+      playbackGated: true,
+      defaultDismissDelayMs: 800,
+      textInput: 'complete-plan',
+    },
+    avatar: currentState.snapshot?.capabilities ?? null,
+    tts: ttsContext ?? { requestedMode: 'local', activeMode: 'mcp', provider: 'desktop-char-local-tts' },
+  };
+}
+
+export function validatePerformancePlan(value) {
   if (!isRecord(value) || typeof value.id !== 'string' || !value.id.trim()) throw bad('invalid-plan', 'plan.id must be a non-empty string');
   if (!Array.isArray(value.segments) || value.segments.length === 0) throw bad('invalid-plan', 'plan.segments must be a non-empty array');
   const ids = new Set();

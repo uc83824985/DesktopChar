@@ -26,6 +26,7 @@ export interface DesktopWindowState {
   interaction: DesktopInteractionConfig;
   lipSync: DesktopLipSyncConfig;
   tts: DesktopTtsConfig;
+  mcpServices: McpServicesState;
 }
 
 export interface DesktopLipSyncConfig {
@@ -56,6 +57,11 @@ export interface DesktopCharApi {
   publishAgentState(state: AgentRuntimeState): void;
   listTtsMcpTools(): Promise<McpToolDescriptor[]>;
   callTtsMcpTool(name: string, args: Record<string, unknown>, options?: { timeoutMs?: number }): Promise<McpCallToolResult>;
+  getMcpServicesState(): Promise<McpServicesState>;
+  setMcpServiceEnabled(service: McpServiceId, enabled: boolean): Promise<McpServicesState>;
+  reloadMcpServices(): Promise<McpServicesState>;
+  testMcpService(service: McpServiceId): Promise<McpServiceTest>;
+  onMcpServicesState(callback: (state: McpServicesState) => void): () => void;
   onAgentCommand(callback: (command: AgentCommand) => void): () => void;
   onBoundsChanged(callback: (bounds: DesktopRectangle) => void): () => void;
   onCursorPoint(callback: (point: DesktopPoint) => void): () => void;
@@ -82,6 +88,44 @@ export interface DesktopTtsConfig {
   textArgument: string;
   format: import('../../../../packages/tts-mcp-adapter/src/index.ts').TtsAudioFormat;
   voice?: string;
+}
+
+export type McpServiceId = 'tts' | 'character';
+export type McpServicePhase = 'disabled' | 'starting' | 'ready' | 'degraded' | 'reload-pending'
+  | 'reloading' | 'reconnecting' | 'stopping';
+
+export interface McpServiceTest {
+  status: 'passed' | 'failed';
+  testedAt: string;
+  latencyMs: number;
+  details: string;
+}
+
+export interface McpServiceState {
+  id: McpServiceId;
+  desiredEnabled: boolean;
+  phase: McpServicePhase;
+  provider: string | null;
+  endpoint: string | null;
+  configRevision: number;
+  reconnectAttempt: number;
+  nextReconnectAt: string | null;
+  lastError: string | null;
+  lastTest: McpServiceTest | null;
+  runtimeConfig?: DesktopTtsConfig | null;
+}
+
+export interface McpServicesState {
+  config: {
+    path: string;
+    exists: boolean;
+    revision: number;
+    status: 'loading' | 'ready' | 'error';
+    loadedAt: string | null;
+    error: string | null;
+  };
+  tts: McpServiceState;
+  character: McpServiceState;
 }
 
 export type McpToolDescriptor = import('../../../../packages/tts-mcp-adapter/src/index.ts').McpToolDescriptor;

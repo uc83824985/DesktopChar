@@ -21,6 +21,7 @@ try {
   await page.locator('body[data-pixel-selection]').waitFor({ timeout: 2_000 });
   await page.locator('body[data-drag-hold-delay-ms="240"]').waitFor({ timeout: 2_000 });
   await page.locator('body[data-drag-window-api][data-webgl-context-losses="0"]').waitFor({ timeout: 2_000 });
+  await page.locator('body[data-tts-mcp-service="ready"][data-character-mcp-service="ready"]').waitFor({ timeout: 10_000 });
 
   const initial = await page.evaluate(() => window.desktopChar?.getWindowState());
   if (!initial || !initial.alwaysOnTop || !initial.visible || !initial.tray?.available
@@ -37,6 +38,10 @@ try {
   if (!initial.mousePassthrough) throw new Error('Floating window must start in desktop passthrough mode');
   if (initial.tts?.mode !== 'local' || !/^http:\/\/127\.0\.0\.1:\d+\/mcp$/.test(initial.tts?.mcpUrl ?? '')) {
     throw new Error(`Desktop local TTS must use a real loopback MCP endpoint: ${JSON.stringify(initial.tts)}`);
+  }
+  if (initial.mcpServices?.tts?.phase !== 'ready' || initial.mcpServices?.character?.phase !== 'ready'
+    || !/^http:\/\/127\.0\.0\.1:\d+\/mcp$/.test(initial.mcpServices.character.endpoint ?? '')) {
+    throw new Error(`Both MCP services must auto-start with testable endpoints: ${JSON.stringify(initial.mcpServices)}`);
   }
   if (initial.interaction?.dragHoldDelayMs !== 240
     || !['native-set-window-pos', 'setBounds'].includes(initial.interaction?.dragWindowApi)) {
@@ -83,14 +88,35 @@ try {
     headings: [...document.querySelectorAll('.scene-context-menu__heading')].map(node => node.textContent),
     gazeChecked: document.querySelector('[data-item-id="gaze-follow"]')?.getAttribute('aria-checked'),
     bubbleItems: [...document.querySelectorAll('[data-item-id="complete"], [data-item-id="stream"], [data-item-id="karaoke"]')].map(node => node.textContent?.trim()),
+    mcpItems: [...document.querySelectorAll('[data-item-id$="-mcp-enabled"], [data-item-id$="-mcp-test"], [data-item-id="mcp-config-reload"]')].map(node => node.getAttribute('data-item-id')),
     hideAvatar: document.querySelector('[data-item-id="hide-avatar"]')?.textContent?.trim(),
   }));
-  if (menu.gazeChecked !== 'true' || menu.bubbleItems.length !== 3
+  if (menu.gazeChecked !== 'true' || menu.bubbleItems.length !== 3 || menu.mcpItems.length !== 5
     || menu.hideAvatar !== '隐藏角色'
     || !menu.headings.includes('角色设置') || !menu.headings.includes('聊天气泡测试')
+    || !menu.headings.some(label => label?.startsWith('MCP 服务 · 配置 r'))
     || !menu.headings.includes('桌面窗口')) {
     throw new Error(`Immediate context-menu registrations are incomplete: ${JSON.stringify(menu)}`);
   }
+  await page.locator('[data-item-id="character-mcp-enabled"]').click();
+  await page.locator('body[data-context-menu="open"][data-character-mcp-service="disabled"] [data-item-id="character-mcp-enabled"][aria-checked="false"]').waitFor({ timeout: 5_000 });
+  await page.locator('[data-item-id="character-mcp-enabled"]').click();
+  await page.locator('body[data-context-menu="open"][data-character-mcp-service="ready"] [data-item-id="character-mcp-enabled"][aria-checked="true"]').waitFor({ timeout: 5_000 });
+  await page.locator('[data-item-id="tts-mcp-enabled"]').click();
+  await page.locator('body[data-context-menu="open"][data-tts-mcp-service="disabled"] [data-item-id="tts-mcp-enabled"][aria-checked="false"]').waitFor({ timeout: 5_000 });
+  await page.locator('[data-item-id="tts-mcp-enabled"]').click();
+  await page.locator('body[data-context-menu="open"][data-tts-mcp-service="ready"] [data-item-id="tts-mcp-enabled"][aria-checked="true"]').waitFor({ timeout: 5_000 });
+  await page.locator('[data-item-id="tts-mcp-test"]').click();
+  await page.locator('body[data-context-menu="closed"][data-tts-mcp-test="passed"]').waitFor({ timeout: 5_000 });
+  await page.evaluate(() => document.querySelector('#avatar')?.dispatchEvent(
+    new KeyboardEvent('keydown', { key: 'ContextMenu', bubbles: true }),
+  ));
+  await page.locator('body[data-context-menu="open"] [data-item-id="character-mcp-test"]').click();
+  await page.locator('body[data-context-menu="closed"][data-character-mcp-test="passed"]').waitFor({ timeout: 5_000 });
+  await page.evaluate(() => document.querySelector('#avatar')?.dispatchEvent(
+    new KeyboardEvent('keydown', { key: 'ContextMenu', bubbles: true }),
+  ));
+  await page.locator('body[data-context-menu="open"] [data-item-id="gaze-follow"]').waitFor({ timeout: 2_000 });
   await page.locator('[data-item-id="gaze-follow"]').click();
   await page.locator('body[data-context-menu="open"][data-gaze-follow="disabled"] [data-item-id="gaze-follow"][aria-checked="false"]').waitFor({ timeout: 2_000 });
   await page.locator('[data-item-id="gaze-follow"]').click();

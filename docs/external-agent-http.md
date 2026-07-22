@@ -1,5 +1,7 @@
 # 外部 Agent 本地 HTTP 接入指南
 
+> 本文保留兼容 HTTP case。新 Agent 优先使用 DesktopChar 自身的角色 MCP Server；其动态启停、默认 `http://127.0.0.1:17374/mcp` endpoint、四个工具和重连语义见 [MCP 服务生命周期与角色控制接口](mcp-services.md)。HTTP 与角色 MCP 共用同一计划校验和 Runtime 命令入口。
+
 ## 定位与边界
 
 该模式是独立的应用装配 case，不是新的 Avatar Runtime。外部 Agent 决定回复文本以及期望的表情/动作；DesktopChar 负责 TTS、真实播放时钟、口型、表情、动作和中断一致性。Agent 不得直接写 Live2D 参数，也不得把 TTS 完成当作角色表演完成。
