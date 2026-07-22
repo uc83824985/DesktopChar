@@ -1,6 +1,6 @@
 export const DEFAULT_AVATAR_WINDOW_SIZE = Object.freeze({ width: 460, height: 700 });
 export const DEFAULT_AVATAR_WINDOW_MARGIN = 24;
-export const DEFAULT_DRAG_HOLD_DELAY_MS = 240;
+export const DEFAULT_DRAG_HOLD_DELAY_MS = 180;
 
 export function initialAvatarBounds(workArea, size = DEFAULT_AVATAR_WINDOW_SIZE, margin = DEFAULT_AVATAR_WINDOW_MARGIN) {
   const fitted = fitSizeToWorkArea(size, workArea, margin);

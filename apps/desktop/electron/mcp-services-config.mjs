@@ -5,39 +5,61 @@ import path from 'node:path';
 const AUDIO_FORMATS = new Set(['wav', 'mp3', 'ogg', 'opus', 'pcm_s16le', 'pcm_f32le']);
 const LOOPBACK_HOSTS = new Set(['127.0.0.1', 'localhost', '::1']);
 
-export function resolveMcpServicesConfigPath(env = process.env, cwd = process.cwd()) {
-  return path.resolve(cwd, env.DESKTOP_CHAR_MCP_CONFIG_PATH ?? 'desktop-char.config.json');
+export function resolveDesktopConfigPath(env = process.env, cwd = process.cwd(), defaultFilePath) {
+  const configuredPath = env.DESKTOP_CHAR_CONFIG_PATH ?? env.DESKTOP_CHAR_MCP_CONFIG_PATH;
+  return configuredPath
+    ? path.resolve(cwd, configuredPath)
+    : path.resolve(defaultFilePath ?? path.join(cwd, 'desktop-char.config.json'));
 }
 
-export async function loadMcpServicesConfig(options = {}) {
+export async function loadDesktopConfig(options = {}) {
   const env = options.env ?? process.env;
-  const filePath = options.filePath ?? resolveMcpServicesConfigPath(env, options.cwd);
+  const filePath = options.filePath ?? resolveDesktopConfigPath(env, options.cwd, options.defaultFilePath);
   let fileConfig = {};
   let exists = true;
   try {
     const text = await readFile(filePath, 'utf8');
     const parsed = JSON.parse(text);
-    if (!isRecord(parsed)) throw new TypeError('MCP config root must be an object');
+    if (!isRecord(parsed)) throw new TypeError('Desktop config root must be an object');
     fileConfig = parsed;
   }
   catch (error) {
     if (error && typeof error === 'object' && error.code === 'ENOENT') exists = false;
-    else if (error instanceof SyntaxError) throw new TypeError(`MCP config is not valid JSON: ${error.message}`, { cause: error });
+    else if (error instanceof SyntaxError) throw new TypeError(`Desktop config is not valid JSON: ${error.message}`, { cause: error });
     else throw error;
   }
   return {
     filePath,
     exists,
-    config: normalizeMcpServicesConfig(fileConfig, env),
+    config: normalizeDesktopConfig(fileConfig, env),
   };
 }
 
-export function normalizeMcpServicesConfig(fileConfig = {}, env = {}) {
-  if (!isRecord(fileConfig)) throw new TypeError('MCP config root must be an object');
+export function normalizeDesktopConfig(fileConfig = {}, env = {}) {
+  if (!isRecord(fileConfig)) throw new TypeError('Desktop config root must be an object');
+  assertKnownKeys(fileConfig, ['$schema', 'version', 'interaction', 'window', 'agentHttp', 'character', 'ttsMcp', 'characterMcp'], 'Desktop config');
+  if (fileConfig.$schema !== undefined) text(fileConfig.$schema, '$schema');
+  const version = fileConfig.version ?? 1;
+  if (version !== 1) throw new TypeError('Desktop config version must be 1');
+  const interaction = optionalRecord(fileConfig.interaction, 'interaction');
+  assertKnownKeys(interaction, ['drag'], 'interaction');
+  const drag = optionalRecord(interaction.drag, 'interaction.drag');
+  assertKnownKeys(drag, ['holdDelayMs'], 'interaction.drag');
+  const window = optionalRecord(fileConfig.window, 'window');
+  assertKnownKeys(window, ['defaultSize', 'defaultMarginDip', 'alwaysOnTop'], 'window');
+  const defaultSize = optionalRecord(window.defaultSize, 'window.defaultSize');
+  assertKnownKeys(defaultSize, ['width', 'height'], 'window.defaultSize');
+  const agentHttp = optionalRecord(fileConfig.agentHttp, 'agentHttp');
+  assertKnownKeys(agentHttp, ['enabled', 'host', 'port'], 'agentHttp');
+  const characterProfile = optionalRecord(fileConfig.character, 'character');
+  assertKnownKeys(characterProfile, ['profile'], 'character');
   const tts = optionalRecord(fileConfig.ttsMcp, 'ttsMcp');
+  assertKnownKeys(tts, ['autoStart', 'mode', 'url', 'toolName', 'cancelToolName', 'timeoutMs', 'requestIdArgument', 'textArgument', 'format', 'voice', 'local', 'reconnect'], 'ttsMcp');
   const local = optionalRecord(tts.local, 'ttsMcp.local');
+  assertKnownKeys(local, ['host', 'port', 'delayMs', 'defaultRate', 'durationPerCharacterMs', 'minimumDurationMs', 'sampleRateHz', 'channels'], 'ttsMcp.local');
   const ttsReconnect = optionalRecord(tts.reconnect, 'ttsMcp.reconnect');
   const character = optionalRecord(fileConfig.characterMcp, 'characterMcp');
+  assertKnownKeys(character, ['autoStart', 'host', 'port', 'path', 'reconnect'], 'characterMcp');
   const characterReconnect = optionalRecord(character.reconnect, 'characterMcp.reconnect');
   const mode = text(tts.mode ?? env.DESKTOP_CHAR_TTS_MODE ?? 'local', 'ttsMcp.mode');
   if (mode !== 'local' && mode !== 'mcp') throw new TypeError('ttsMcp.mode must be local or mcp');
@@ -49,6 +71,34 @@ export function normalizeMcpServicesConfig(fileConfig = {}, env = {}) {
   const characterPath = endpointPath(character.path ?? env.DESKTOP_CHAR_CHARACTER_MCP_PATH ?? '/mcp');
 
   return deepFreeze({
+    version,
+    interaction: {
+      drag: {
+        holdDelayMs: boundedInteger(
+          drag.holdDelayMs ?? env.DESKTOP_CHAR_DRAG_HOLD_DELAY_MS,
+          180,
+          0,
+          999,
+          'interaction.drag.holdDelayMs',
+        ),
+      },
+    },
+    window: {
+      defaultSize: {
+        width: boundedInteger(defaultSize.width, 460, 1, 8_192, 'window.defaultSize.width'),
+        height: boundedInteger(defaultSize.height, 700, 1, 8_192, 'window.defaultSize.height'),
+      },
+      defaultMarginDip: nonNegative(window.defaultMarginDip, 24, 'window.defaultMarginDip'),
+      alwaysOnTop: boolean(window.alwaysOnTop, true, 'window.alwaysOnTop'),
+    },
+    agentHttp: {
+      enabled: boolean(agentHttp.enabled, true, 'agentHttp.enabled'),
+      host: loopbackHost(agentHttp.host ?? '127.0.0.1', 'agentHttp.host'),
+      port: port(agentHttp.port ?? env.DESKTOP_CHAR_AGENT_PORT, 17_373, 'agentHttp.port'),
+    },
+    characterProfile: {
+      url: assetPath(characterProfile.profile ?? 'models/Mao/DesktopChar.character.json', 'character.profile'),
+    },
     tts: {
       autoStart: boolean(tts.autoStart ?? env.DESKTOP_CHAR_TTS_MCP_ENABLED, true, 'ttsMcp.autoStart'),
       mode,
@@ -82,8 +132,8 @@ export function normalizeMcpServicesConfig(fileConfig = {}, env = {}) {
   });
 }
 
-export function watchMcpServicesConfig(filePath, onChanged, options = {}) {
-  if (typeof onChanged !== 'function') throw new TypeError('MCP config watcher requires an onChanged callback');
+export function watchDesktopConfig(filePath, onChanged, options = {}) {
+  if (typeof onChanged !== 'function') throw new TypeError('Desktop config watcher requires an onChanged callback');
   const interval = positive(options.intervalMs, 350, 'watch interval');
   let previousSignature;
   const listener = (current, previous) => {
@@ -97,7 +147,15 @@ export function watchMcpServicesConfig(filePath, onChanged, options = {}) {
   return () => unwatchFile(filePath, listener);
 }
 
+// Compatibility exports keep existing integrations working while the main-owned
+// configuration controller is generalized beyond MCP services.
+export const resolveMcpServicesConfigPath = resolveDesktopConfigPath;
+export const loadMcpServicesConfig = loadDesktopConfig;
+export const normalizeMcpServicesConfig = normalizeDesktopConfig;
+export const watchMcpServicesConfig = watchDesktopConfig;
+
 function reconnectConfig(value, label) {
+  assertKnownKeys(value, ['initialDelayMs', 'maximumDelayMs'], label);
   const initialDelayMs = positive(value.initialDelayMs, 500, `${label}.initialDelayMs`);
   const maximumDelayMs = positive(value.maximumDelayMs, 10_000, `${label}.maximumDelayMs`);
   if (maximumDelayMs < initialDelayMs) throw new TypeError(`${label}.maximumDelayMs must be at least initialDelayMs`);
@@ -133,6 +191,14 @@ function loopbackHost(value, label) {
 function optionalText(value, label) {
   if (value === undefined || value === null || value === '') return undefined;
   return text(value, label);
+}
+
+function assetPath(value, label) {
+  const result = text(value, label).replaceAll('\\', '/');
+  if (result.startsWith('/') || /^[a-z][a-z\d+.-]*:/iu.test(result) || result.split('/').includes('..')) {
+    throw new TypeError(`${label} must be an application-relative asset path without parent traversal`);
+  }
+  return result;
 }
 
 function text(value, label) {
@@ -172,6 +238,14 @@ function positiveInteger(value, fallback, label) {
   return result;
 }
 
+function boundedInteger(value, fallback, minimum, maximum, label) {
+  const result = number(value, fallback, label);
+  if (!Number.isInteger(result) || result < minimum || result > maximum) {
+    throw new TypeError(`${label} must be an integer from ${minimum} to ${maximum}`);
+  }
+  return result;
+}
+
 function monoChannels(value) {
   const result = positiveInteger(value, 1, 'ttsMcp.local.channels');
   if (result !== 1) throw new TypeError('ttsMcp.local.channels must be 1 for the reference Provider');
@@ -193,6 +267,12 @@ function number(value, fallback, label) {
 
 function isRecord(value) {
   return typeof value === 'object' && value !== null && !Array.isArray(value);
+}
+
+function assertKnownKeys(value, allowed, label) {
+  const known = new Set(allowed);
+  const unknown = Object.keys(value).filter(key => !known.has(key));
+  if (unknown.length) throw new TypeError(`${label} contains unknown field(s): ${unknown.join(', ')}`);
 }
 
 function deepFreeze(value) {

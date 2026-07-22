@@ -7,7 +7,6 @@ const root = process.cwd();
 const application = await electron.launch({
   args: [path.join(root, 'apps/desktop/electron/main.mjs')],
   cwd: root,
-  env: { ...process.env, DESKTOP_CHAR_DESKTOP_SMOKE: '1' },
 });
 
 try {
@@ -21,7 +20,7 @@ try {
   await page.locator('body[data-desktop-shell="ready"]').waitFor({ timeout: 2_000 });
   await page.locator('body[data-gaze-follow="enabled"]').waitFor({ timeout: 2_000 });
   await page.locator('body[data-pixel-selection]').waitFor({ timeout: 2_000 });
-  await page.locator('body[data-drag-hold-delay-ms="240"]').waitFor({ timeout: 2_000 });
+  await page.locator('body[data-drag-hold-delay-ms="180"]').waitFor({ timeout: 2_000 });
   await page.locator('body[data-drag-window-api][data-webgl-context-losses="0"]').waitFor({ timeout: 2_000 });
   await page.locator('body[data-tts-mcp-service="ready"][data-character-mcp-service="ready"]').waitFor({ timeout: 10_000 });
 
@@ -45,7 +44,7 @@ try {
     || !/^http:\/\/127\.0\.0\.1:\d+\/mcp$/.test(initial.mcpServices.character.endpoint ?? '')) {
     throw new Error(`Both MCP services must auto-start with testable endpoints: ${JSON.stringify(initial.mcpServices)}`);
   }
-  if (initial.interaction?.dragHoldDelayMs !== 240
+  if (initial.interaction?.dragHoldDelayMs !== 180
     || !['native-set-window-pos', 'setBounds'].includes(initial.interaction?.dragWindowApi)) {
     throw new Error(`Unexpected drag interaction config: ${JSON.stringify(initial.interaction)}`);
   }

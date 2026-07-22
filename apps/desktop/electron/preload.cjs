@@ -20,6 +20,7 @@ const channels = {
   mcpServicesTest: 'mcp-services:test',
   mcpServicesTestAll: 'mcp-services:test-all',
   mcpServicesState: 'mcp-services:state',
+  desktopConfigState: 'desktop-config:state',
 };
 
 contextBridge.exposeInMainWorld('desktopChar', {
@@ -43,6 +44,11 @@ contextBridge.exposeInMainWorld('desktopChar', {
     const listener = (_event, state) => callback(state);
     ipcRenderer.on(channels.mcpServicesState, listener);
     return () => ipcRenderer.removeListener(channels.mcpServicesState, listener);
+  },
+  onDesktopConfigState(callback) {
+    const listener = (_event, state) => callback(state);
+    ipcRenderer.on(channels.desktopConfigState, listener);
+    return () => ipcRenderer.removeListener(channels.desktopConfigState, listener);
   },
   onAgentCommand(callback) {
     const listener = (_event, command) => callback(command);

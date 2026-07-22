@@ -3,23 +3,25 @@ import { StreamableHTTPClientTransport } from '@modelcontextprotocol/sdk/client/
 import { createLocalTtsMcpService } from '../../../local-tts-mcp/service.mjs';
 import { createCharacterMcpService, CHARACTER_MCP_TOOLS } from './character-mcp-service.mjs';
 import {
-  loadMcpServicesConfig,
-  resolveMcpServicesConfigPath,
-  watchMcpServicesConfig,
+  loadDesktopConfig,
+  resolveDesktopConfigPath,
+  watchDesktopConfig,
 } from './mcp-services-config.mjs';
 
 export function createMcpServicesController(options = {}) {
   const env = options.env ?? process.env;
-  const configFilePath = options.configFilePath ?? resolveMcpServicesConfigPath(env, options.cwd);
+  const configFilePath = options.configFilePath ?? resolveDesktopConfigPath(env, options.cwd, options.defaultFilePath);
   const createTtsService = options.createLocalTtsService ?? createLocalTtsMcpService;
   const createCharacterService = options.createCharacterService ?? createCharacterMcpService;
   const connectClient = options.connectClient ?? connectMcpClient;
   const onStateChanged = options.onStateChanged ?? (() => {});
+  const onDesktopConfigChanged = options.onDesktopConfigChanged ?? (() => {});
   const onCharacterCommand = options.onCharacterCommand ?? (() => {});
   const ttsContext = options.ttsContext ?? {};
   const clock = options.clock ?? (() => new Date().toISOString());
   let config;
   let configSignature;
+  let servicesSignature;
   let operation = Promise.resolve();
   let stopWatching;
   let reloadTimer;
@@ -61,7 +63,7 @@ export function createMcpServicesController(options = {}) {
     if (started) return snapshot();
     started = true;
     await loadLatestConfig({ initial: true, reason: 'startup' });
-    stopWatching = watchMcpServicesConfig(configFilePath, () => {
+    stopWatching = watchDesktopConfig(configFilePath, () => {
       if (reloadTimer) clearTimeout(reloadTimer);
       reloadTimer = setTimeout(() => {
         reloadTimer = undefined;
@@ -189,6 +191,10 @@ export function createMcpServicesController(options = {}) {
     return ttsRuntimeConfig(activeTtsConfig ?? config?.tts, state.tts.endpoint);
   }
 
+  function currentDesktopConfig() {
+    return config ? structuredClone(config) : null;
+  }
+
   function close() {
     disposed = true;
     stopWatching?.();
@@ -208,7 +214,7 @@ export function createMcpServicesController(options = {}) {
   async function loadLatestConfig({ initial, reason, applyServices = true }) {
     let loaded;
     try {
-      loaded = await loadMcpServicesConfig({ filePath: configFilePath, env });
+      loaded = await loadDesktopConfig({ filePath: configFilePath, env });
     }
     catch (error) {
       state.config.status = 'error';
@@ -218,6 +224,8 @@ export function createMcpServicesController(options = {}) {
     }
     const signature = JSON.stringify(loaded.config);
     const changed = signature !== configSignature;
+    const nextServicesSignature = JSON.stringify({ tts: loaded.config.tts, character: loaded.config.character });
+    const servicesChanged = nextServicesSignature !== servicesSignature;
     config = loaded.config;
     state.config.exists = loaded.exists;
     state.config.status = 'ready';
@@ -225,6 +233,12 @@ export function createMcpServicesController(options = {}) {
     state.config.loadedAt = clock();
     if (changed) state.config.revision += 1;
     configSignature = signature;
+    servicesSignature = nextServicesSignature;
+    if (changed || initial) onDesktopConfigChanged(structuredClone(config), {
+      initial,
+      reason,
+      revision: state.config.revision,
+    });
     if (initial) {
       state.tts.desiredEnabled = config.tts.autoStart;
       state.character.desiredEnabled = config.character.autoStart;
@@ -232,7 +246,7 @@ export function createMcpServicesController(options = {}) {
     state.tts.configRevision = state.config.revision;
     state.character.configRevision = state.config.revision;
     emit();
-    if (!changed || initial || !applyServices) return snapshot();
+    if (!changed || initial || !applyServices || !servicesChanged) return snapshot();
     if (state.tts.desiredEnabled) {
       if (avatarBusy) {
         pendingTtsReload = true;
@@ -470,6 +484,7 @@ export function createMcpServicesController(options = {}) {
     testAll,
     snapshot,
     currentTtsConfig,
+    currentDesktopConfig,
     listTtsTools,
     callTtsTool,
     updateAvatarState,

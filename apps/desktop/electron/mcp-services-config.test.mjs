@@ -4,6 +4,8 @@ import os from 'node:os';
 import path from 'node:path';
 import test from 'node:test';
 import {
+  normalizeDesktopConfig,
+  resolveDesktopConfigPath,
   loadMcpServicesConfig,
   normalizeMcpServicesConfig,
   watchMcpServicesConfig,
@@ -24,6 +26,41 @@ test('MCP config merges environment bootstrap with JSON overrides', () => {
   assert.equal(config.tts.local.defaultRate, 0.8);
   assert.equal(config.character.path, '/character-mcp');
   assert.equal(Object.isFrozen(config.tts.local), true);
+});
+
+test('desktop config owns interaction, window, agent and character profile settings', () => {
+  const config = normalizeDesktopConfig({
+    version: 1,
+    interaction: { drag: { holdDelayMs: 120 } },
+    window: { defaultSize: { width: 512, height: 768 }, defaultMarginDip: 16, alwaysOnTop: false },
+    agentHttp: { enabled: false, port: 0 },
+    character: { profile: 'models/Test/DesktopChar.character.json' },
+  }, {
+    DESKTOP_CHAR_DRAG_HOLD_DELAY_MS: '300',
+    DESKTOP_CHAR_AGENT_PORT: '18000',
+  });
+  assert.equal(config.interaction.drag.holdDelayMs, 120);
+  assert.deepEqual(config.window.defaultSize, { width: 512, height: 768 });
+  assert.equal(config.window.alwaysOnTop, false);
+  assert.equal(config.agentHttp.enabled, false);
+  assert.equal(config.agentHttp.port, 0);
+  assert.equal(config.characterProfile.url, 'models/Test/DesktopChar.character.json');
+  assert.equal(Object.isFrozen(config.interaction.drag), true);
+});
+
+test('desktop config path prefers the new bootstrap variable and validates application fields', () => {
+  assert.equal(
+    resolveDesktopConfigPath({
+      DESKTOP_CHAR_CONFIG_PATH: 'new.json',
+      DESKTOP_CHAR_MCP_CONFIG_PATH: 'legacy.json',
+    }, 'C:/workspace').replaceAll('\\', '/'),
+    'C:/workspace/new.json',
+  );
+  assert.throws(() => normalizeDesktopConfig({ version: 2 }), /version/);
+  assert.throws(() => normalizeDesktopConfig({ interaction: { drag: { holdDelayMs: 1000 } } }), /0 to 999/);
+  assert.throws(() => normalizeDesktopConfig({ interaction: { drag: { holdDelyMs: 100 } } }), /unknown field/);
+  assert.throws(() => normalizeDesktopConfig({ agentHttp: { host: '0.0.0.0' } }), /loopback/);
+  assert.throws(() => normalizeDesktopConfig({ character: { profile: '../escape.json' } }), /parent traversal/);
 });
 
 test('MCP config rejects unsafe server binding and malformed reconnect policy', () => {

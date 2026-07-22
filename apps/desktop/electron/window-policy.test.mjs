@@ -55,7 +55,7 @@ test('development renderer URL is restricted to an HTTP loopback origin', () => 
 });
 
 test('drag hold delay is configurable but remains below one second', () => {
-  assert.equal(parseDragHoldDelayMs(undefined), 240);
+  assert.equal(parseDragHoldDelayMs(undefined), 180);
   assert.equal(parseDragHoldDelayMs('320'), 320);
   assert.equal(parseDragHoldDelayMs('0'), 0);
   assert.throws(() => parseDragHoldDelayMs('1000'), /between 0 and 999/);

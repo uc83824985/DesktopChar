@@ -1,0 +1,115 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://desktopchar.local/schemas/desktop-char.config.schema.json",
+  "title": "DesktopChar Application Config",
+  "type": "object",
+  "additionalProperties": false,
+  "properties": {
+    "$schema": { "type": "string" },
+    "version": { "const": 1 },
+    "interaction": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "drag": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "holdDelayMs": { "type": "integer", "minimum": 0, "maximum": 999 }
+          }
+        }
+      }
+    },
+    "window": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "defaultSize": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "width": { "type": "integer", "minimum": 1, "maximum": 8192 },
+            "height": { "type": "integer", "minimum": 1, "maximum": 8192 }
+          }
+        },
+        "defaultMarginDip": { "type": "number", "minimum": 0 },
+        "alwaysOnTop": { "type": "boolean" }
+      }
+    },
+    "agentHttp": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "enabled": { "type": "boolean" },
+        "host": { "enum": ["127.0.0.1", "localhost", "::1"] },
+        "port": { "type": "integer", "minimum": 0, "maximum": 65535 }
+      }
+    },
+    "character": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "profile": { "$ref": "#/$defs/applicationAssetPath" }
+      }
+    },
+    "ttsMcp": { "$ref": "#/$defs/ttsMcp" },
+    "characterMcp": { "$ref": "#/$defs/characterMcp" }
+  },
+  "$defs": {
+    "applicationAssetPath": {
+      "type": "string",
+      "minLength": 1,
+      "pattern": "^(?![/\\\\])(?![A-Za-z][A-Za-z0-9+.-]*:)(?!.*(?:^|[/\\\\])\\.\\.(?:[/\\\\]|$)).+$"
+    },
+    "reconnect": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "initialDelayMs": { "type": "number", "exclusiveMinimum": 0 },
+        "maximumDelayMs": { "type": "number", "exclusiveMinimum": 0 }
+      }
+    },
+    "ttsMcp": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "autoStart": { "type": "boolean" },
+        "mode": { "enum": ["local", "mcp"] },
+        "url": { "type": "string", "format": "uri" },
+        "toolName": { "type": "string", "minLength": 1 },
+        "cancelToolName": { "type": "string", "minLength": 1 },
+        "timeoutMs": { "type": "number", "exclusiveMinimum": 0 },
+        "requestIdArgument": { "type": "string", "minLength": 1 },
+        "textArgument": { "type": "string", "minLength": 1 },
+        "format": { "enum": ["wav", "mp3", "ogg", "opus", "pcm_s16le", "pcm_f32le"] },
+        "voice": { "type": "string", "minLength": 1 },
+        "local": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "host": { "enum": ["127.0.0.1", "localhost", "::1"] },
+            "port": { "type": "integer", "minimum": 0, "maximum": 65535 },
+            "delayMs": { "type": "number", "minimum": 0 },
+            "defaultRate": { "type": "number", "minimum": 0.5, "maximum": 2 },
+            "durationPerCharacterMs": { "type": "number", "exclusiveMinimum": 0 },
+            "minimumDurationMs": { "type": "number", "exclusiveMinimum": 0 },
+            "sampleRateHz": { "type": "integer", "exclusiveMinimum": 0 },
+            "channels": { "const": 1 }
+          }
+        },
+        "reconnect": { "$ref": "#/$defs/reconnect" }
+      }
+    },
+    "characterMcp": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "autoStart": { "type": "boolean" },
+        "host": { "enum": ["127.0.0.1", "localhost", "::1"] },
+        "port": { "type": "integer", "minimum": 0, "maximum": 65535 },
+        "path": { "type": "string", "pattern": "^/[^?#]*$" },
+        "reconnect": { "$ref": "#/$defs/reconnect" }
+      }
+    }
+  }
+}

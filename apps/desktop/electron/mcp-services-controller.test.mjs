@@ -45,6 +45,18 @@ test('both MCP services dynamically enable, test, reload and disable', async t =
   assert.equal(combined.character.status, 'passed');
   assert.equal(combined.tts.status, 'passed');
 
+  const stableEndpoints = {
+    tts: controller.snapshot().tts.endpoint,
+    character: controller.snapshot().character.endpoint,
+  };
+  await writeFile(configFilePath, JSON.stringify({
+    interaction: { drag: { holdDelayMs: 123 } },
+  }), 'utf8');
+  state = await controller.reload('application-only-test');
+  assert.equal(state.tts.endpoint, stableEndpoints.tts, 'application-only changes must not restart TTS MCP');
+  assert.equal(state.character.endpoint, stableEndpoints.character, 'application-only changes must not restart character MCP');
+  assert.equal(controller.currentDesktopConfig().interaction.drag.holdDelayMs, 123);
+
   await writeFile(configFilePath, JSON.stringify({
     ttsMcp: {
       autoStart: false,

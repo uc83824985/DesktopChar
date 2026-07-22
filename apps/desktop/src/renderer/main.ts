@@ -12,7 +12,11 @@ import {
 } from '../../../../packages/audio-runtime/src/index.ts';
 import type { KnownToneResponseTrace, PcmStreamResolver } from '../../../../packages/audio-runtime/src/index.ts';
 import { AvatarRuntime, DefaultAvatarPlanner, ParameterMixer, projectSpeechBubble } from '../../../../packages/avatar-runtime/src/index.ts';
-import { DEFAULT_TTS_CONFIG, MAO_CHARACTER_CONFIG } from '../../../../packages/config/src/index.ts';
+import {
+  DEFAULT_CHARACTER_PROFILE_URL,
+  DEFAULT_TTS_CONFIG,
+  loadCharacterConfig,
+} from '../../../../packages/config/src/index.ts';
 import {
   AsyncPixelCoveragePicker,
   HoldDragController,
@@ -145,7 +149,7 @@ let knownToneAvailable = false;
 let mcpServicesState: McpServicesState | undefined;
 let ttsConfigSignature = '';
 const reloadableTtsAdapter = new ReloadableTtsAdapter();
-let currentLipSyncGain = MAO_CHARACTER_CONFIG.lipSyncProfile.gain;
+let currentLipSyncGain = 1;
 let desktopBounds: { x: number; y: number; width: number; height: number } | undefined;
 let pointerPresentation: PointerPresentation | undefined;
 let pixelPicker: AsyncPixelCoveragePicker | undefined;
@@ -259,11 +263,14 @@ function handleTonePlaybackEvent(event: AvatarEvent): void {
 
 try {
   const shellState = desktopShell ? await desktopShell.ready() : undefined;
+  const characterConfig = await loadCharacterConfig(
+    shellState?.character.profileUrl ?? DEFAULT_CHARACTER_PROFILE_URL,
+  );
   const tts = createTtsComposition(shellState?.tts);
   mcpServicesState = shellState?.mcpServices;
   const ttsOperational = desktopShell ? isOperationalMcpService(mcpServicesState?.tts) : true;
   reloadableTtsAdapter.configure(tts.adapter, shellState?.tts ?? browserTtsConfig(), ttsOperational);
-  currentLipSyncGain = shellState?.lipSync.gain ?? MAO_CHARACTER_CONFIG.lipSyncProfile.gain;
+  currentLipSyncGain = characterConfig.lipSyncProfile.gain;
   knownToneAvailable = tts.supportsKnownToneFixture && ttsOperational;
   if (!knownToneAvailable) tone.title = '先验铃声验收仅由 local-tts-mcp 参考服务提供';
   ttsEffects = new TtsRuntimeEffectHandler(reloadableTtsAdapter);
@@ -272,7 +279,7 @@ try {
   document.body.dataset.ttsMode = shellState?.tts.mode ?? 'local';
   document.body.dataset.ttsHealth = 'checking';
 
-  model = await Live2DModel.from(MAO_CHARACTER_CONFIG.modelJsonUrl, { autoInteract: false });
+  model = await Live2DModel.from(characterConfig.modelJsonUrl, { autoInteract: false });
   model.internalModel.on('beforeModelUpdate', applyRuntimeFrame);
   app.stage.addChild(model);
   fitModel();
@@ -287,11 +294,12 @@ try {
       ParamEyeBallX: { min: -1, max: 1 }, ParamEyeBallY: { min: -1, max: 1 },
     } }),
     effects: { execute },
-    gazeProfile: MAO_CHARACTER_CONFIG.gazeProfile,
+    gazeProfile: characterConfig.gazeProfile,
     lipSyncProfile: { gain: currentLipSyncGain },
   });
   runtime.dispatch({ type: 'renderer.ready', capabilities: {
-    emotions: ['neutral', 'happy'], actions: ['nod'],
+    emotions: characterConfig.allowedEmotions,
+    actions: characterConfig.allowedActions,
     parameters: [
       'ParamA', 'ParamMouthOpenY', 'ParamMouthForm',
       'ParamAngleX', 'ParamAngleY', 'ParamEyeBallX', 'ParamEyeBallY',
@@ -1165,6 +1173,7 @@ function initializeDesktopInteraction(initialState: Awaited<ReturnType<NonNullab
     });
     document.body.dataset.desktopShell = 'ready';
   };
+  desktopShell.onDesktopConfigState(applyReadyState);
   if (initialState) applyReadyState(initialState);
   else void desktopShell.ready().then(applyReadyState).catch(error => {
     document.body.dataset.desktopShell = 'failed';

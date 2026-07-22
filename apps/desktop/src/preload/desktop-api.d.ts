@@ -24,13 +24,13 @@ export interface DesktopWindowState {
   };
   tray: { available: boolean; iconScaleFactors: number[] };
   interaction: DesktopInteractionConfig;
-  lipSync: DesktopLipSyncConfig;
+  character: DesktopCharacterConfig;
   tts: DesktopTtsConfig;
   mcpServices: McpServicesState;
 }
 
-export interface DesktopLipSyncConfig {
-  gain: number;
+export interface DesktopCharacterConfig {
+  profileUrl: string;
 }
 
 export interface DesktopInteractionConfig {
@@ -63,6 +63,7 @@ export interface DesktopCharApi {
   testMcpService(service: McpServiceId): Promise<McpServiceTest>;
   testAllMcpServices(): Promise<Record<McpServiceId, McpServiceTest>>;
   onMcpServicesState(callback: (state: McpServicesState) => void): () => void;
+  onDesktopConfigState(callback: (state: DesktopWindowState) => void): () => void;
   onAgentCommand(callback: (command: AgentCommand) => void): () => void;
   onBoundsChanged(callback: (bounds: DesktopRectangle) => void): () => void;
   onCursorPoint(callback: (point: DesktopPoint) => void): () => void;

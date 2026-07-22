@@ -1,0 +1,87 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://desktopchar.local/schemas/desktop-char.character.schema.json",
+  "title": "DesktopChar Character Profile",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "version",
+    "id",
+    "model",
+    "defaultEmotion",
+    "allowedEmotions",
+    "allowedActions",
+    "expressionCooldownMs",
+    "idleReturnDelayMs",
+    "gazeProfile",
+    "lipSyncProfile"
+  ],
+  "properties": {
+    "$schema": { "type": "string" },
+    "version": { "const": 1 },
+    "id": { "type": "string", "minLength": 1 },
+    "model": { "$ref": "#/$defs/relativeAssetPath" },
+    "defaultEmotion": { "$ref": "#/$defs/emotion" },
+    "allowedEmotions": {
+      "type": "array",
+      "minItems": 1,
+      "uniqueItems": true,
+      "items": { "$ref": "#/$defs/emotion" }
+    },
+    "allowedActions": {
+      "type": "array",
+      "minItems": 1,
+      "uniqueItems": true,
+      "items": { "$ref": "#/$defs/action" }
+    },
+    "expressionCooldownMs": { "type": "number", "minimum": 0 },
+    "idleReturnDelayMs": { "type": "number", "minimum": 0 },
+    "gazeProfile": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["headX", "headY", "eyeX", "eyeY"],
+      "properties": {
+        "headX": { "$ref": "#/$defs/gazeAxis" },
+        "headY": { "$ref": "#/$defs/gazeAxis" },
+        "eyeX": { "$ref": "#/$defs/gazeAxis" },
+        "eyeY": { "$ref": "#/$defs/gazeAxis" }
+      }
+    },
+    "lipSyncProfile": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["gain"],
+      "properties": { "gain": { "type": "number", "exclusiveMinimum": 0 } }
+    }
+  },
+  "$defs": {
+    "relativeAssetPath": {
+      "type": "string",
+      "minLength": 1,
+      "pattern": "^(?![/\\\\])(?![A-Za-z][A-Za-z0-9+.-]*:)(?!.*(?:^|[/\\\\])\\.\\.(?:[/\\\\]|$)).+$"
+    },
+    "emotion": {
+      "enum": ["neutral", "happy", "sad", "angry", "surprised", "thinking"]
+    },
+    "action": { "enum": ["nod", "shake", "tap", "greet"] },
+    "direction": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["limit", "exponent"],
+      "properties": {
+        "limit": { "type": "number" },
+        "exponent": { "type": "number", "exclusiveMinimum": 0 }
+      }
+    },
+    "gazeAxis": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["negative", "positive", "deadZone"],
+      "properties": {
+        "negative": { "$ref": "#/$defs/direction" },
+        "positive": { "$ref": "#/$defs/direction" },
+        "deadZone": { "type": "number", "minimum": 0, "exclusiveMaximum": 1 }
+      }
+    }
+  }
+}

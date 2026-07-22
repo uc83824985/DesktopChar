@@ -1,11 +1,35 @@
 import assert from 'node:assert/strict';
+import { readFile } from 'node:fs/promises';
 import test from 'node:test';
-import { loadTtsConfig, MAO_CHARACTER_CONFIG } from '../src/index.ts';
+import { loadTtsConfig, parseCharacterConfig } from '../src/index.ts';
 
-test('Mao character profile compensates its stronger authored downward head deformation', () => {
-  assert.equal(MAO_CHARACTER_CONFIG.gazeProfile.headY.negative.limit, -20);
-  assert.equal(MAO_CHARACTER_CONFIG.gazeProfile.headY.positive.limit, 30);
-  assert.equal(MAO_CHARACTER_CONFIG.lipSyncProfile.gain, 2.5);
+test('Mao asset-side profile compensates its authored gaze and lip response', async () => {
+  const profileUrl = new URL('../../../apps/desktop/public/models/Mao/DesktopChar.character.json', import.meta.url);
+  const profile = parseCharacterConfig(JSON.parse(await readFile(profileUrl, 'utf8')), 'models/Mao/DesktopChar.character.json');
+  assert.equal(profile.modelJsonUrl, 'models/Mao/Mao.model3.json');
+  assert.equal(profile.gazeProfile.headY.negative.limit, -20);
+  assert.equal(profile.gazeProfile.headY.positive.limit, 30);
+  assert.equal(profile.lipSyncProfile.gain, 2.5);
+});
+
+test('character profile rejects path traversal and unregistered capabilities', () => {
+  const valid = {
+    version: 1,
+    id: 'test',
+    model: 'Test.model3.json',
+    defaultEmotion: 'neutral',
+    allowedEmotions: ['neutral'],
+    allowedActions: ['nod'],
+    expressionCooldownMs: 0,
+    idleReturnDelayMs: 0,
+    gazeProfile: {
+      headX: axis(-30, 30), headY: axis(-30, 30), eyeX: axis(-1, 1), eyeY: axis(-1, 1),
+    },
+    lipSyncProfile: { gain: 1 },
+  };
+  assert.throws(() => parseCharacterConfig({ ...valid, model: '../secret' }), /relative/);
+  assert.throws(() => parseCharacterConfig({ ...valid, allowedActions: ['execute-script'] }), /unsupported/);
+  assert.throws(() => parseCharacterConfig({ ...valid, lipSynProfile: { gain: 2 } }), /unknown field/);
 });
 
 test('loads local MCP defaults and remote MCP binding variables', () => {
@@ -38,3 +62,11 @@ test('rejects invalid TTS environment values', () => {
   assert.throws(() => loadTtsConfig({ DESKTOP_CHAR_TTS_LOCAL_MCP_HOST: '0.0.0.0' }), /loopback/);
   assert.throws(() => loadTtsConfig({ DESKTOP_CHAR_TTS_LOCAL_MCP_PORT: '70000' }), /65535/);
 });
+
+function axis(negative: number, positive: number) {
+  return {
+    negative: { limit: negative, exponent: 1 },
+    positive: { limit: positive, exponent: 1 },
+    deadZone: 0,
+  };
+}

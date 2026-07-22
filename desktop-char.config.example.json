@@ -1,4 +1,24 @@
 {
+  "$schema": "./apps/desktop/public/schemas/desktop-char.config.schema.json",
+  "version": 1,
+  "interaction": {
+    "drag": {
+      "holdDelayMs": 180
+    }
+  },
+  "window": {
+    "defaultSize": { "width": 460, "height": 700 },
+    "defaultMarginDip": 24,
+    "alwaysOnTop": true
+  },
+  "agentHttp": {
+    "enabled": true,
+    "host": "127.0.0.1",
+    "port": 17373
+  },
+  "character": {
+    "profile": "models/Mao/DesktopChar.character.json"
+  },
   "ttsMcp": {
     "autoStart": true,
     "mode": "local",

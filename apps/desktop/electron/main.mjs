@@ -2,19 +2,18 @@ import { app, BrowserWindow, ipcMain, Menu, nativeImage, net, protocol, screen, 
 import path from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 import {
-  DEFAULT_AVATAR_WINDOW_SIZE,
   applyDragAvatarBounds,
   describePointerPresentationChange,
   dragAvatarBounds,
   initialAvatarBounds,
   isScreenPoint,
-  parseDragHoldDelayMs,
   parseLoopbackDevUrl,
 } from './window-policy.mjs';
-import { createAgentHttpServer, parseAgentPort } from './agent-http-server.mjs';
+import { createAgentHttpServer } from './agent-http-server.mjs';
 import { createNativeCursorRefresh } from './cursor-refresh.mjs';
 import { createNativeWindowPosition } from './native-window-position.mjs';
 import { createMcpServicesController } from './mcp-services-controller.mjs';
+import { normalizeDesktopConfig, resolveDesktopConfigPath } from './mcp-services-config.mjs';
 import {
   nextAvatarVisibility,
   trayIconRepresentations,
@@ -24,7 +23,9 @@ import {
 const directory = path.dirname(fileURLToPath(import.meta.url));
 const rendererRoot = path.resolve(directory, '../dist');
 const devUrl = parseLoopbackDevUrl(process.env.DESKTOP_CHAR_DEV_URL);
-const dragHoldDelayMs = parseDragHoldDelayMs(process.env.DESKTOP_CHAR_DRAG_HOLD_DELAY_MS);
+const packagedConfigPath = app.isPackaged ? path.join(app.getPath('userData'), 'config.json') : undefined;
+const desktopConfigPath = resolveDesktopConfigPath(process.env, process.cwd(), packagedConfigPath);
+let desktopConfig = normalizeDesktopConfig({}, process.env);
 const rawConsoleLog = console.log.bind(console);
 const rawConsoleError = console.error.bind(console);
 const channels = {
@@ -47,6 +48,7 @@ const channels = {
   mcpServicesTest: 'mcp-services:test',
   mcpServicesTestAll: 'mcp-services:test-all',
   mcpServicesState: 'mcp-services:state',
+  desktopConfigState: 'desktop-config:state',
 };
 
 function safeLog(...args) {
@@ -85,6 +87,11 @@ let avatarBounds = null;
 let cursorTimer;
 let cursorRefreshTimer;
 let dragState = null;
+let agentServer;
+let agentServerSignature = '';
+let agentServerOperation = Promise.resolve();
+let desktopStarted = false;
+let agentRuntimeState = { ready: false, snapshot: null };
 let pointerPresentation = { passthrough: true, cursor: 'default' };
 let pointerPresentationApplied = false;
 const nativeCursorRefresh = createNativeCursorRefresh();
@@ -96,7 +103,6 @@ if (!['auto', 'native', 'setBounds'].includes(requestedDragWindowApi)) {
 const dragWindowApi = requestedDragWindowApi !== 'setBounds' && nativeWindowPosition.available
   ? 'native-set-window-pos'
   : 'setBounds';
-const lipSyncGain = environmentNumber('DESKTOP_CHAR_LIP_SYNC_GAIN', 2.5);
 const ttsContext = {
   requestedMode: 'local',
   activeMode: 'disabled',
@@ -108,8 +114,10 @@ const ttsContext = {
 let lastMcpServicesLogKey = '';
 const mcpServices = createMcpServicesController({
   env: process.env,
+  configFilePath: desktopConfigPath,
   version: app.getVersion(),
   ttsContext,
+  onDesktopConfigChanged(config, metadata) { applyDesktopConfig(config, metadata); },
   onCharacterCommand(command) { avatarWindow?.webContents.send(channels.agentCommand, command); },
   onStateChanged(state) {
     avatarWindow?.webContents.send(channels.mcpServicesState, state);
@@ -127,12 +135,6 @@ const mcpServices = createMcpServicesController({
     });
   },
 });
-const agentServer = createAgentHttpServer({
-  host: '127.0.0.1',
-  port: parseAgentPort(process.env.DESKTOP_CHAR_AGENT_PORT),
-  ttsContext,
-  onCommand(command) { avatarWindow?.webContents.send(channels.agentCommand, command); },
-});
 
 const hasSingleInstanceLock = app.requestSingleInstanceLock();
 if (!hasSingleInstanceLock) app.quit();
@@ -144,8 +146,8 @@ else {
     registerIpc();
     createAvatarWindow();
     createDesktopTray();
-    const address = await agentServer.listen();
-    safeLog(`[agent-http] listening on http://127.0.0.1:${address.port}`);
+    await rebindAgentServer('startup');
+    desktopStarted = true;
   }).catch(error => {
     safeError('[desktop-char] startup failed', error);
     app.quit();
@@ -159,7 +161,7 @@ app.on('before-quit', () => {
   cancelAvatarPresentation();
   desktopTray?.destroy();
   desktopTray = null;
-  void agentServer.close().catch(() => {});
+  void agentServer?.close().catch(() => {});
   void mcpServices.close().catch(() => {});
 });
 
@@ -179,7 +181,11 @@ function registerRendererProtocol() {
 
 function createAvatarWindow() {
   const primary = screen.getPrimaryDisplay();
-  const bounds = initialAvatarBounds(primary.workArea, DEFAULT_AVATAR_WINDOW_SIZE);
+  const bounds = initialAvatarBounds(
+    primary.workArea,
+    desktopConfig.window.defaultSize,
+    desktopConfig.window.defaultMarginDip,
+  );
   avatarBounds = { ...bounds };
   avatarWindow = new BrowserWindow({
     ...bounds,
@@ -187,7 +193,7 @@ function createAvatarWindow() {
     frame: false,
     transparent: true,
     backgroundColor: '#00000000',
-    alwaysOnTop: true,
+    alwaysOnTop: desktopConfig.window.alwaysOnTop,
     skipTaskbar: true,
     resizable: false,
     maximizable: false,
@@ -204,7 +210,7 @@ function createAvatarWindow() {
     },
   });
   avatarWindow.setOpacity(0);
-  avatarWindow.setAlwaysOnTop(true);
+  avatarWindow.setAlwaysOnTop(desktopConfig.window.alwaysOnTop);
   applyPointerPresentation({ passthrough: true, cursor: 'default' });
   avatarWindow.webContents.setWindowOpenHandler(() => ({ action: 'deny' }));
   avatarWindow.webContents.on('will-navigate', event => event.preventDefault());
@@ -276,7 +282,9 @@ function setAvatarVisibility(visible) {
     avatarPresentationPhase = 'warming';
     avatarWindow.setOpacity(0);
     avatarWindow.showInactive();
-    if (!avatarWindow.isAlwaysOnTop()) avatarWindow.setAlwaysOnTop(true);
+    if (avatarWindow.isAlwaysOnTop() !== desktopConfig.window.alwaysOnTop) {
+      avatarWindow.setAlwaysOnTop(desktopConfig.window.alwaysOnTop);
+    }
     avatarFrameSubscriptionActive = true;
     avatarWindow.webContents.beginFrameSubscription(false, image => {
       if (image.isEmpty()) return;
@@ -401,7 +409,8 @@ function registerIpc() {
   ipcMain.on(channels.agentState, (event, state) => {
     requireAvatarSender(event);
     if (!isAgentState(state)) return;
-    agentServer.updateState(state);
+    agentRuntimeState = structuredClone(state);
+    agentServer?.updateState(state);
     mcpServices.updateAvatarState(state);
   });
   ipcMain.handle(channels.mcpListTools, async event => {
@@ -496,7 +505,11 @@ function restoreDefaultPosition() {
   if (!avatarWindow) return;
   const display = screen.getDisplayNearestPoint(screen.getCursorScreenPoint());
   const { width, height } = avatarBounds;
-  avatarBounds = initialAvatarBounds(display.workArea, { width, height });
+  avatarBounds = initialAvatarBounds(
+    display.workArea,
+    { width, height },
+    desktopConfig.window.defaultMarginDip,
+  );
   avatarWindow.setBounds(avatarBounds);
   publishBounds();
 }
@@ -521,11 +534,66 @@ function windowState() {
       backgroundThrottling: avatarWindow.webContents.getBackgroundThrottling(),
     },
     tray: { available: Boolean(desktopTray), iconScaleFactors: [...trayIconScaleFactors] },
-    interaction: { dragHoldDelayMs, dragWindowApi },
-    lipSync: { gain: lipSyncGain },
+    interaction: {
+      dragHoldDelayMs: desktopConfig.interaction.drag.holdDelayMs,
+      dragWindowApi,
+    },
+    character: { profileUrl: desktopConfig.characterProfile.url },
     tts: mcpServices.currentTtsConfig(),
     mcpServices: mcpServices.snapshot(),
   };
+}
+
+function applyDesktopConfig(config, metadata = {}) {
+  desktopConfig = config;
+  if (avatarWindow && !avatarWindow.isDestroyed()) {
+    if (avatarWindow.isAlwaysOnTop() !== config.window.alwaysOnTop) {
+      avatarWindow.setAlwaysOnTop(config.window.alwaysOnTop);
+    }
+    avatarWindow.webContents.send(channels.desktopConfigState, windowState());
+  }
+  if (desktopStarted && !metadata.initial) {
+    agentServerOperation = agentServerOperation
+      .catch(() => {})
+      .then(() => rebindAgentServer(metadata.reason ?? 'config-reload'))
+      .catch(error => safeError('[agent-http] config reload failed; keeping previous listener', error));
+  }
+}
+
+async function rebindAgentServer(reason) {
+  const target = desktopConfig.agentHttp;
+  const signature = JSON.stringify(target);
+  if (signature === agentServerSignature) return;
+  if (!target.enabled) {
+    const previous = agentServer;
+    agentServer = undefined;
+    agentServerSignature = signature;
+    await previous?.close();
+    safeLog('[agent-http] disabled', { reason });
+    return;
+  }
+
+  const candidate = createAgentHttpServer({
+    host: target.host,
+    port: target.port,
+    initialState: agentRuntimeState,
+    ttsContext,
+    onCommand(command) { avatarWindow?.webContents.send(channels.agentCommand, command); },
+  });
+  let address;
+  try {
+    address = await candidate.listen();
+  }
+  catch (error) {
+    await candidate.close().catch(() => {});
+    throw error;
+  }
+  const previous = agentServer;
+  agentServer = candidate;
+  agentServerSignature = signature;
+  await previous?.close();
+  const host = address.address.includes(':') ? `[${address.address}]` : address.address;
+  safeLog(`[agent-http] listening on http://${host}:${address.port}`, { reason });
 }
 
 function requireAvatarSender(event) {
@@ -535,16 +603,6 @@ function requireAvatarSender(event) {
 function isAgentState(value) {
   return value && typeof value === 'object' && typeof value.ready === 'boolean'
     && (value.snapshot === null || (typeof value.snapshot === 'object' && typeof value.snapshot.state === 'string'));
-}
-
-function environmentNumber(name, fallback, allowZero = false) {
-  const value = process.env[name];
-  if (value === undefined) return fallback;
-  const parsed = Number(value);
-  if (!Number.isFinite(parsed) || (allowZero ? parsed < 0 : parsed <= 0)) {
-    throw new TypeError(`${name} must be ${allowZero ? 'non-negative' : 'positive'}`);
-  }
-  return parsed;
 }
 
 function serviceLogFacts(state) {
