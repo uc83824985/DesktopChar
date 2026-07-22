@@ -24,7 +24,11 @@ setIgnoreMouseEvents(true, forward)    可点击 / 可拖动角色
 
 Electron main 在系统通知区域创建常驻 `DesktopChar` 托盘入口。左键单击托盘图标切换角色窗口显示/隐藏；右键菜单根据当前状态显示“显示角色”或“隐藏角色”，同时提供“恢复默认位置”和“退出 DesktopChar”。角色自身的共享右键菜单也注册“隐藏角色”，隐藏后通过托盘恢复。
 
-隐藏只调用现有 `BrowserWindow.hide()`，不会关闭窗口、卸载 Renderer、重建 Avatar Runtime、断开 Agent/TTS MCP，或重置窗口 bounds；恢复使用 `showInactive()`，不抢占当前前台应用焦点，并重新确认置顶状态。`DesktopWindowState.visible` 和 `tray.available` 提供可测试事实。托盘使用随 Electron shell 打包的 `assets/TrayIcon.png` 角色头像；它不依赖 Renderer 已加载或 Live2D 资源生命周期。后续可直接覆盖同名 PNG 并重启 DesktopChar，无需修改代码。
+隐藏不会关闭窗口、卸载 Renderer、重建 Avatar Runtime、断开 Agent/TTS MCP，或重置窗口 bounds；恢复沿用不抢占当前前台应用焦点的 `showInactive()`，但在呈现握手完成前保持透明，不重提未变化的窗口几何。`DesktopWindowState.visible` 和 `tray.available` 提供可测试事实。托盘使用随 Electron shell 打包的 `assets/TrayIcon.png` 角色头像；它不依赖 Renderer 已加载或 Live2D 资源生命周期。后续可直接覆盖同名 PNG 并重启 DesktopChar，无需修改代码。
+
+透明窗口从托盘恢复时不能把 `showInactive()` 当作完成点。隐藏会使 Chromium 默认进入后台节流，若 HWND 先显示、Pixi/Live2D 后恢复交换帧，Windows 合成器可能短暂暴露空帧；恢复路径若同时重复提交置顶或 bounds，还会使这个切换看起来像一次缩放抖动。当前窗口关闭后台节流以保持 Runtime 与渲染时间线连续；隐藏时先把窗口 opacity 设为 0 再 `hide()`，恢复时保持 opacity 0 调用 `showInactive()`，通过 `webContents.beginFrameSubscription()` 等待真实 presentation event 后才恢复 opacity 1。恢复不再重复提交未变化的 bounds 或置顶状态。1 秒保护超时只用于 Renderer 异常时避免窗口永久不可见，并输出错误日志。
+
+`DesktopWindowState.presentation` 公开 `hidden | warming | visible`、恢复请求编号、opacity 和后台节流事实。Electron smoke 会执行真实“隐藏→恢复”命令，并断言 presentation 完成前不显现、恢复前后模型 scale、窗口 bounds 和 WebGL context-loss 计数保持一致。参考 Electron 官方 [BrowserWindow 页面可见性与优雅显示](https://www.electronjs.org/docs/latest/api/browser-window#showing-the-window-gracefully) 和 [webContents frame subscription](https://www.electronjs.org/docs/latest/api/web-contents#contentsbeginframesubscriptiononlydirty-callback)。
 
 Windows 托盘的基础尺寸是 16 DIP，不等于固定 16 个物理像素：在 125%、150%、175%、200% 缩放下分别需要 20、24、28、32 像素。main 从源 PNG 直接生成 16/20/24/28/32/40/48 像素表示，并通过 `nativeImage.addRepresentation()` 标注对应 scale factor，让系统选取当前显示器的原生表示；禁止先固定缩成 16×16 再由 Windows 放大。该策略消除了二次采样模糊，但图案在 24×24 内能保留多少内容仍由原始构图决定：若头像包含过多细线和低对比度细节，应另行制作高对比度、透明背景的小尺寸专用素材，而不是继续增加缩放算法。
 

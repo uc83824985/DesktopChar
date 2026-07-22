@@ -16,6 +16,12 @@ export interface DesktopWindowState {
   pointerPresentation: PointerPresentation;
   alwaysOnTop: boolean;
   visible: boolean;
+  presentation: {
+    phase: 'hidden' | 'warming' | 'visible';
+    requestId: number;
+    opacity: number;
+    backgroundThrottling: boolean;
+  };
   tray: { available: boolean; iconScaleFactors: number[] };
   interaction: DesktopInteractionConfig;
   lipSync: DesktopLipSyncConfig;
@@ -55,7 +61,7 @@ export interface DesktopCharApi {
   onCursorPoint(callback: (point: DesktopPoint) => void): () => void;
 }
 
-export type DesktopWindowCommand = 'restore-default-position' | 'hide-avatar' | 'quit';
+export type DesktopWindowCommand = 'restore-default-position' | 'hide-avatar' | 'show-avatar' | 'quit';
 
 export type AgentCommand =
   | { type: 'performance.submit'; plan: import('../../../../packages/contracts/src/index.ts').PerformancePlan }

@@ -27,6 +27,10 @@ try {
     || initial.bounds.width > 500 || initial.bounds.height > 740) {
     throw new Error(`Unexpected floating window state: ${JSON.stringify(initial)}`);
   }
+  if (initial.presentation?.phase !== 'visible' || initial.presentation.opacity !== 1
+    || initial.presentation.backgroundThrottling !== false) {
+    throw new Error(`Avatar must be revealed only after an unthrottled presentation frame: ${JSON.stringify(initial.presentation)}`);
+  }
   if (!initial.tray.iconScaleFactors.includes(1.5)) {
     throw new Error(`Tray icon must expose a native 24px representation at 150% DPI: ${JSON.stringify(initial.tray)}`);
   }
@@ -145,14 +149,38 @@ try {
   await page.evaluate(() => document.querySelector('#reset')?.click());
   await page.locator('body[data-speech-bubble="hidden"]').waitFor({ timeout: 2_000 });
 
-  await page.evaluate(() => window.desktopChar?.runWindowCommand('hide-avatar'));
-  await waitForMainWindowVisibility(application, false);
-  const hidden = await page.evaluate(() => window.desktopChar?.getWindowState());
-  if (hidden?.visible !== false || hidden?.tray?.available !== true) {
-    throw new Error(`Tray-backed hide state is invalid: ${JSON.stringify(hidden)}`);
+  const beforeVisibilityCycles = await page.evaluate(() => ({
+    scale: document.body.dataset.modelScale,
+    bounds: document.body.dataset.windowBounds,
+    webglContextLosses: document.body.dataset.webglContextLosses,
+  }));
+  let previousPresentationRequestId = initial.presentation.requestId;
+  for (let cycle = 1; cycle <= 4; cycle += 1) {
+    await page.evaluate(() => window.desktopChar?.runWindowCommand('hide-avatar'));
+    await waitForMainWindowVisibility(application, false);
+    const hidden = await page.evaluate(() => window.desktopChar?.getWindowState());
+    if (hidden?.visible !== false || hidden?.tray?.available !== true
+      || hidden?.presentation?.phase !== 'hidden' || hidden.presentation.opacity !== 0) {
+      throw new Error(`Tray-backed hide state is invalid in cycle ${cycle}: ${JSON.stringify(hidden)}`);
+    }
+    await page.evaluate(() => window.desktopChar?.runWindowCommand('show-avatar'));
+    await waitForMainWindowVisibility(application, true);
+    await waitForPresentationPhase(page, 'visible');
+    const restored = await page.evaluate(async () => ({
+      state: await window.desktopChar?.getWindowState(),
+      scale: document.body.dataset.modelScale,
+      bounds: document.body.dataset.windowBounds,
+      webglContextLosses: document.body.dataset.webglContextLosses,
+    }));
+    if (restored.state?.presentation?.opacity !== 1
+      || restored.state.presentation.requestId <= previousPresentationRequestId
+      || restored.scale !== beforeVisibilityCycles.scale
+      || restored.bounds !== beforeVisibilityCycles.bounds
+      || restored.webglContextLosses !== beforeVisibilityCycles.webglContextLosses) {
+      throw new Error(`Tray restore cycle ${cycle} changed renderer geometry or revealed an invalid frame: ${JSON.stringify({ beforeVisibilityCycles, restored })}`);
+    }
+    previousPresentationRequestId = restored.state.presentation.requestId;
   }
-  await application.evaluate(({ BrowserWindow }) => BrowserWindow.getAllWindows()[0]?.showInactive());
-  await waitForMainWindowVisibility(application, true);
 
   await page.evaluate(async () => {
     const api = window.desktopChar;
@@ -228,6 +256,16 @@ async function waitForMainWindowVisibility(application, expected) {
     await new Promise(resolve => setTimeout(resolve, 25));
   }
   throw new Error(`Avatar window did not become ${expected ? 'visible' : 'hidden'}`);
+}
+
+async function waitForPresentationPhase(page, expected) {
+  const deadline = Date.now() + 2_000;
+  while (Date.now() < deadline) {
+    const state = await page.evaluate(() => window.desktopChar?.getWindowState());
+    if (state?.presentation?.phase === expected) return;
+    await new Promise(resolve => setTimeout(resolve, 25));
+  }
+  throw new Error(`Avatar presentation did not become ${expected}`);
 }
 
 async function chatBubbleLayout(page) {

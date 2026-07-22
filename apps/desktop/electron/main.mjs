@@ -72,6 +72,11 @@ protocol.registerSchemesAsPrivileged([{
 let avatarWindow = null;
 let desktopTray = null;
 let trayIconScaleFactors = [];
+let avatarVisibilityIntent = false;
+let avatarPresentationPhase = 'hidden';
+let avatarPresentationRequestId = 0;
+let avatarPresentationTimer;
+let avatarFrameSubscriptionActive = false;
 let avatarBounds = null;
 let cursorTimer;
 let cursorRefreshTimer;
@@ -148,6 +153,7 @@ app.on('window-all-closed', () => app.quit());
 app.on('before-quit', () => {
   if (cursorTimer) clearInterval(cursorTimer);
   if (cursorRefreshTimer) clearTimeout(cursorRefreshTimer);
+  cancelAvatarPresentation();
   desktopTray?.destroy();
   desktopTray = null;
   void agentServer.close().catch(() => {});
@@ -190,11 +196,13 @@ function createAvatarWindow() {
     show: false,
     webPreferences: {
       preload: path.join(directory, 'preload.cjs'),
+      backgroundThrottling: false,
       contextIsolation: true,
       nodeIntegration: false,
       sandbox: true,
     },
   });
+  avatarWindow.setOpacity(0);
   avatarWindow.setAlwaysOnTop(true);
   applyPointerPresentation({ passthrough: true, cursor: 'default' });
   avatarWindow.webContents.setWindowOpenHandler(() => ({ action: 'deny' }));
@@ -212,7 +220,10 @@ function createAvatarWindow() {
   avatarWindow.on('resize', publishBounds);
   avatarWindow.on('show', updateTrayMenu);
   avatarWindow.on('hide', updateTrayMenu);
-  avatarWindow.on('closed', () => { avatarWindow = null; });
+  avatarWindow.on('closed', () => {
+    cancelAvatarPresentation();
+    avatarWindow = null;
+  });
   void avatarWindow.loadURL(devUrl ?? 'desktop-char://app/');
 
   cursorTimer = setInterval(() => {
@@ -238,13 +249,13 @@ function createDesktopTray() {
   trayIconScaleFactors = icon.getScaleFactors();
   desktopTray = new Tray(icon);
   desktopTray.setToolTip('DesktopChar');
-  desktopTray.on('click', () => setAvatarVisibility(nextAvatarVisibility(avatarWindow?.isVisible() ?? false)));
+  desktopTray.on('click', () => setAvatarVisibility(nextAvatarVisibility(avatarVisibilityIntent)));
   updateTrayMenu();
 }
 
 function updateTrayMenu() {
   if (!desktopTray) return;
-  const avatarVisible = avatarWindow?.isVisible() ?? false;
+  const avatarVisible = avatarVisibilityIntent;
   desktopTray.setContextMenu(Menu.buildFromTemplate([
     { label: trayVisibilityLabel(avatarVisible), click: () => setAvatarVisibility(!avatarVisible) },
     { label: '恢复默认位置', click: restoreDefaultPosition },
@@ -255,14 +266,54 @@ function updateTrayMenu() {
 
 function setAvatarVisibility(visible) {
   if (!avatarWindow || avatarWindow.isDestroyed()) return;
+  if (visible === avatarVisibilityIntent && avatarPresentationPhase !== 'warming') return;
+  avatarVisibilityIntent = visible;
   dragState = null;
   if (visible) {
+    const requestId = ++avatarPresentationRequestId;
+    cancelAvatarPresentation();
+    avatarPresentationPhase = 'warming';
+    avatarWindow.setOpacity(0);
     avatarWindow.showInactive();
-    avatarWindow.setAlwaysOnTop(true);
-    publishBounds();
+    if (!avatarWindow.isAlwaysOnTop()) avatarWindow.setAlwaysOnTop(true);
+    avatarFrameSubscriptionActive = true;
+    avatarWindow.webContents.beginFrameSubscription(false, image => {
+      if (image.isEmpty()) return;
+      completeAvatarPresentation(requestId, 'presented');
+    });
+    avatarWindow.webContents.invalidate();
+    avatarPresentationTimer = setTimeout(() => {
+      safeError('[avatar-visibility] presentation timed out; revealing fallback frame', { requestId });
+      completeAvatarPresentation(requestId, 'timeout');
+    }, 1_000);
   }
-  else avatarWindow.hide();
+  else {
+    ++avatarPresentationRequestId;
+    cancelAvatarPresentation();
+    avatarPresentationPhase = 'hidden';
+    avatarWindow.setOpacity(0);
+    avatarWindow.hide();
+  }
   updateTrayMenu();
+}
+
+function completeAvatarPresentation(requestId, source) {
+  if (!avatarWindow || avatarWindow.isDestroyed()
+    || requestId !== avatarPresentationRequestId || !avatarVisibilityIntent) return;
+  cancelAvatarPresentation();
+  avatarWindow.setOpacity(1);
+  avatarPresentationPhase = 'visible';
+  updateTrayMenu();
+  if (source === 'timeout') avatarWindow.webContents.invalidate();
+}
+
+function cancelAvatarPresentation() {
+  if (avatarPresentationTimer) clearTimeout(avatarPresentationTimer);
+  avatarPresentationTimer = undefined;
+  if (avatarFrameSubscriptionActive && avatarWindow && !avatarWindow.isDestroyed()) {
+    avatarWindow.webContents.endFrameSubscription();
+  }
+  avatarFrameSubscriptionActive = false;
 }
 
 function registerIpc() {
@@ -336,6 +387,7 @@ function registerIpc() {
     requireAvatarSender(event);
     if (command === 'restore-default-position') restoreDefaultPosition();
     else if (command === 'hide-avatar') setAvatarVisibility(false);
+    else if (command === 'show-avatar') setAvatarVisibility(true);
     else if (command === 'quit') app.quit();
   });
   ipcMain.on(channels.agentState, (event, state) => {
@@ -448,7 +500,13 @@ function windowState() {
     mousePassthrough: pointerPresentation.passthrough,
     pointerPresentation: { ...pointerPresentation },
     alwaysOnTop: avatarWindow.isAlwaysOnTop(),
-    visible: avatarWindow.isVisible(),
+    visible: avatarVisibilityIntent,
+    presentation: {
+      phase: avatarPresentationPhase,
+      requestId: avatarPresentationRequestId,
+      opacity: avatarWindow.getOpacity(),
+      backgroundThrottling: avatarWindow.webContents.getBackgroundThrottling(),
+    },
     tray: { available: Boolean(desktopTray), iconScaleFactors: [...trayIconScaleFactors] },
     interaction: { dragHoldDelayMs, dragWindowApi },
     lipSync: { gain: lipSyncGain },
