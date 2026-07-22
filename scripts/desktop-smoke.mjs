@@ -149,6 +149,19 @@ try {
   await page.locator('[data-item-id="tts-mcp-enabled"]').click();
   await page.locator('body[data-context-menu="open"][data-tts-mcp-service="ready"] [data-item-id="tts-mcp-enabled"][aria-checked="true"]').waitFor({ timeout: 5_000 });
   assertContextMenuOrigin(await contextMenuOrigin(page), stableMenuOrigin, 'enabling speech-synthesis MCP');
+  await page.locator('[data-item-id="mcp-config-reload"]').click();
+  await page.locator('body[data-context-menu="closed"][data-speech-bubble="complete"]').waitFor({ timeout: 5_000 });
+  const reloadBubble = await page.locator('#speech-bubble').textContent();
+  if (!reloadBubble?.includes('MCP 重新加载完成')
+    || !/配置 r\d+（无变化）/.test(reloadBubble)
+    || !reloadBubble.includes('角色接入 MCP：已连接')
+    || !reloadBubble.includes('语音合成 MCP：已连接')) {
+    throw new Error(`MCP reload result did not use the character chat bubble: ${reloadBubble}`);
+  }
+  await page.evaluate(() => document.querySelector('#avatar')?.dispatchEvent(
+    new KeyboardEvent('keydown', { key: 'ContextMenu', bubbles: true }),
+  ));
+  await page.locator('body[data-context-menu="open"] [data-item-id="mcp-connection-test"]').waitFor({ timeout: 2_000 });
   await page.locator('[data-item-id="mcp-connection-test"]').click();
   await page.locator('body[data-context-menu="closed"][data-tts-mcp-test="passed"][data-character-mcp-test="passed"][data-speech-bubble="complete"]').waitFor({ timeout: 5_000 });
   const mcpTestBubble = await page.locator('#speech-bubble').textContent();

@@ -882,6 +882,9 @@ function registerDevelopmentUi(): void {
           {
             type: 'action', id: 'mcp-config-reload',
             label: '重新加载 MCP',
+            enabled: runtimeIdle
+              && !mcpTransitioning(services.character)
+              && !mcpTransitioning(services.tts),
             invoke: reloadMcpServices,
           },
         ],
@@ -921,7 +924,35 @@ async function testAllMcpServices(): Promise<void> {
 
 async function reloadMcpServices(): Promise<void> {
   if (!desktopShell) return;
-  applyMcpServicesState(await desktopShell.reloadMcpServices());
+  const previousRevision = mcpServicesState?.config.revision;
+  try {
+    const next = await desktopShell.reloadMcpServices();
+    applyMcpServicesState(next);
+    const revisionStatus = previousRevision === undefined || next.config.revision !== previousRevision
+      ? '已更新'
+      : '无变化';
+    showMcpNotification(
+      `MCP 重新加载完成：配置 r${next.config.revision}（${revisionStatus}）；`
+      + `${formatMcpServiceState('角色接入 MCP', next.character)}；`
+      + `${formatMcpServiceState('语音合成 MCP', next.tts)}。`,
+    );
+  }
+  catch (error) {
+    let current = mcpServicesState;
+    try {
+      current = await desktopShell.getMcpServicesState();
+      applyMcpServicesState(current);
+    }
+    catch {
+      // Preserve the last renderer snapshot when the follow-up state request also fails.
+    }
+    const details = summarizeMcpDetails(current?.config.error ?? error);
+    const serviceStatus = current
+      ? `；现有${formatMcpServiceState('角色接入 MCP', current.character)}`
+        + `；${formatMcpServiceState('语音合成 MCP', current.tts)}`
+      : '';
+    showMcpNotification(`MCP 重新加载失败：${details}${serviceStatus}。`);
+  }
 }
 
 function mcpTransitioning(service: McpServiceState): boolean {
@@ -940,9 +971,28 @@ function mcpPhaseLabel(service: McpServiceState): string {
 function formatMcpTestResult(label: string, result: McpServiceTest): string {
   if (result.status === 'passed') return `${label}：通过（${result.latencyMs} ms）`;
   if (/service is disabled|服务未启用/i.test(result.details)) return `${label}：未启用`;
-  const details = result.details.replace(/\s+/g, ' ').trim();
-  const summary = details.length > 60 ? `${details.slice(0, 57)}...` : details;
-  return `${label}：失败（${summary || '未知错误'}）`;
+  return `${label}：失败（${summarizeMcpDetails(result.details)}）`;
+}
+
+function formatMcpServiceState(label: string, service: McpServiceState): string {
+  return `${label}：${mcpPhaseLabel(service)}`;
+}
+
+function summarizeMcpDetails(details: unknown): string {
+  const text = (details instanceof Error ? details.message : String(details ?? ''))
+    .replace(/\s+/g, ' ')
+    .trim();
+  if (!text) return '未知错误';
+  return text.length > 60 ? `${text.slice(0, 57)}...` : text;
+}
+
+function showMcpNotification(text: string): void {
+  if (!runtime || runtime.getSnapshot().state !== 'idle') return;
+  runtime.dispatch({
+    type: 'presentation.chat-bubble-requested',
+    text,
+    dismissDelayMs: 5_500,
+  });
 }
 
 function openAvatarContextMenu(event: MouseEvent): void {
