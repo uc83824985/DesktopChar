@@ -6,6 +6,7 @@ const AUDIO_FORMATS = new Set(['wav', 'mp3', 'ogg', 'opus', 'pcm_s16le', 'pcm_f3
 const LOOPBACK_HOSTS = new Set(['127.0.0.1', 'localhost', '::1']);
 const TTS_PROFILE_DIRECTORY = 'tts-mcp-profiles';
 const DEFAULT_TTS_PROFILE_NAME = 'local';
+const DEFAULT_DESKTOP_CONFIG_EXAMPLE = 'desktop-char.config.example.json';
 
 export function resolveDesktopConfigPath(env = process.env, cwd = process.cwd(), defaultFilePath) {
   const configuredPath = env.DESKTOP_CHAR_CONFIG_PATH ?? env.DESKTOP_CHAR_MCP_CONFIG_PATH;
@@ -14,28 +15,45 @@ export function resolveDesktopConfigPath(env = process.env, cwd = process.cwd(),
     : path.resolve(defaultFilePath ?? path.join(cwd, 'desktop-char.config.json'));
 }
 
+export function resolveDesktopExampleConfigPath(cwd = process.cwd(), defaultFilePath) {
+  return path.resolve(defaultFilePath ?? path.join(cwd, DEFAULT_DESKTOP_CONFIG_EXAMPLE));
+}
+
 export async function loadDesktopConfig(options = {}) {
   const env = options.env ?? process.env;
   const cwd = options.cwd ?? process.cwd();
   const filePath = options.filePath ?? resolveDesktopConfigPath(env, options.cwd, options.defaultFilePath);
-  let fileConfig = {};
+  const exampleFilePath = resolveDesktopExampleConfigPath(cwd, options.exampleFilePath);
+  let userConfig;
+  let exampleConfig;
   let exists = true;
   try {
-    const text = await readFile(filePath, 'utf8');
-    const parsed = JSON.parse(text);
-    if (!isRecord(parsed)) throw new TypeError('Desktop config root must be an object');
-    fileConfig = parsed;
+    userConfig = await readConfigObject(filePath, 'Desktop config');
   }
   catch (error) {
-    if (error && typeof error === 'object' && error.code === 'ENOENT') exists = false;
-    else if (error instanceof SyntaxError) throw new TypeError(`Desktop config is not valid JSON: ${error.message}`, { cause: error });
-    else throw error;
+    if (!isMissingFileError(error)) throw error;
+    exists = false;
   }
+  try {
+    exampleConfig = await readConfigObject(exampleFilePath, 'Desktop example config');
+  }
+  catch (error) {
+    if (!isMissingFileError(error)) throw error;
+  }
+  const source = exists ? 'user' : exampleConfig ? 'example' : 'built-in';
+  const presetConfig = mergeConfigObjects(exampleConfig ?? {}, desktopEnvironmentOverrides(env));
+  const fileConfig = mergeConfigObjects(presetConfig, userConfig ?? {});
   const ttsProfileName = requestedTtsProfileName(optionalRecord(fileConfig.ttsMcp, 'ttsMcp'));
-  const ttsProfile = await loadTtsProfileConfig(ttsProfileName, { configFilePath: filePath, cwd });
+  const ttsProfile = await loadTtsProfileConfig(ttsProfileName, {
+    configFilePath: filePath,
+    exampleConfigFilePath: exampleFilePath,
+    cwd,
+  });
   return {
     filePath,
     exists,
+    source,
+    sourcePath: source === 'user' ? filePath : source === 'example' ? exampleFilePath : null,
     config: normalizeDesktopConfig(fileConfig, env, {
       ttsProfileName: ttsProfileName,
       ttsProfileConfig: ttsProfile.config,
@@ -268,12 +286,68 @@ function normalizeSelectedTtsProfile(value, profileName) {
 
 function ttsProfileCandidates(profileName, options = {}) {
   const configFilePath = options.configFilePath ? path.resolve(options.configFilePath) : undefined;
+  const exampleConfigFilePath = options.exampleConfigFilePath ? path.resolve(options.exampleConfigFilePath) : undefined;
   const cwd = path.resolve(options.cwd ?? process.cwd());
   const filenames = [`${profileName}.json`];
   const directories = [];
   if (configFilePath) directories.push(path.resolve(path.dirname(configFilePath), TTS_PROFILE_DIRECTORY));
+  if (exampleConfigFilePath) directories.push(path.resolve(path.dirname(exampleConfigFilePath), TTS_PROFILE_DIRECTORY));
   directories.push(path.resolve(cwd, TTS_PROFILE_DIRECTORY));
   return [...new Set(directories)].flatMap(directory => filenames.map(filename => path.join(directory, filename)));
+}
+
+async function readConfigObject(filePath, label) {
+  let parsed;
+  try {
+    parsed = JSON.parse(await readFile(filePath, 'utf8'));
+  }
+  catch (error) {
+    if (error instanceof SyntaxError) {
+      throw new TypeError(`${label} is not valid JSON: ${error.message}`, { cause: error });
+    }
+    throw error;
+  }
+  if (!isRecord(parsed)) throw new TypeError(`${label} root must be an object`);
+  return parsed;
+}
+
+function isMissingFileError(error) {
+  return Boolean(error && typeof error === 'object' && error.code === 'ENOENT');
+}
+
+function mergeConfigObjects(base, overrides) {
+  const keys = new Set([...Object.keys(base), ...Object.keys(overrides)]);
+  return Object.fromEntries([...keys].map(key => {
+    const baseValue = base[key];
+    const overrideValue = overrides[key];
+    if (overrideValue === undefined) return [key, baseValue];
+    if (isRecord(baseValue) && isRecord(overrideValue)) {
+      return [key, mergeConfigObjects(baseValue, overrideValue)];
+    }
+    return [key, overrideValue];
+  }));
+}
+
+function desktopEnvironmentOverrides(env) {
+  return {
+    interaction: {
+      drag: {
+        holdDelayMs: env.DESKTOP_CHAR_DRAG_HOLD_DELAY_MS,
+      },
+    },
+    agentHttp: {
+      port: env.DESKTOP_CHAR_AGENT_PORT,
+    },
+    ttsMcp: {
+      autoStart: env.DESKTOP_CHAR_TTS_MCP_ENABLED,
+    },
+    characterMcp: {
+      autoStart: env.DESKTOP_CHAR_CHARACTER_MCP_ENABLED,
+      host: env.DESKTOP_CHAR_CHARACTER_MCP_HOST,
+      port: env.DESKTOP_CHAR_CHARACTER_MCP_PORT,
+      path: env.DESKTOP_CHAR_CHARACTER_MCP_PATH,
+    },
+  };
 }
 
 function defaultLocalTtsProfile() {

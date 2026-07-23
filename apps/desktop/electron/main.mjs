@@ -24,6 +24,9 @@ const directory = path.dirname(fileURLToPath(import.meta.url));
 const rendererRoot = path.resolve(directory, '../dist');
 const devUrl = parseLoopbackDevUrl(process.env.DESKTOP_CHAR_DEV_URL);
 const packagedConfigPath = app.isPackaged ? path.join(app.getPath('userData'), 'config.json') : undefined;
+const packagedExampleConfigPath = app.isPackaged
+  ? path.join(process.resourcesPath, 'desktop-char.config.example.json')
+  : undefined;
 const desktopConfigPath = resolveDesktopConfigPath(process.env, process.cwd(), packagedConfigPath);
 let desktopConfig = normalizeDesktopConfig({}, process.env);
 const rawConsoleLog = console.log.bind(console);
@@ -117,6 +120,7 @@ let lastMcpServicesLogKey = '';
 const mcpServices = createMcpServicesController({
   env: process.env,
   configFilePath: desktopConfigPath,
+  exampleConfigFilePath: packagedExampleConfigPath,
   version: app.getVersion(),
   ttsContext,
   onDesktopConfigChanged(config, metadata) { applyDesktopConfig(config, metadata); },

@@ -1,5 +1,5 @@
 import assert from 'node:assert/strict';
-import { mkdir as fsMkdir, mkdtemp, rm, writeFile } from 'node:fs/promises';
+import { mkdir as fsMkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
 import test from 'node:test';
@@ -130,6 +130,84 @@ test('managed Local TTS uses one host and port for its process and endpoint defa
   assert.equal(config.tts.lifecycle.type, 'managed');
   assert.equal(config.tts.lifecycle.start.env.DESKTOP_CHAR_TTS_LOCAL_MCP_PORT, '19876');
   assert.equal(config.tts.connection.url, 'http://127.0.0.1:19876/mcp');
+});
+
+test('checked-in desktop config example stays aligned with built-in defaults', async () => {
+  const examplePath = new URL('../../../desktop-char.config.example.json', import.meta.url);
+  const example = JSON.parse(await readFile(examplePath, 'utf8'));
+  assert.deepEqual(
+    normalizeDesktopConfig(example, {}),
+    normalizeDesktopConfig({}, {}),
+  );
+});
+
+test('desktop config loader falls back from a missing user config to example then built-in defaults', async t => {
+  const directory = await mkdtemp(path.join(os.tmpdir(), 'desktop-char-config-fallback-'));
+  const filePath = path.join(directory, 'desktop-char.config.json');
+  const exampleFilePath = path.join(directory, 'desktop-char.config.example.json');
+  const profileDirectory = path.join(directory, 'tts-mcp-profiles');
+  t.after(() => rm(directory, { recursive: true, force: true }));
+  await writeProfile(profileDirectory, 'local', {});
+  await writeFile(exampleFilePath, JSON.stringify({
+    version: 1,
+    interaction: { drag: { holdDelayMs: 321 } },
+    window: { defaultSize: { width: 512, height: 768 } },
+    ttsMcp: { profile: 'local' },
+  }), 'utf8');
+
+  const fromExample = await loadMcpServicesConfig({ filePath, exampleFilePath, env: {} });
+  assert.equal(fromExample.exists, false);
+  assert.equal(fromExample.source, 'example');
+  assert.equal(fromExample.sourcePath, exampleFilePath);
+  assert.equal(fromExample.config.interaction.drag.holdDelayMs, 321);
+  assert.deepEqual(fromExample.config.window.defaultSize, { width: 512, height: 768 });
+
+  await writeFile(filePath, JSON.stringify({
+    interaction: { drag: { holdDelayMs: 123 } },
+    window: { alwaysOnTop: false },
+  }), 'utf8');
+  const fromUserOverride = await loadMcpServicesConfig({
+    filePath,
+    exampleFilePath,
+    env: { DESKTOP_CHAR_DRAG_HOLD_DELAY_MS: '222' },
+  });
+  assert.equal(fromUserOverride.exists, true);
+  assert.equal(fromUserOverride.source, 'user');
+  assert.equal(fromUserOverride.sourcePath, filePath);
+  assert.equal(fromUserOverride.config.interaction.drag.holdDelayMs, 123);
+  assert.deepEqual(fromUserOverride.config.window.defaultSize, { width: 512, height: 768 });
+  assert.equal(fromUserOverride.config.window.alwaysOnTop, false);
+
+  await writeFile(filePath, JSON.stringify({
+    window: { alwaysOnTop: false },
+  }), 'utf8');
+  const fromEnvironmentOverride = await loadMcpServicesConfig({
+    filePath,
+    exampleFilePath,
+    env: { DESKTOP_CHAR_DRAG_HOLD_DELAY_MS: '222' },
+  });
+  assert.equal(fromEnvironmentOverride.config.interaction.drag.holdDelayMs, 222);
+
+  await rm(filePath);
+  await rm(exampleFilePath);
+  const fromBuiltIn = await loadMcpServicesConfig({ filePath, exampleFilePath, env: {} });
+  assert.equal(fromBuiltIn.exists, false);
+  assert.equal(fromBuiltIn.source, 'built-in');
+  assert.equal(fromBuiltIn.sourcePath, null);
+  assert.equal(fromBuiltIn.config.interaction.drag.holdDelayMs, 180);
+  assert.deepEqual(fromBuiltIn.config.window.defaultSize, { width: 460, height: 700 });
+});
+
+test('desktop config loader reports an invalid example instead of silently using built-in defaults', async t => {
+  const directory = await mkdtemp(path.join(os.tmpdir(), 'desktop-char-config-invalid-example-'));
+  const filePath = path.join(directory, 'desktop-char.config.json');
+  const exampleFilePath = path.join(directory, 'desktop-char.config.example.json');
+  t.after(() => rm(directory, { recursive: true, force: true }));
+  await writeFile(exampleFilePath, '{ invalid', 'utf8');
+  await assert.rejects(
+    loadMcpServicesConfig({ filePath, exampleFilePath, env: {} }),
+    /Desktop example config is not valid JSON/,
+  );
 });
 
 test('MCP config loader tolerates a missing file and watcher observes later edits', async t => {

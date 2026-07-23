@@ -10,12 +10,14 @@ import { startManagedProcess } from './managed-process.mjs';
 import {
   loadDesktopConfig,
   resolveDesktopConfigPath,
+  resolveDesktopExampleConfigPath,
   watchDesktopConfig,
 } from './mcp-services-config.mjs';
 
 export function createMcpServicesController(options = {}) {
   const env = options.env ?? process.env;
   const configFilePath = options.configFilePath ?? resolveDesktopConfigPath(env, options.cwd, options.defaultFilePath);
+  const exampleConfigFilePath = resolveDesktopExampleConfigPath(options.cwd, options.exampleConfigFilePath);
   const createCharacterService = options.createCharacterService ?? createCharacterMcpService;
   const connectClient = options.connectClient ?? connectMcpClient;
   const launchTtsProcess = options.launchTtsProcess ?? startManagedProcess;
@@ -70,14 +72,22 @@ export function createMcpServicesController(options = {}) {
     if (started) return snapshot();
     started = true;
     await loadLatestConfig({ initial: true, reason: 'startup' });
-    stopWatching = watchDesktopConfig(configFilePath, () => {
+    const onConfigChanged = () => {
       if (reloadTimer) clearTimeout(reloadTimer);
       reloadTimer = setTimeout(() => {
         reloadTimer = undefined;
         void reload('watch').catch(() => {});
       }, 120);
       reloadTimer.unref?.();
-    });
+    };
+    const stopUserConfigWatcher = watchDesktopConfig(configFilePath, onConfigChanged);
+    const stopExampleConfigWatcher = configFilePath === exampleConfigFilePath
+      ? undefined
+      : watchDesktopConfig(exampleConfigFilePath, onConfigChanged);
+    stopWatching = () => {
+      stopUserConfigWatcher();
+      stopExampleConfigWatcher?.();
+    };
     if (state.tts.desiredEnabled) void enqueue(() => startTts('startup'));
     if (state.character.desiredEnabled) void enqueue(() => startCharacter('startup'));
     return snapshot();
@@ -222,7 +232,11 @@ export function createMcpServicesController(options = {}) {
   async function loadLatestConfig({ initial, reason, applyServices = true }) {
     let loaded;
     try {
-      loaded = await loadDesktopConfig({ filePath: configFilePath, env });
+      loaded = await loadDesktopConfig({
+        filePath: configFilePath,
+        exampleFilePath: exampleConfigFilePath,
+        env,
+      });
     }
     catch (error) {
       state.config.status = 'error';

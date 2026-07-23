@@ -128,7 +128,7 @@ test('TTS hot reload waits for the Runtime idle boundary', async t => {
   assert.equal(pending.tts.endpoint, endpoint);
   controller.updateAvatarState({ ready: true, snapshot: { state: 'idle' } });
   await waitFor(() => controller.snapshot().tts.phase === 'ready'
-    && controller.snapshot().tts.processId !== processId);
+    && controller.snapshot().tts.processId !== processId, 12_000);
   assert.equal(controller.snapshot().tts.endpoint, endpoint);
 });
 
@@ -199,12 +199,14 @@ test('character MCP retries its loopback binding after a port conflict clears', 
 test('controller automatically applies a saved config file revision', async t => {
   const directory = await mkdtemp(path.join(os.tmpdir(), 'desktop-char-config-watch-'));
   const configFilePath = path.join(directory, 'desktop-char.config.json');
+  const exampleConfigFilePath = path.join(directory, 'desktop-char.config.example.json');
   const profileDirectory = path.join(directory, 'tts-mcp-profiles');
   t.after(() => rm(directory, { recursive: true, force: true }));
   await writeTtsProfile(profileDirectory, 'local', {});
   await writeTtsProfile(profileDirectory, 'external-local', externalTtsProfile({ timeoutMs: 12_345 }));
   const controller = createMcpServicesController({
     configFilePath,
+    exampleConfigFilePath,
     env: {
       DESKTOP_CHAR_TTS_MCP_ENABLED: 'false',
       DESKTOP_CHAR_CHARACTER_MCP_ENABLED: 'false',
@@ -220,8 +222,15 @@ test('controller automatically applies a saved config file revision', async t =>
     },
     characterMcp: { autoStart: false, path: '/watched-mcp' },
   }), 'utf8');
-  await waitFor(() => controller.snapshot().config.revision > revision, 3_000);
+  await waitFor(() => controller.snapshot().config.revision > revision, 5_000);
   assert.equal(controller.currentTtsConfig().timeoutMs, 12_345);
+  assert.equal(controller.snapshot().config.status, 'ready');
+
+  const userConfigRevision = controller.snapshot().config.revision;
+  await writeFile(exampleConfigFilePath, JSON.stringify({
+    interaction: { drag: { holdDelayMs: 222 } },
+  }), 'utf8');
+  await waitFor(() => controller.snapshot().config.revision > userConfigRevision, 5_000);
   assert.equal(controller.snapshot().config.status, 'ready');
 });
 

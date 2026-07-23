@@ -86,7 +86,9 @@ models/Mao/
 
 ## 应用配置 JSON
 
-仓库根目录的 `desktop-char.config.example.json` 继续作为可复制样例。开发期现有 `desktop-char.config.json` 保持兼容；产品打包后默认有效文件改为：
+仓库根目录的 `desktop-char.config.example.json` 同时是可复制样例和默认预设。应用先读取该预设，再叠加设备本地的用户配置；因此用户配置可以只写需要覆盖的字段，未声明字段会持续跟随预设。若预设文件未随部署提供，才回退到代码内与预设等价的硬编码初始值。自动测试要求实际预设的归一化结果与硬编码初始值完全一致，任一侧单独修改都会使测试失败。
+
+开发期用户配置仍为 `desktop-char.config.json`；产品打包后默认有效文件改为：
 
 ```text
 ${app.getPath('userData')}/config.json
@@ -152,6 +154,7 @@ Settings UI --patch intent--> preload whitelist --> main validate
 ```
 
 - Renderer 不能直接读取或写入任意文件；后续设置页只能提交白名单字段的 patch intent。
+- 用户配置和默认预设均进入文件监听；预设变化只影响未被用户配置显式覆盖的字段。
 - main 的后续 writer 合并 patch 后对完整文档做 schema 和语义校验，再用临时文件加原子替换提交。
 - 非法 JSON 或非法值不会替换上一份有效 revision。
 - 配置变更通过事件进入 Runtime，不能绕过 Runtime 直接写 Live2D 参数。
