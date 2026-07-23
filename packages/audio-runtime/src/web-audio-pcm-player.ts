@@ -18,6 +18,7 @@ export interface WebAudioPcmPlayerOptions {
 interface PcmBlock {
   firstFrame: number;
   samples: Float32Array;
+  startTime: number | null;
 }
 
 interface PlaybackSession {
@@ -31,10 +32,10 @@ interface PlaybackSession {
   totalFrames: number;
   nextStartTime: number;
   startedAt: number | null;
-  lastNode: AudioBufferSourceNode | null;
   streamEnded: boolean;
+  stalled: boolean;
   startTimer: ReturnType<typeof setTimeout> | undefined;
-  completionTimer: ReturnType<typeof setTimeout> | undefined;
+  recoveryTimer: ReturnType<typeof setTimeout> | undefined;
   progressTimer: ReturnType<typeof setInterval> | undefined;
 }
 
@@ -67,8 +68,8 @@ export class WebAudioPcmStreamPlayer implements AudioPlayerPort {
     const session: PlaybackSession = {
       generation, segmentId, source, controller: new AbortController(),
       blocks: [], pendingBlocks: [], scheduledNodes: new Set(), totalFrames: 0,
-      nextStartTime: 0, startedAt: null, lastNode: null, streamEnded: false,
-      startTimer: undefined, completionTimer: undefined, progressTimer: undefined,
+      nextStartTime: 0, startedAt: null, streamEnded: false, stalled: false,
+      startTimer: undefined, recoveryTimer: undefined, progressTimer: undefined,
     };
     this.current = session;
     this.emit({ type: 'playback.buffering', generation, segmentId, positionMs: 0, bufferedMs: 0 });
@@ -81,7 +82,7 @@ export class WebAudioPcmStreamPlayer implements AudioPlayerPort {
         const decoded = decodePcmS16Le(chunk, lowByte);
         lowByte = decoded.lowByte;
         if (!decoded.samples.length) continue;
-        const block = { firstFrame: session.totalFrames, samples: decoded.samples };
+        const block = { firstFrame: session.totalFrames, samples: decoded.samples, startTime: null };
         session.totalFrames += decoded.samples.length;
         session.blocks.push(block);
         if (session.startedAt === null) session.pendingBlocks.push(block);
@@ -99,7 +100,7 @@ export class WebAudioPcmStreamPlayer implements AudioPlayerPort {
         this.startSession(session);
       }
       session.streamEnded = true;
-      if (!session.lastNode || !session.scheduledNodes.has(session.lastNode)) this.completeAfterOutput(session);
+      if (!session.scheduledNodes.size) this.complete(session);
     }
     catch (error) {
       if (session.controller.signal.aborted) return;
@@ -150,24 +151,39 @@ export class WebAudioPcmStreamPlayer implements AudioPlayerPort {
 
   private scheduleBlock(session: PlaybackSession, block: PcmBlock): void {
     const context = this.context!;
+    const outputTime = this.playbackContextTime();
+    if (session.startedAt !== null && !session.stalled && session.nextStartTime <= outputTime) {
+      this.markStalled(session);
+    }
+    const recovering = session.stalled && session.recoveryTimer === undefined;
+    const startTime = recovering || session.nextStartTime <= outputTime
+      ? context.currentTime + this.startLeadMs / 1_000
+      : session.nextStartTime;
+    block.startTime = startTime;
     const buffer = context.createBuffer(1, block.samples.length, session.source.sampleRateHz);
     buffer.getChannelData(0).set(block.samples);
     const node = context.createBufferSource();
     node.buffer = buffer;
     node.connect(context.destination);
     session.scheduledNodes.add(node);
-    session.lastNode = node;
     node.addEventListener('ended', () => {
       node.disconnect();
       session.scheduledNodes.delete(node);
-      if (session.streamEnded && session.lastNode === node) this.completeAfterOutput(session);
+      if (this.current !== session || session.scheduledNodes.size) return;
+      if (session.streamEnded) this.complete(session);
+      else this.markStalled(session);
     }, { once: true });
-    node.start(session.nextStartTime);
-    session.nextStartTime += block.samples.length / session.source.sampleRateHz;
+    node.start(startTime);
+    session.nextStartTime = startTime + block.samples.length / session.source.sampleRateHz;
+    if (recovering) this.emitRecoveredAtOutput(
+      session,
+      startTime,
+      block.firstFrame / session.source.sampleRateHz * 1_000,
+    );
   }
 
   private emitProgress(session: PlaybackSession): void {
-    if (this.current !== session || session.startedAt === null || this.context?.state !== 'running') return;
+    if (this.current !== session || session.startedAt === null || session.stalled || this.context?.state !== 'running') return;
     const positionMs = this.positionMs(session);
     this.emit({ type: 'playback.progress', generation: session.generation, segmentId: session.segmentId, positionMs });
     this.emit({
@@ -178,7 +194,7 @@ export class WebAudioPcmStreamPlayer implements AudioPlayerPort {
 
   private emitStartedAtOutput(session: PlaybackSession): void {
     if (this.current !== session || session.startedAt === null) return;
-    const remainingMs = (session.startedAt - this.outputContextTime()) * 1_000;
+    const remainingMs = (session.startedAt - this.playbackContextTime()) * 1_000;
     if (remainingMs > 1) {
       session.startTimer = setTimeout(
         () => this.emitStartedAtOutput(session),
@@ -188,23 +204,40 @@ export class WebAudioPcmStreamPlayer implements AudioPlayerPort {
     }
     this.emit({
       type: 'playback.started', generation: session.generation, segmentId: session.segmentId,
-      positionMs: this.positionMs(session),
+      positionMs: 0,
     });
     session.progressTimer = setInterval(() => this.emitProgress(session), this.levelIntervalMs);
   }
 
-  private completeAfterOutput(session: PlaybackSession): void {
-    if (this.current !== session) return;
-    const durationMs = session.totalFrames / session.source.sampleRateHz * 1_000;
-    const remainingMs = durationMs - this.positionMs(session);
+  private emitRecoveredAtOutput(session: PlaybackSession, startTime: number, positionMs: number): void {
+    if (this.current !== session || !session.stalled) return;
+    const remainingMs = (startTime - this.playbackContextTime()) * 1_000;
     if (remainingMs > 1) {
-      session.completionTimer = setTimeout(
-        () => this.completeAfterOutput(session),
+      session.recoveryTimer = setTimeout(
+        () => this.emitRecoveredAtOutput(session, startTime, positionMs),
         Math.max(1, Math.min(remainingMs, this.levelIntervalMs)),
       );
       return;
     }
-    this.complete(session);
+    session.recoveryTimer = undefined;
+    session.stalled = false;
+    this.emit({
+      type: 'playback.recovered', generation: session.generation, segmentId: session.segmentId,
+      positionMs,
+    });
+  }
+
+  private markStalled(session: PlaybackSession): void {
+    if (this.current !== session || session.startedAt === null || session.stalled) return;
+    session.stalled = true;
+    const positionMs = this.positionMs(session);
+    this.emit({
+      type: 'playback.level', generation: session.generation, segmentId: session.segmentId,
+      positionMs, value: 0,
+    });
+    this.emit({
+      type: 'playback.stalled', generation: session.generation, segmentId: session.segmentId, positionMs,
+    });
   }
 
   private complete(session: PlaybackSession): void {
@@ -217,7 +250,7 @@ export class WebAudioPcmStreamPlayer implements AudioPlayerPort {
 
   private cleanup(session: PlaybackSession, stopNodes = true): void {
     if (session.startTimer) clearTimeout(session.startTimer);
-    if (session.completionTimer) clearTimeout(session.completionTimer);
+    if (session.recoveryTimer) clearTimeout(session.recoveryTimer);
     if (session.progressTimer) clearInterval(session.progressTimer);
     if (stopNodes) {
       for (const node of session.scheduledNodes) {
@@ -232,18 +265,22 @@ export class WebAudioPcmStreamPlayer implements AudioPlayerPort {
 
   private positionMs(session: PlaybackSession): number {
     if (session.startedAt === null || !this.context) return 0;
-    return Math.max(0, (this.outputContextTime() - session.startedAt) * 1_000);
+    const outputTime = this.playbackContextTime();
+    let playedFrames = 0;
+    for (const block of session.blocks) {
+      if (block.startTime === null || outputTime <= block.startTime) break;
+      const elapsedFrames = Math.floor((outputTime - block.startTime) * session.source.sampleRateHz);
+      playedFrames = Math.max(
+        playedFrames,
+        block.firstFrame + Math.min(block.samples.length, Math.max(0, elapsedFrames)),
+      );
+      if (elapsedFrames < block.samples.length) break;
+    }
+    return playedFrames / session.source.sampleRateHz * 1_000;
   }
 
-  private outputContextTime(): number {
-    const context = this.context!;
-    if (typeof context.getOutputTimestamp === 'function') {
-      const timestamp = context.getOutputTimestamp();
-      if (typeof timestamp.contextTime === 'number' && Number.isFinite(timestamp.contextTime)) {
-        return timestamp.contextTime;
-      }
-    }
-    return context.currentTime;
+  private playbackContextTime(): number {
+    return this.context!.currentTime;
   }
 
   private emit(event: PlaybackEvent): void {

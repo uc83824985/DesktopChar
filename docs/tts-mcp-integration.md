@@ -318,6 +318,15 @@ Provider 必须通过 `tools/list` 发布以下三个工具，并同时提供 `i
 
 MCP endpoint 是控制面，负责状态、创建流和取消请求。实际音频通过 `stream_url` 独立传输。这样 `tts_open_stream` 可以在首个可播放数据准备好后立即返回，而生成器继续分块输出后续音频。
 
+DesktopChar 的播放边界以统一的 WebAudio 播放时间线为准，而不是 MCP 返回、HTTP Response 建立、语音包到达或网络 EOF。业务层忽略声卡自身的微小输出延迟：
+
+- 第一块 PCM 到达调度起点时发布 `playback.started`，Runtime 此时才显示语音聊天气泡；
+- 已调度 PCM buffer 全部结束而流尚未结束时发布 `playback.stalled`，播放位置、聊天气泡流式进度、动作时间线和口型保持冻结；
+- 新 PCM buffer 恢复播放时发布 `playback.recovered`，从已播放帧位置继续；
+- 收到网络 EOF 后仍等待最后一个 `AudioBufferSourceNode` 触发 `ended`，再发布 `playback.completed` 并进入聊天气泡延迟关闭阶段。
+
+没有 `duration_ms` 或 `text_cues` 时，客户端只能让字符显示速度跟随“有声播放时间”，不能从纯 PCM 推断当前音素对应的文字。需要精确逐字或 KTV 对齐的 Provider 必须返回与 `displayText` 匹配的 `text_cues`；流断粮冻结不能替代文本同步点。
+
 Provider 应避免：
 
 - 将完整音频编码为 MCP 文本 JSON 后才返回；
