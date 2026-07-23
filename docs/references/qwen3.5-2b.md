@@ -131,7 +131,7 @@ prompt 把允许值目录表达成输出示例会诱导模型复制数组；Adap
 - 尚未在 RTX 3070 上与 Qwen3-TTS 并发压测；
 - 尚未建立 Live2D 动作目录标注集；
 - 尚未验证 Qwen3.5-2B 在动态 JSON enum 下的稳定性；
-- 尚未实现表现模型的 managed Supervisor；当前桌面接入为可热重载的 external
-  OpenAI-compatible endpoint；
+- 表现模型 external/managed Supervisor 已实现并共享同一 OpenAI-compatible
+  Adapter；managed 会等待 `/v1/models` readiness、监控入口异常退出并回收进程树；
 - `OpenAiCompatiblePerformanceAdapter`、规则回退、Runtime Effect Handler 和
   generation/revision 丢弃策略已经实现并通过真实 CPU 服务诊断。

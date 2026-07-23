@@ -51,6 +51,12 @@ benchmarking concurrent performance-model requests.
 The full-precision 2B model needs several GiB of free VRAM. Close or reduce other GPU
 workloads before starting the service if model loading reports CUDA out of memory.
 
+For normal desktop integration, `performanceInference.lifecycle.type` can be set to
+`managed`. Electron then launches this same script, waits for `/v1/models`, and owns
+the entry process tree. Disabling performance inference or exiting DesktopChar closes
+that tree. Keep `external` when this script is started manually, by a service manager,
+or on another machine.
+
 ## Smoke test
 
 In a second PowerShell:

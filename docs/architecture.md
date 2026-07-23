@@ -113,7 +113,7 @@ config -> contracts
 
 - 官方模型仓库提供模型配置、chat template、tokenizer/权重制品和 OpenAI-compatible 服务说明；具体 `Qwen3_5ForConditionalGeneration` 实现由推理框架提供。
 - 2B 模型默认 non-thinking，首版只用于 sealed 文本的情绪分析和当前 Live2D 动作目录选择，不生成回复或直接执行 motion。
-- 表现模型当前实现为 `external` 生命周期，使用短 HTTP JSON 请求而不是 MCP；Adapter 永远只连接已就绪 endpoint。后续 `managed` 由独立 Supervisor 增加进程所有权，不改变 Adapter。
+- 表现模型使用短 HTTP JSON 请求而不是 MCP；Adapter 永远只连接已就绪 endpoint。`external` 由外部系统持有进程，`managed` 由 Electron Supervisor 启停入口进程、探测 readiness、监控异常退出并回收进程树，不改变 Adapter。
 - 本地参考目录跳过了 LFS 权重实体；实际权重与量化格式按本机 profile 单独管理。
 - 详细事实、未验证项和 3070 验收范围见 [Qwen3.5-2B 本地表现规划阅读记录](references/qwen3.5-2b.md)。
 
@@ -126,6 +126,6 @@ config -> contracts
 5. 已完成 Electron 透明窗口、安全 preload、透明区穿透、角色点击/拖动和 bounds 同步。
 6. 已接入可动态启停的语音合成 MCP Client、角色接入 MCP Server 与兼容 Agent HTTP；后续 ASR/真实 Agent 仍只通过 Event/Effect 端口连接。
 7. 已确定多 Agent 前置架构：应用持有规范对话上下文和唯一呈现队列；同步面只保留多 Turn reply Agent，提交后由 context-maintenance Agent 异步维护摘要/记忆。
-8. 已确定表情和已有 Live2D 动作暂由本地 Qwen3.5-2B 规划；当前 external HTTP Adapter 与角色级 `emotionBindings` 已接入，managed Supervisor、动态动作 schema 和 3070 并发压测尚待实现。
+8. 已确定表情和已有 Live2D 动作暂由本地 Qwen3.5-2B 规划；external/managed HTTP 生命周期、角色级 `emotionBindings` 和退出回收已接入，动态动作 schema 和 3070 并发压测尚待实现。
 
 外部 Agent 可通过角色接入 MCP 或兼容的 `127.0.0.1` HTTP 控制面发送完整 `PerformancePlan` 和中断请求，由 Electron main 转为白名单 IPC，再由 renderer 提交 Runtime；Agent 通过 Runtime snapshot 判断实际播放完成。角色接入 MCP 工具与动态服务管理见 [MCP 服务生命周期](mcp-services.md)，HTTP 请求结构见 [外部 Agent 本地 HTTP 接入指南](external-agent-http.md)。

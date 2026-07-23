@@ -152,10 +152,49 @@ Windows 通常对应 `%APPDATA%/DesktopChar/config.json`。程序只通过 Elect
 - 窗口默认尺寸、边距、置顶策略等用户偏好；
 - 当前角色资产 Profile 路径。
 
-`performanceInference.lifecycle` 当前只接受 `external`。右键菜单的动态开关只改变
-Adapter 是否向已就绪 endpoint 发请求；它不启动、关闭或监控 Qwen 进程。开发期需由
-用户在独立终端执行 `npm run performance:start`，未来 managed 模式应由独立
-Supervisor 显式持有进程，而不是把启动职责塞进 Adapter。
+`performanceInference.lifecycle` 接受 `external`、`managed` 字符串简写，或带启动和
+健康检查策略的对象。`external` 的动态开关只改变 Adapter 是否向现有 endpoint 发请求；
+`managed` 的动态开关由 Electron Supervisor 启停 owned 入口进程并等待 `healthUrl`
+可用。启动职责不会进入 `PerformanceInferenceAdapter`。
+
+仓库 example 保持 `enabled: false`、`lifecycle: "external"`，防止普通启动意外加载
+大模型。需要 DesktopChar 托管本地 Qwen3.5-2B 时，可在用户配置中覆盖为：
+
+```json
+{
+  "performanceInference": {
+    "enabled": true,
+    "lifecycle": {
+      "type": "managed",
+      "start": {
+        "executable": "C:\\Windows\\System32\\WindowsPowerShell\\v1.0\\powershell.exe",
+        "args": [
+          "-NoProfile",
+          "-ExecutionPolicy",
+          "Bypass",
+          "-File",
+          "performance-model-service/start.ps1",
+          "-Port",
+          "18090"
+        ],
+        "cwd": "."
+      },
+      "startupTimeoutMs": 120000,
+      "shutdownTimeoutMs": 10000,
+      "healthIntervalMs": 10000,
+      "restartOnFailure": true
+    },
+    "provider": "qwen35-transformers",
+    "baseUrl": "http://127.0.0.1:18090/v1",
+    "healthUrl": "http://127.0.0.1:18090/v1/models"
+  }
+}
+```
+
+省略 managed 的 `start` 时，开发版会使用仓库内
+`performance-model-service/start.ps1` 的等价默认值。生产配置建议显式写绝对路径，
+避免工作目录变化。入口异常退出或周期健康检查失败时，`restartOnFailure` 决定是否
+重启；正常停用、热重载和应用退出都会先取消请求，再关闭 owned 进程树。
 
 聊天气泡的全局默认显示/纯文本回退计时，以及后续增加的拖动距离阈值仍需先改造成可注入的 Runtime Policy，再加入 JSON；在完成该边界前不提供“写入了但没有实际生效”的字段。
 
