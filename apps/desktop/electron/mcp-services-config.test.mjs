@@ -90,8 +90,9 @@ test('desktop config owns interaction, window, agent and character profile setti
   assert.equal(config.agentHttp.port, 0);
   assert.equal(config.characterProfile.url, 'models/Test/DesktopChar.character.json');
   assert.equal(config.performanceInference.enabled, false);
-  assert.equal(config.performanceInference.lifecycle, 'external');
+  assert.equal(config.performanceInference.lifecycle.type, 'external');
   assert.equal(config.performanceInference.baseUrl, 'http://127.0.0.1:18090/v1');
+  assert.equal(config.performanceInference.healthUrl, 'http://127.0.0.1:18090/v1/models');
   assert.equal(Object.isFrozen(config.interaction.drag), true);
   assert.equal(config.tts.profile, 'local');
 });
@@ -111,9 +112,26 @@ test('desktop config path prefers the new bootstrap variable and validates appli
   assert.throws(() => normalizeDesktopConfig({ character: { profile: '../escape.json' } }), /parent traversal/);
   assert.throws(() => normalizeDesktopConfig({ performanceInference: { temperature: 3 } }), /0 to 2/);
   assert.throws(() => normalizeDesktopConfig({ performanceInference: { maxOutputTokens: 0 } }), /positive integer/);
+  const managedPerformance = normalizeDesktopConfig({
+    performanceInference: {
+      lifecycle: {
+        type: 'managed',
+        start: { executable: 'powershell.exe', args: ['-File', 'start.ps1'], cwd: '.' },
+        startupTimeoutMs: 90_000,
+        shutdownTimeoutMs: 5_000,
+        healthIntervalMs: 2_000,
+        restartOnFailure: false,
+      },
+      baseUrl: 'http://127.0.0.1:18091/v1',
+    },
+  });
+  assert.equal(managedPerformance.performanceInference.lifecycle.type, 'managed');
+  assert.equal(managedPerformance.performanceInference.lifecycle.start.executable, 'powershell.exe');
+  assert.equal(managedPerformance.performanceInference.lifecycle.startupTimeoutMs, 90_000);
+  assert.equal(managedPerformance.performanceInference.healthUrl, 'http://127.0.0.1:18091/v1/models');
   assert.throws(
-    () => normalizeDesktopConfig({ performanceInference: { lifecycle: 'managed' } }),
-    /only supports external/,
+    () => normalizeDesktopConfig({ performanceInference: { lifecycle: 'embedded' } }),
+    /external or managed/,
   );
   assert.throws(
     () => normalizeDesktopConfig({ performanceInference: { baseUrl: 'https://example.com/v1' } }),

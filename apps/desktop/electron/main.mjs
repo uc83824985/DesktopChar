@@ -14,7 +14,8 @@ import { createNativeCursorRefresh } from './cursor-refresh.mjs';
 import { createNativeWindowPosition } from './native-window-position.mjs';
 import { createMcpServicesController } from './mcp-services-controller.mjs';
 import { normalizeDesktopConfig, resolveDesktopConfigPath } from './mcp-services-config.mjs';
-import { createPerformanceInferenceConfigState } from './performance-inference-config-state.mjs';
+import { createPerformanceModelController } from './performance-model-controller.mjs';
+import { createShutdownCoordinator } from './shutdown-coordinator.mjs';
 import {
   nextAvatarVisibility,
   trayIconRepresentations,
@@ -30,9 +31,6 @@ const packagedExampleConfigPath = app.isPackaged
   : undefined;
 const desktopConfigPath = resolveDesktopConfigPath(process.env, process.cwd(), packagedConfigPath);
 let desktopConfig = normalizeDesktopConfig({}, process.env);
-const performanceInferenceConfigState = createPerformanceInferenceConfigState(
-  desktopConfig.performanceInference,
-);
 const rawConsoleLog = console.log.bind(console);
 const rawConsoleError = console.error.bind(console);
 const channels = {
@@ -99,8 +97,6 @@ let agentServer;
 let agentServerSignature = '';
 let agentServerOperation = Promise.resolve();
 let desktopStarted = false;
-let shutdownCompleted = false;
-let shutdownPromise;
 let agentRuntimeState = { ready: false, snapshot: null };
 let pointerPresentation = { passthrough: true, cursor: 'default' };
 let pointerPresentationApplied = false;
@@ -121,6 +117,16 @@ const ttsContext = {
   mcpCancelTool: 'tts_cancel_synthesis',
   transport: null,
 };
+const performanceModel = createPerformanceModelController(
+  desktopConfig.performanceInference,
+  {
+    onStateChanged() { publishDesktopConfigState(); },
+    onOutput(stream, chunk) {
+      const output = String(chunk).trimEnd();
+      if (output) safeLog(`[performance-model:${stream}] ${output}`);
+    },
+  },
+);
 let lastMcpServicesLogKey = '';
 const mcpServices = createMcpServicesController({
   env: process.env,
@@ -166,11 +172,7 @@ else {
 }
 
 app.on('window-all-closed', () => app.quit());
-app.on('before-quit', event => {
-  if (shutdownCompleted) return;
-  event.preventDefault();
-  void requestShutdown('before-quit');
-});
+app.on('before-quit', event => shutdown.handleBeforeQuit(event));
 
 process.once('SIGINT', () => { void requestShutdown('SIGINT'); });
 process.once('SIGTERM', () => { void requestShutdown('SIGTERM'); });
@@ -189,37 +191,49 @@ function registerRendererProtocol() {
   });
 }
 
-async function requestShutdown(reason) {
-  if (shutdownCompleted) return;
-  if (!shutdownPromise) {
-    shutdownPromise = (async () => {
-      safeLog('[desktop-char] shutdown start', { reason });
-      if (cursorTimer) clearInterval(cursorTimer);
-      cursorTimer = undefined;
-      if (cursorRefreshTimer) clearTimeout(cursorRefreshTimer);
-      cursorRefreshTimer = undefined;
-      cancelAvatarPresentation();
-      desktopTray?.destroy();
-      desktopTray = null;
-      await Promise.allSettled([
-        agentServer?.close().catch(() => {}),
-        mcpServices.close().catch(() => {}),
-      ]);
-      shutdownCompleted = true;
-      safeLog('[desktop-char] shutdown complete', { reason });
-    })();
-  }
-  await shutdownPromise.catch(error => {
+const shutdown = createShutdownCoordinator({
+  hidePresentation() {
+    cancelAvatarPresentation();
+    avatarVisibilityIntent = false;
+    avatarPresentationPhase = 'hidden';
+    avatarFrameSubscriptionActive = false;
+    if (avatarWindow && !avatarWindow.isDestroyed()) {
+      avatarWindow.setOpacity(0);
+      avatarWindow.hide();
+    }
+    desktopTray?.destroy();
+    desktopTray = null;
+  },
+  async closeResources(reason) {
+    safeLog('[desktop-char] shutdown start', { reason });
+    if (cursorTimer) clearInterval(cursorTimer);
+    cursorTimer = undefined;
+    if (cursorRefreshTimer) clearTimeout(cursorRefreshTimer);
+    cursorRefreshTimer = undefined;
+    await Promise.allSettled([
+      agentServer?.close().catch(() => {}),
+      mcpServices.close().catch(() => {}),
+      performanceModel.close().catch(() => {}),
+    ]);
+    safeLog('[desktop-char] shutdown complete', { reason });
+  },
+  finish() {
+    if (!app.isReady()) {
+      process.exit(0);
+      return;
+    }
+    if (!app.isQuitting) {
+      app.isQuitting = true;
+      app.quit();
+    }
+  },
+  onError(error) {
     safeError('[desktop-char] shutdown failed', error);
-  });
-  if (!app.isReady()) {
-    process.exit(0);
-    return;
-  }
-  if (!app.isQuitting) {
-    app.isQuitting = true;
-    app.quit();
-  }
+  },
+});
+
+function requestShutdown(reason) {
+  return shutdown.request(reason);
 }
 
 function createAvatarWindow() {
@@ -314,7 +328,7 @@ function updateTrayMenu() {
     { label: trayVisibilityLabel(avatarVisible), click: () => setAvatarVisibility(!avatarVisible) },
     { label: '恢复默认位置', click: restoreDefaultPosition },
     { type: 'separator' },
-    { label: '退出 DesktopChar', click: () => app.quit() },
+    { label: '退出 DesktopChar', click: () => { void requestShutdown('tray-menu'); } },
   ]));
 }
 
@@ -451,7 +465,7 @@ function registerIpc() {
     if (command === 'restore-default-position') restoreDefaultPosition();
     else if (command === 'hide-avatar') setAvatarVisibility(false);
     else if (command === 'show-avatar') setAvatarVisibility(true);
-    else if (command === 'quit') app.quit();
+    else if (command === 'quit') void requestShutdown('avatar-menu');
   });
   ipcMain.on(channels.agentState, (event, state) => {
     requireAvatarSender(event);
@@ -486,10 +500,9 @@ function registerIpc() {
     requireAvatarSender(event);
     return mcpServices.reload('ui');
   });
-  ipcMain.handle(channels.performanceInferenceSetEnabled, (event, enabled) => {
+  ipcMain.handle(channels.performanceInferenceSetEnabled, async (event, enabled) => {
     requireAvatarSender(event);
-    performanceInferenceConfigState.setEnabled(enabled);
-    publishDesktopConfigState();
+    await performanceModel.setEnabled(enabled);
     return windowState();
   });
   ipcMain.handle(channels.mcpServicesTest, (event, service) => {
@@ -592,7 +605,7 @@ function windowState() {
       dragWindowApi,
     },
     character: { profileUrl: desktopConfig.characterProfile.url },
-    performanceInference: performanceInferenceConfigState.snapshot(),
+    performanceInference: performanceModel.snapshot(),
     tts: mcpServices.currentTtsConfig(),
     mcpServices: mcpServices.snapshot(),
   };
@@ -600,7 +613,9 @@ function windowState() {
 
 function applyDesktopConfig(config, metadata = {}) {
   desktopConfig = config;
-  performanceInferenceConfigState.replace(config.performanceInference);
+  void performanceModel.replace(config.performanceInference).catch(error => {
+    safeError('[performance-model] config apply failed', error);
+  });
   if (avatarWindow && !avatarWindow.isDestroyed()) {
     if (avatarWindow.isAlwaysOnTop() !== config.window.alwaysOnTop) {
       avatarWindow.setAlwaysOnTop(config.window.alwaysOnTop);

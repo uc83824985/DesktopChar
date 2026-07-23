@@ -41,7 +41,11 @@ export interface DesktopInteractionConfig {
 
 export interface DesktopPerformanceInferenceConfig {
   enabled: boolean;
-  lifecycle: 'external';
+  operational: boolean;
+  lifecycle: 'external' | 'managed';
+  phase: 'disabled' | 'starting' | 'ready' | 'stopping' | 'restarting' | 'failed';
+  processId: number | null;
+  lastError: string | null;
   provider: string;
   baseUrl: string;
   model?: string;

@@ -84,9 +84,21 @@ export function normalizeDesktopConfig(fileConfig = {}, env = {}, options = {}) 
   assertKnownKeys(characterProfile, ['profile'], 'character');
   const performanceInference = optionalRecord(fileConfig.performanceInference, 'performanceInference');
   assertKnownKeys(performanceInference, [
-    'enabled', 'lifecycle', 'provider', 'baseUrl', 'model', 'timeoutMs', 'maxOutputTokens',
-    'temperature', 'fallbackToRules',
+    'enabled', 'lifecycle', 'provider', 'baseUrl', 'healthUrl', 'model', 'timeoutMs',
+    'maxOutputTokens', 'temperature', 'fallbackToRules',
   ], 'performanceInference');
+  const performanceLifecycle = performanceInferenceLifecycle(performanceInference.lifecycle);
+  const performanceLaunch = optionalRecord(performanceLifecycle.start, 'performanceInference.lifecycle.start');
+  assertKnownKeys(
+    performanceLifecycle,
+    ['type', 'start', 'startupTimeoutMs', 'shutdownTimeoutMs', 'healthIntervalMs', 'restartOnFailure'],
+    'performanceInference.lifecycle',
+  );
+  assertKnownKeys(
+    performanceLaunch,
+    ['executable', 'args', 'cwd', 'env'],
+    'performanceInference.lifecycle.start',
+  );
   const performanceModel = optionalText(performanceInference.model, 'performanceInference.model');
   const tts = optionalRecord(fileConfig.ttsMcp, 'ttsMcp');
   assertKnownKeys(tts, ['autoStart', 'profile'], 'ttsMcp');
@@ -139,6 +151,23 @@ export function normalizeDesktopConfig(fileConfig = {}, env = {}, options = {}) 
   const defaultServerPath = path.resolve(defaultCwd, 'local-tts-mcp/server.mjs');
   const characterHost = loopbackHost(character.host ?? env.DESKTOP_CHAR_CHARACTER_MCP_HOST ?? '127.0.0.1', 'characterMcp.host');
   const characterPath = endpointPath(character.path ?? env.DESKTOP_CHAR_CHARACTER_MCP_PATH ?? '/mcp');
+  const performanceBaseUrl = loopbackHttpUrl(
+    performanceInference.baseUrl ?? 'http://127.0.0.1:18090/v1',
+    'performanceInference.baseUrl',
+  );
+  const performanceHealthUrl = loopbackHttpUrl(
+    performanceInference.healthUrl ?? `${performanceBaseUrl.replace(/\/+$/u, '')}/models`,
+    'performanceInference.healthUrl',
+  );
+  const performancePort = Number(new URL(performanceBaseUrl).port || 80);
+  const defaultPerformanceScript = path.resolve(defaultCwd, 'performance-model-service/start.ps1');
+  const defaultPowerShell = path.join(
+    env.SystemRoot ?? process.env.SystemRoot ?? 'C:\\Windows',
+    'System32',
+    'WindowsPowerShell',
+    'v1.0',
+    'powershell.exe',
+  );
 
   return deepFreeze({
     version,
@@ -171,12 +200,57 @@ export function normalizeDesktopConfig(fileConfig = {}, env = {}, options = {}) 
     },
     performanceInference: {
       enabled: boolean(performanceInference.enabled, false, 'performanceInference.enabled'),
-      lifecycle: performanceInferenceLifecycle(performanceInference.lifecycle),
+      lifecycle: {
+        type: performanceLifecycle.type,
+        ...(performanceLifecycle.type === 'managed' ? {
+          start: {
+            executable: text(
+              performanceLaunch.executable ?? defaultPowerShell,
+              'performanceInference.lifecycle.start.executable',
+            ),
+            args: stringArray(
+              performanceLaunch.args ?? [
+                '-NoProfile',
+                '-ExecutionPolicy', 'Bypass',
+                '-File', defaultPerformanceScript,
+                '-Port', String(performancePort),
+              ],
+              'performanceInference.lifecycle.start.args',
+            ),
+            cwd: path.resolve(text(
+              performanceLaunch.cwd ?? defaultCwd,
+              'performanceInference.lifecycle.start.cwd',
+            )),
+            env: environmentRecord(
+              performanceLaunch.env ?? {},
+              'performanceInference.lifecycle.start.env',
+            ),
+          },
+        } : {}),
+        startupTimeoutMs: positive(
+          performanceLifecycle.startupTimeoutMs,
+          180_000,
+          'performanceInference.lifecycle.startupTimeoutMs',
+        ),
+        shutdownTimeoutMs: positive(
+          performanceLifecycle.shutdownTimeoutMs,
+          10_000,
+          'performanceInference.lifecycle.shutdownTimeoutMs',
+        ),
+        healthIntervalMs: positive(
+          performanceLifecycle.healthIntervalMs,
+          10_000,
+          'performanceInference.lifecycle.healthIntervalMs',
+        ),
+        restartOnFailure: boolean(
+          performanceLifecycle.restartOnFailure,
+          true,
+          'performanceInference.lifecycle.restartOnFailure',
+        ),
+      },
       provider: text(performanceInference.provider ?? 'qwen35-transformers', 'performanceInference.provider'),
-      baseUrl: loopbackHttpUrl(
-        performanceInference.baseUrl ?? 'http://127.0.0.1:18090/v1',
-        'performanceInference.baseUrl',
-      ),
+      baseUrl: performanceBaseUrl,
+      healthUrl: performanceHealthUrl,
       ...(performanceModel ? { model: performanceModel } : {}),
       timeoutMs: positive(performanceInference.timeoutMs, 5_000, 'performanceInference.timeoutMs'),
       maxOutputTokens: positiveInteger(
@@ -385,11 +459,14 @@ function desktopEnvironmentOverrides(env) {
 }
 
 function performanceInferenceLifecycle(value) {
-  const result = value ?? 'external';
-  if (result !== 'external') {
-    throw new TypeError('performanceInference.lifecycle currently only supports external');
+  const result = typeof value === 'string'
+    ? { type: value }
+    : optionalRecord(value, 'performanceInference.lifecycle');
+  const type = result.type ?? 'external';
+  if (type !== 'external' && type !== 'managed') {
+    throw new TypeError('performanceInference.lifecycle.type must be external or managed');
   }
-  return result;
+  return { ...result, type };
 }
 
 function defaultLocalTtsProfile() {

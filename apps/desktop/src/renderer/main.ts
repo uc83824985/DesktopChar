@@ -176,12 +176,14 @@ class ReloadablePerformanceInference implements PerformanceInferencePort {
     const signature = JSON.stringify(config);
     if (signature === this.signature) return false;
     this.signature = signature;
-    this.enabled = config.enabled;
+    this.enabled = config.enabled && config.operational;
     this.provider = config.provider;
-    if (!config.enabled) {
+    if (!this.enabled) {
       this.current = new NoopPerformanceInference();
       writePerformanceLog('config.changed', 'info', {
-        enabled: false,
+        enabled: config.enabled,
+        operational: false,
+        phase: config.phase,
         lifecycle: config.lifecycle,
         provider: config.provider,
       });
@@ -207,6 +209,8 @@ class ReloadablePerformanceInference implements PerformanceInferencePort {
       : primary;
     writePerformanceLog('config.changed', 'info', {
       enabled: true,
+      operational: true,
+      phase: config.phase,
       lifecycle: config.lifecycle,
       provider: config.provider,
       endpoint: config.baseUrl,
@@ -867,7 +871,11 @@ function browserTtsConfig(): DesktopTtsConfig {
 function browserPerformanceInferenceConfig(): DesktopPerformanceInferenceConfig {
   return {
     enabled: false,
+    operational: false,
     lifecycle: 'external',
+    phase: 'disabled',
+    processId: null,
+    lastError: null,
     provider: 'browser-disabled',
     baseUrl: 'http://127.0.0.1:18090/v1',
     timeoutMs: 5_000,
@@ -1104,7 +1112,8 @@ function registerDevelopmentUi(): void {
           {
             type: 'checkbox',
             id: 'performance-inference-enabled',
-            label: `表情动作推理（外部） · ${config.provider}`,
+            label: `表情动作推理（${config.lifecycle === 'managed' ? '托管' : '外部'}）`
+              + ` · ${config.provider}${config.phase === 'ready' ? '' : ` · ${config.phase}`}`,
             checked: config.enabled,
             invoke: setPerformanceInferenceEnabled,
           },
@@ -1484,7 +1493,9 @@ function initializeDesktopInteraction(initialState: Awaited<ReturnType<NonNullab
 function applyPerformanceInferenceConfig(config: DesktopPerformanceInferenceConfig): void {
   performanceInferenceConfig = structuredClone(config);
   if (reloadablePerformanceInference.configure(config)) performanceEffects?.cancelAll();
-  document.body.dataset.performanceInference = config.enabled ? 'enabled' : 'disabled';
+  document.body.dataset.performanceInference = config.operational ? 'enabled' : 'disabled';
+  document.body.dataset.performanceInferenceDesired = config.enabled ? 'enabled' : 'disabled';
+  document.body.dataset.performanceInferencePhase = config.phase;
   contextMenuHost.refresh();
 }
 

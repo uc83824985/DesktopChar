@@ -20,6 +20,7 @@
     "test:desktop-smoke": "npm run build && node scripts/desktop-smoke.mjs",
     "diagnose:tts": "node --experimental-strip-types scripts/tts-diagnostic.ts",
     "diagnose:performance": "node --experimental-strip-types scripts/performance-diagnostic.ts",
+    "diagnose:managed-exit": "npm run build && node scripts/managed-performance-exit-diagnostic.mjs",
     "diagnose:drag": "npm run build && node scripts/drag-compositor-diagnostic.mjs",
     "test": "node --experimental-strip-types --test packages/*/test/*.test.ts && npm run test:local-mcp && npm run test:desktop",
     "typecheck": "tsc --noEmit",

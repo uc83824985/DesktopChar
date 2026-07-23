@@ -67,14 +67,43 @@
       "additionalProperties": false,
       "properties": {
         "enabled": { "type": "boolean" },
-        "lifecycle": { "const": "external" },
+        "lifecycle": {
+          "oneOf": [
+            { "enum": ["external", "managed"] },
+            { "$ref": "#/$defs/performanceInferenceLifecycle" }
+          ]
+        },
         "provider": { "type": "string", "minLength": 1 },
         "baseUrl": { "type": "string", "format": "uri" },
+        "healthUrl": { "type": "string", "format": "uri" },
         "model": { "type": "string", "minLength": 1 },
         "timeoutMs": { "type": "number", "exclusiveMinimum": 0 },
         "maxOutputTokens": { "type": "integer", "minimum": 1 },
         "temperature": { "type": "number", "minimum": 0, "maximum": 2 },
         "fallbackToRules": { "type": "boolean" }
+      }
+    },
+    "performanceInferenceLifecycle": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["type"],
+      "properties": {
+        "type": { "enum": ["external", "managed"] },
+        "start": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["executable"],
+          "properties": {
+            "executable": { "type": "string", "minLength": 1 },
+            "args": { "type": "array", "items": { "type": "string" } },
+            "cwd": { "type": "string", "minLength": 1 },
+            "env": { "type": "object", "additionalProperties": { "type": "string" } }
+          }
+        },
+        "startupTimeoutMs": { "type": "number", "exclusiveMinimum": 0 },
+        "shutdownTimeoutMs": { "type": "number", "exclusiveMinimum": 0 },
+        "healthIntervalMs": { "type": "number", "exclusiveMinimum": 0 },
+        "restartOnFailure": { "type": "boolean" }
       }
     },
     "reconnect": {

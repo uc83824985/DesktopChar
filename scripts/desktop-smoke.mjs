@@ -1,12 +1,21 @@
+import os from 'node:os';
 import path from 'node:path';
 import { _electron as electron } from 'playwright-core';
 import { Client } from '@modelcontextprotocol/sdk/client/index.js';
 import { StreamableHTTPClientTransport } from '@modelcontextprotocol/sdk/client/streamableHttp.js';
 
 const root = process.cwd();
+const isolatedConfigPath = path.join(
+  os.tmpdir(),
+  `desktop-char-smoke-missing-${process.pid}-${Date.now()}.json`,
+);
 const application = await electron.launch({
   args: [path.join(root, 'apps/desktop/electron/main.mjs')],
   cwd: root,
+  env: {
+    ...process.env,
+    DESKTOP_CHAR_CONFIG_PATH: isolatedConfigPath,
+  },
 });
 
 try {
