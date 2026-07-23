@@ -29,7 +29,7 @@
 
 高频输入、主动聊天和多 Agent 的目标架构由应用统一持有 ConversationLedger、版本化 Persona、Turn/Task 调度和唯一 PerformanceQueue；设计缺陷约束及下一阶段决策项见 [对话上下文与任务编排设计](docs/conversation-orchestration.md)。
 
-表情和已有 Live2D 动作的语义选择暂由本地表现推理端口完成，Qwen3.5-2B non-thinking 只是首个验证 Profile，不进入外部 Agent 关键路径；同协议模型只需替换 Profile，不同协议通过新 Adapter 接入。首个模型使用 OpenAI-compatible HTTP，当前生命周期明确为 `external`，不新增 MCP；后续 managed Supervisor 仍可复用同一 Adapter。边界与 Profile 草案见 [本地表现模型接入设计](docs/performance-model-integration.md)，官方模型配置阅读结论见 [Qwen3.5-2B 阅读记录](docs/references/qwen3.5-2b.md)。
+表情和已有 Live2D 动作的语义选择暂由本地表现推理端口完成，Qwen3.5-2B non-thinking 只是首个验证 Profile，不进入外部 Agent 关键路径；同协议模型只需替换 Profile，不同协议通过新 Adapter 接入。首个模型使用 OpenAI-compatible HTTP，当前生命周期明确为 `external`，不新增 MCP；后续 managed Supervisor 仍可复用同一 Adapter。边界与 Profile 草案见 [本地表现模型接入设计](docs/performance-model-integration.md)，实现新 Provider 时遵循 [表现模型 Provider 接入指南](docs/performance-model-provider-integration.md)，官方模型配置阅读结论见 [Qwen3.5-2B 阅读记录](docs/references/qwen3.5-2b.md)。
 
 Qwen3.5-2B 环境可通过 `npm run performance:bootstrap` 初始化，通过
 `npm run performance:start` 启动；服务启动后在另一个终端执行

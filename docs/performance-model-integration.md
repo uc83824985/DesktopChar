@@ -1,5 +1,9 @@
 # 本地表现模型接入与生命周期设计
 
+本文记录模块边界、生命周期和后续演进设计。实现或接入具体 Provider 时，必须遵循
+[DesktopChar 表现模型 Provider 接入指南](performance-model-provider-integration.md)
+中的当前有效 HTTP、输出、白名单、取消和验收契约。
+
 ## 设计结论
 
 表情和 Live2D 动作选择暂由本地小模型完成。它与 TTS 一样需要支持 `external` 和
