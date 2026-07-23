@@ -3,7 +3,7 @@ import { EventEmitter } from 'node:events';
 import test from 'node:test';
 import { startManagedProcess } from './managed-process.mjs';
 
-test('Windows managed process close terminates the full process tree', async () => {
+test('Windows managed process close immediately force-terminates the owned process tree', async () => {
   const child = createFakeChild(4321);
   const treeCalls = [];
   const processHandle = await startManagedProcess({
@@ -20,10 +20,27 @@ test('Windows managed process close terminates the full process tree', async () 
   });
 
   const result = await processHandle.close(20);
-  assert.deepEqual(treeCalls, [{ pid: 4321, force: false }]);
+  assert.deepEqual(treeCalls, [{ pid: 4321, force: true }]);
   assert.equal(result.code, 0);
   assert.equal(result.signal, null);
   assert.deepEqual(child.killCalls, []);
+});
+
+test('Windows managed process closes a real hosted Node tree without waiting for the shutdown timeout', {
+  skip: process.platform !== 'win32',
+}, async () => {
+  const processHandle = await startManagedProcess({
+    executable: process.execPath,
+    args: ['-e', 'setInterval(() => {}, 1000)'],
+    cwd: process.cwd(),
+    env: {},
+  });
+  const startedAt = performance.now();
+  await processHandle.close(8_000);
+  const elapsedMs = performance.now() - startedAt;
+
+  assert.ok(elapsedMs < 7_000, `owned process tree took ${Math.round(elapsedMs)} ms to close`);
+  assert.throws(() => process.kill(processHandle.pid, 0));
 });
 
 test('non-Windows managed process keeps direct signal shutdown', async () => {

@@ -53,16 +53,20 @@ export async function startManagedProcess(spec, options = {}) {
       closing = true;
       if (exitInfo) return exitInfo;
       if (platform === 'win32') {
-        await closeProcessTree(child.pid, { force: false });
+        // Windows does not reliably deliver a graceful termination signal to
+        // console processes. The process is owned by DesktopChar, so terminate
+        // its complete tree immediately instead of waiting for a no-op grace
+        // period before doing the same work forcefully.
+        await closeProcessTree(child.pid, { force: true });
       }
       else {
         child.kill('SIGTERM');
       }
-      const graceful = await Promise.race([
+      const stopped = await Promise.race([
         exited.then(result => ({ result })),
         delay(timeoutMs).then(() => null),
       ]);
-      if (graceful) return graceful.result;
+      if (stopped) return stopped.result;
       if (platform === 'win32') {
         await closeProcessTree(child.pid, { force: true });
       }
