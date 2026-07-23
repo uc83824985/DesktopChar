@@ -28,6 +28,7 @@ try {
     { waitUntil: 'networkidle' },
   );
   await page.locator('body[data-ready="true"][data-live2d-update-pipeline="ordered-v1"]').waitFor({ timeout: 20_000 });
+  await page.locator('body[data-gaze-head-response-ms="120"][data-gaze-eye-response-ms="45"]').waitFor({ timeout: 1_000 });
   await page.locator('body[data-tts-health="ready"]').waitFor({ timeout: 5_000 });
   await page.getByRole('button', { name: '口型同步验收' }).click();
   await page.waitForFunction(() => ['passed', 'failed'].includes(document.body.dataset.toneAcceptance ?? ''), undefined, { timeout: 8_000 });
@@ -79,6 +80,72 @@ try {
   await page.locator('body[data-gaze-follow="enabled"]').waitFor({ timeout: 1_000 });
 
   await page.getByRole('button', { name: '恢复中立' }).click();
+  const interactionPanel = page.locator('.scene-interaction-panel');
+  for (const point of [
+    { x: 870, y: 400 },
+    { x: 870, y: 300 },
+    { x: 820, y: 500 },
+  ]) {
+    await page.mouse.click(point.x, point.y);
+    if (await interactionPanel.count()) break;
+  }
+  await interactionPanel.waitFor({ state: 'visible', timeout: 2_000 });
+  const previewCatalog = await page.locator('body').evaluate(body => ({
+    expressionResources: Number(body.dataset.assetPreviewExpressions),
+    motionResources: Number(body.dataset.assetPreviewMotions),
+    expressionButtons: document.querySelectorAll(
+      '.scene-interaction-panel [data-item-id^="expression-"]',
+    ).length,
+    motionButtons: document.querySelectorAll(
+      '.scene-interaction-panel [data-item-id^="motion-"]',
+    ).length,
+  }));
+  if (previewCatalog.expressionResources !== 8
+    || previewCatalog.motionResources !== 8
+    || previewCatalog.expressionButtons !== 9
+    || previewCatalog.motionButtons !== 8) {
+    throw new Error(`Interaction panel resource catalog is incomplete: ${JSON.stringify(previewCatalog)}`);
+  }
+  await interactionPanel.hover();
+  await page.waitForTimeout(3_200);
+  const hoveredPanelPhase = await page.locator('body').getAttribute('data-interaction-panel');
+  if (!await interactionPanel.isVisible() || hoveredPanelPhase !== 'visible') {
+    throw new Error(`Interaction panel disappeared while the pointer remained inside (${hoveredPanelPhase})`);
+  }
+  await page.locator('[data-item-id="expression-exp_02"]').click({ timeout: 2_000 });
+  await page.locator(
+    'body[data-asset-preview-kind="expression"]'
+      + '[data-asset-preview-resource="exp_02"]'
+      + '[data-asset-preview-state="applied"]',
+  ).waitFor({ timeout: 2_000 });
+  if (!await interactionPanel.isVisible()) {
+    throw new Error('Expression preview dismissed the interaction panel');
+  }
+  await page.locator('[data-item-id="motion-TapBody-0"]').click();
+  await page.locator(
+    'body[data-asset-preview-kind="motion"]'
+      + '[data-asset-preview-resource="TapBody:0"]'
+      + '[data-asset-preview-state="playing"]',
+  ).waitFor({ timeout: 2_000 });
+  if (!await interactionPanel.isVisible()) {
+    throw new Error('Motion preview dismissed the interaction panel');
+  }
+  if (process.env.DESKTOP_CHAR_INTERACTION_PANEL_SCREENSHOT) {
+    await page.screenshot({ path: process.env.DESKTOP_CHAR_INTERACTION_PANEL_SCREENSHOT });
+  }
+  await page.mouse.move(10, 10);
+  await page.waitForTimeout(2_200);
+  await interactionPanel.hover();
+  await page.waitForTimeout(1_200);
+  if (!await interactionPanel.isVisible()) {
+    throw new Error('Re-entering the interaction panel did not refresh its leave timeout');
+  }
+  await page.mouse.move(10, 10);
+  await interactionPanel.waitFor({ state: 'detached', timeout: 4_000 });
+  if (await page.locator('body').getAttribute('data-interaction-panel') !== 'hidden') {
+    throw new Error('Interaction panel did not finish its delayed fade-out');
+  }
+
   const canvas = await page.locator('#avatar').boundingBox();
   if (!canvas || canvas.width < 1 || canvas.height < 1) throw new Error('Avatar canvas has no visible area');
   if (errors.length) throw new Error(`Browser errors:\n${errors.join('\n')}`);

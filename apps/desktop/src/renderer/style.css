@@ -19,6 +19,16 @@ button.scene-context-menu__item:disabled { opacity: .42; cursor: default; }
 button.scene-context-menu__item[data-danger="true"] { color: #a42d47; }
 .scene-context-menu__marker { color: #7155d9; font-weight: 900; }
 @keyframes scene-context-menu-in { from { opacity: 0; transform: translateY(-2px) scale(.985); } }
+.scene-interaction-panel { position: fixed; z-index: 900; right: 14px; bottom: 16px; width: min(420px, calc(100vw - 28px)); max-height: min(360px, calc(100vh - 32px)); padding: 12px; overflow: auto; color: #28243a; background: #fbfafff2; border: 1px solid #ffffff; border-radius: 18px; box-shadow: 0 18px 48px #15112652; backdrop-filter: blur(18px); user-select: none; transform-origin: 90% 100%; transition: opacity 120ms ease-out, transform 120ms ease-out; animation: scene-interaction-panel-in 120ms ease-out; }
+.scene-interaction-panel[data-phase="closing"] { opacity: 0; transform: translateY(4px) scale(.985); }
+.scene-interaction-panel__section + .scene-interaction-panel__section { margin-top: 10px; padding-top: 10px; border-top: 1px solid #3b315f1f; }
+.scene-interaction-panel__heading { margin: 0 0 7px 2px; color: #77708f; font-size: 10px; font-weight: 800; letter-spacing: .08em; }
+.scene-interaction-panel__items { display: grid; grid-template-columns: repeat(auto-fit, minmax(110px, 1fr)); gap: 7px; }
+button.scene-interaction-panel__item { min-width: 0; min-height: 34px; padding: 7px 9px; overflow: hidden; border: 1px solid #71649c24; border-radius: 10px; color: #28243a; background: #f2effc; font-size: 11px; font-weight: 650; line-height: 1.2; overflow-wrap: anywhere; text-align: center; white-space: normal; }
+button.scene-interaction-panel__item:hover:not(:disabled), button.scene-interaction-panel__item:focus-visible { transform: none; color: #21183f; background: #ded7fa; outline: 2px solid #8e75e344; }
+button.scene-interaction-panel__item:active:not(:disabled), button.scene-interaction-panel__item[data-checked="true"] { background: #cfc5f7; }
+button.scene-interaction-panel__item:disabled { opacity: .42; cursor: default; }
+@keyframes scene-interaction-panel-in { from { opacity: 0; transform: translateY(4px) scale(.985); } }
 .panel { position: fixed; z-index: 1; left: clamp(24px, 7vw, 110px); top: 50%; width: min(410px, 42vw); transform: translateY(-50%); padding: 32px; border: 1px solid #ffffff1f; border-radius: 24px; background: #111426ba; backdrop-filter: blur(18px); box-shadow: 0 24px 80px #0007; }
 .eyebrow { color: #9e9ae8; font-size: 11px; letter-spacing: .17em; }
 h1 { margin: 10px 0; font-size: clamp(40px, 6vw, 72px); line-height: .95; }

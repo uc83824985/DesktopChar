@@ -1,6 +1,6 @@
 import { ShaderSystem } from '@pixi/core';
 import { install as installCspShaderCompiler } from '@pixi/unsafe-eval';
-import { Application, Renderer, Ticker } from 'pixi.js';
+import { Application, Renderer, Ticker, UPDATE_PRIORITY } from 'pixi.js';
 import {
   Live2DModel,
   MotionPriority,
@@ -33,6 +33,7 @@ import {
 import {
   activateRepeatableExpression,
   AsyncPixelCoveragePicker,
+  createLive2dAssetPreviewCatalog,
   HoldDragController,
   installCubism4UpdatePipeline,
   PixelCoverageLatch,
@@ -41,6 +42,8 @@ import {
 } from '../../../../packages/live2d-renderer/src/index.ts';
 import type {
   Cubism4UpdatePipelineHandle,
+  Live2dAssetPreviewCatalog,
+  Live2dMotionPreviewResource,
   PixelCoverageResult,
 } from '../../../../packages/live2d-renderer/src/index.ts';
 import {
@@ -53,6 +56,7 @@ import {
 import type { PerformanceInferencePort } from '../../../../packages/performance-inference/src/index.ts';
 import {
   DomContextMenuHost,
+  DomInteractionPanelHost,
   ImmediateUiRegistry,
   formatChatBubbleFragment,
 } from '../../../../packages/scene-ui-dom/src/index.ts';
@@ -295,8 +299,13 @@ function performanceErrorDetails(error: unknown): Record<string, unknown> {
 }
 
 let model: Live2DModel<Cubism4InternalModel> | undefined;
+let assetPreviewCatalog: Live2dAssetPreviewCatalog = { expressions: [], motions: [] };
+let assetPreviewMotionTimer: ReturnType<typeof setTimeout> | undefined;
+let assetPreviewMotionToken = 0;
+const assetPreviewMotionDurations = new Map<string, Promise<number>>();
 let cubismUpdatePipeline: Cubism4UpdatePipelineHandle | undefined;
 let runtime: AvatarRuntime | undefined;
+let gazeFrameDriverAttached = false;
 let playbackTimer: ReturnType<typeof setInterval> | undefined;
 let motionTimer: ReturnType<typeof setTimeout> | undefined;
 let motionRequestToken = 0;
@@ -311,6 +320,8 @@ const reloadablePerformanceInference = new ReloadablePerformanceInference();
 let performanceInferenceConfig: DesktopPerformanceInferenceConfig | undefined;
 let currentLipSyncProfile: LipSyncProfile = { ...DEFAULT_LIP_SYNC_PROFILE };
 let desktopBounds: { x: number; y: number; width: number; height: number } | undefined;
+let desktopCursorLocalPoint: { x: number; y: number } | undefined;
+let avatarPointerClientPoint: { x: number; y: number } | undefined;
 let pointerPresentation: PointerPresentation | undefined;
 let pixelPicker: AsyncPixelCoveragePicker | undefined;
 let pixelSelection: PixelCoverageResult | undefined;
@@ -350,7 +361,7 @@ const dragGesture = new HoldDragController<string>({
     },
     async onDragFinished(result) {
       document.body.dataset.dragState = result.cancelled ? 'cancelled' : result.moved ? 'moved' : 'held';
-      const presentation = selectionPresentation();
+      const presentation = currentSurfacePresentation();
       updatePointerPresentation(presentation, false);
       await desktopShell?.endDrag();
       publishPointerPresentation(pointerPresentation ?? presentation);
@@ -359,6 +370,7 @@ const dragGesture = new HoldDragController<string>({
       document.body.dataset.dragState = 'clicked';
       document.body.dataset.lastAvatarClick = hitArea;
       runtime?.dispatch({ type: 'user.avatar-clicked', hitArea });
+      openAvatarInteractionPanel(hitArea, avatarPointerClientPoint);
     },
     onPendingCancelled() {
       document.body.dataset.dragState = 'cancelled';
@@ -366,7 +378,7 @@ const dragGesture = new HoldDragController<string>({
     onError(error, pointerId) {
       if (canvas.hasPointerCapture(pointerId)) canvas.releasePointerCapture(pointerId);
       document.body.dataset.dragState = 'failed';
-      const presentation = selectionPresentation();
+      const presentation = currentSurfacePresentation();
       updatePointerPresentation(presentation, false);
       void desktopShell?.endDrag()
         .then(() => publishPointerPresentation(pointerPresentation ?? presentation))
@@ -376,6 +388,7 @@ const dragGesture = new HoldDragController<string>({
   },
 });
 const immediateUi = new ImmediateUiRegistry();
+const interactionUi = new ImmediateUiRegistry();
 const contextMenuHost = new DomContextMenuHost(immediateUi, {
   onVisibilityChanged(visible) {
     document.body.dataset.contextMenu = visible ? 'open' : 'closed';
@@ -387,10 +400,23 @@ const contextMenuHost = new DomContextMenuHost(immediateUi, {
       pixelCoverageLatch.reset();
       updatePointerPresentation({ passthrough: false, cursor: 'default' });
     }
-    else updatePointerPresentation(selectionPresentation());
+    else updatePointerPresentation(currentSurfacePresentation());
+  },
+});
+const interactionPanelHost = new DomInteractionPanelHost(interactionUi, {
+  dismissDelayMs: 3_000,
+  fadeOutMs: 120,
+  label: '角色交互与资源预览',
+  onPhaseChanged(phase) {
+    document.body.dataset.interactionPanel = phase;
+  },
+  onVisibilityChanged(visible) {
+    if (!visible) document.body.dataset.interactionPanel = 'hidden';
+    if (desktopShell) updatePointerPresentation(currentSurfacePresentation());
   },
 });
 document.body.dataset.contextMenu = 'closed';
+document.body.dataset.interactionPanel = 'hidden';
 document.body.dataset.webglContextLosses = '0';
 const runtimeFrame = new RuntimeParameterFrame({
   aliases: { ParamMouthOpenY: 'ParamA', ParamMouthForm: 'ParamMouthUp' },
@@ -434,6 +460,8 @@ try {
   const ttsOperational = desktopShell ? isOperationalMcpService(mcpServicesState?.tts) : true;
   reloadableTtsAdapter.configure(tts.adapter, shellState?.tts ?? browserTtsConfig(), ttsOperational);
   currentLipSyncProfile = characterConfig.lipSyncProfile;
+  document.body.dataset.gazeHeadResponseMs = characterConfig.gazeProfile.smoothing.headResponseMs.toString();
+  document.body.dataset.gazeEyeResponseMs = characterConfig.gazeProfile.smoothing.eyeResponseMs.toString();
   knownToneAvailable = tts.supportsKnownToneFixture && ttsOperational;
   if (!knownToneAvailable) tone.title = '当前 TTS MCP 未声明 known-tone-v1 测试能力';
   ttsEffects = new TtsRuntimeEffectHandler(reloadableTtsAdapter);
@@ -446,6 +474,14 @@ try {
   model = await Live2DModel.from(characterConfig.modelJsonUrl, {
     autoInteract: false,
   }) as Live2DModel<Cubism4InternalModel>;
+  assetPreviewCatalog = createLive2dAssetPreviewCatalog(
+    model.internalModel.motionManager.settings.json,
+  );
+  for (const resource of assetPreviewCatalog.motions) {
+    void motionPreviewDuration(resource);
+  }
+  document.body.dataset.assetPreviewExpressions = assetPreviewCatalog.expressions.length.toString();
+  document.body.dataset.assetPreviewMotions = assetPreviewCatalog.motions.length.toString();
   cubismUpdatePipeline = installCubism4UpdatePipeline(model.internalModel);
   document.body.dataset.live2dUpdatePipeline = 'ordered-v1';
   document.body.dataset.live2dUpdaterOrder = cubismUpdatePipeline.scheduler.list()
@@ -488,6 +524,8 @@ try {
     ],
     supportsMouthForm: true, supportsGaze: true, supportsHitTest: true,
   } });
+  Ticker.shared.add(advanceRuntimeGaze, undefined, UPDATE_PRIORITY.HIGH);
+  gazeFrameDriverAttached = true;
   runtime.subscribe(snapshot => {
     desktopShell?.publishAgentState({ ready: true, snapshot });
     document.body.dataset.runtimeState = snapshot.state;
@@ -507,6 +545,7 @@ try {
         : 'Runtime 已就绪 · UI 仅发送事件，状态由 Runtime 持有';
     renderSpeechBubble(snapshot);
     contextMenuHost.refresh();
+    interactionPanelHost.refresh();
   });
   void reloadableTtsAdapter.health().then(report => {
     document.body.dataset.ttsHealth = report.status;
@@ -542,6 +581,7 @@ try {
   reset.addEventListener('click', () => runtime?.dispatch({ type: 'user.interrupt-requested' }));
   registerDevelopmentUi();
   canvas.addEventListener('contextmenu', openAvatarContextMenu);
+  if (!desktopShell) canvas.addEventListener('click', openBrowserInteractionPanel);
   canvas.addEventListener('keydown', event => {
     if (event.key !== 'ContextMenu' && !(event.shiftKey && event.key === 'F10')) return;
     event.preventDefault();
@@ -557,10 +597,16 @@ try {
   if (mcpServicesState) applyMcpServicesState(mcpServicesState);
   void desktopShell?.getMcpServicesState().then(state => applyMcpServicesState(state));
   window.addEventListener('beforeunload', () => {
+    if (gazeFrameDriverAttached) {
+      Ticker.shared.remove(advanceRuntimeGaze, undefined);
+      gazeFrameDriverAttached = false;
+    }
     performanceEffects?.cancelAll();
     cubismUpdatePipeline?.restore();
     cubismUpdatePipeline = undefined;
     contextMenuHost.dispose();
+    interactionPanelHost.dispose();
+    stopAssetPreviewMotion('disposed');
     for (const timer of speechBubbleDismissTimers.values()) clearTimeout(timer);
     speechBubbleDismissTimers.clear();
   }, { once: true });
@@ -683,6 +729,7 @@ function execute(effect: RuntimeEffect, dispatch: (event: AvatarEvent) => void):
   else if (effect.type === 'audio.stop') {
     clearPlayback();
     stopCurrentMotion('interrupted');
+    stopAssetPreviewMotion('interrupted');
     void audioPlayer?.stop(effect.generation);
   }
   else if (effect.type === 'renderer.apply-frame') {
@@ -692,6 +739,7 @@ function execute(effect: RuntimeEffect, dispatch: (event: AvatarEvent) => void):
     }
   }
   else if (effect.type === 'renderer.set-expression' && model) {
+    stopAssetPreviewMotion('runtime-expression');
     const activeModel = model;
     const requestToken = ++expressionRequestToken;
     const expressionId = effect.command.expressionId;
@@ -735,6 +783,7 @@ function execute(effect: RuntimeEffect, dispatch: (event: AvatarEvent) => void):
     });
   }
   else if (effect.type === 'renderer.play-motion' && model) {
+    stopAssetPreviewMotion('runtime-motion');
     const activeModel = model;
     stopCurrentMotion('replaced');
     const requestToken = ++motionRequestToken;
@@ -866,6 +915,13 @@ function browserTtsConfig(): DesktopTtsConfig {
     format: DEFAULT_TTS_CONFIG.mcp.format,
     testFixtures: (parameters.get('ttsTestFixtures') ?? '').split(',').map(value => value.trim()).filter(Boolean),
   };
+}
+
+function advanceRuntimeGaze(): void {
+  runtime?.dispatch({
+    type: 'renderer.frame-tick',
+    deltaMs: Ticker.shared.deltaMS,
+  });
 }
 
 function browserPerformanceInferenceConfig(): DesktopPerformanceInferenceConfig {
@@ -1075,7 +1131,182 @@ function submitEmotionBindingDemo(): void {
   }] } });
 }
 
+function openAvatarInteractionPanel(
+  hitArea: string,
+  point: { x: number; y: number } | undefined,
+): void {
+  const clientPoint = point ?? desktopCursorLocalPoint ?? {
+    x: Math.round(innerWidth / 2),
+    y: Math.round(innerHeight / 2),
+  };
+  if (!interactionPanelHost.open({
+    targetId: 'avatar',
+    clientX: clientPoint.x,
+    clientY: clientPoint.y,
+    data: { source: 'primary-click', hitArea },
+  })) return;
+  interactionPanelHost.trackClientPoint(clientPoint.x, clientPoint.y);
+  if (desktopShell) updatePointerPresentation(currentSurfacePresentation());
+}
+
+function openBrowserInteractionPanel(event: MouseEvent): void {
+  if (!model) return;
+  const hitArea = model.hitTest(event.clientX, event.clientY)[0];
+  if (!hitArea) return;
+  runtime?.dispatch({ type: 'user.avatar-clicked', hitArea });
+  openAvatarInteractionPanel(hitArea, { x: event.clientX, y: event.clientY });
+}
+
+function previewExpressionResource(expressionId: string | null): void {
+  if (!model || runtime?.getSnapshot().state !== 'idle') return;
+  const activeModel = model;
+  stopAssetPreviewMotion('expression-replaced-motion');
+  const requestToken = ++expressionRequestToken;
+  document.body.dataset.assetPreviewKind = 'expression';
+  document.body.dataset.assetPreviewResource = expressionId ?? 'neutral';
+  if (expressionId === null) {
+    activeModel.internalModel.motionManager.expressionManager?.resetExpression();
+    document.body.dataset.assetPreviewState = 'applied';
+    return;
+  }
+  document.body.dataset.assetPreviewState = 'loading';
+  const expressionManager = activeModel.internalModel.motionManager.expressionManager;
+  void activateRepeatableExpression(
+    expressionManager,
+    id => activeModel.expression(id),
+    expressionId,
+  ).then(activation => {
+    if (requestToken !== expressionRequestToken) return;
+    if (!activation.applied) throw new Error(`Live2D expression ${expressionId} did not start`);
+    document.body.dataset.assetPreviewState = 'applied';
+  }).catch(error => {
+    if (requestToken !== expressionRequestToken) return;
+    document.body.dataset.assetPreviewState = 'failed';
+    console.error('[asset-preview] expression failed', { expressionId, error });
+  });
+}
+
+function previewMotionResource(resource: Live2dMotionPreviewResource): void {
+  if (!model || runtime?.getSnapshot().state !== 'idle') return;
+  const activeModel = model;
+  stopCurrentMotion('replaced');
+  stopAssetPreviewMotion('replaced');
+  const token = ++assetPreviewMotionToken;
+  const duration = motionPreviewDuration(resource);
+  document.body.dataset.assetPreviewKind = 'motion';
+  document.body.dataset.assetPreviewResource = resource.id;
+  document.body.dataset.assetPreviewState = 'starting';
+  void activeModel.motion(resource.group, resource.index, MotionPriority.FORCE).then(async started => {
+    if (token !== assetPreviewMotionToken) return;
+    if (!started) throw new Error(`Live2D motion ${resource.id} did not start`);
+    const startedAt = performance.now();
+    document.body.dataset.assetPreviewState = 'playing';
+    const durationMs = await duration;
+    if (token !== assetPreviewMotionToken) return;
+    const remainingMs = Math.max(0, durationMs - (performance.now() - startedAt));
+    assetPreviewMotionTimer = setTimeout(() => {
+      if (token !== assetPreviewMotionToken) return;
+      activeModel.internalModel.motionManager.stopAllMotions();
+      assetPreviewMotionTimer = undefined;
+      document.body.dataset.assetPreviewState = 'completed';
+    }, remainingMs);
+  }).catch(error => {
+    if (token !== assetPreviewMotionToken) return;
+    document.body.dataset.assetPreviewState = 'failed';
+    console.error('[asset-preview] motion failed', {
+      group: resource.group,
+      index: resource.index,
+      error,
+    });
+  });
+}
+
+function stopAssetPreviewMotion(reason: string): void {
+  const active = document.body.dataset.assetPreviewKind === 'motion'
+    && ['starting', 'playing'].includes(document.body.dataset.assetPreviewState ?? '');
+  assetPreviewMotionToken++;
+  if (assetPreviewMotionTimer) clearTimeout(assetPreviewMotionTimer);
+  assetPreviewMotionTimer = undefined;
+  if (!active) return;
+  model?.internalModel.motionManager.stopAllMotions();
+  document.body.dataset.assetPreviewState = reason;
+}
+
+function motionPreviewDuration(resource: Live2dMotionPreviewResource): Promise<number> {
+  const cached = assetPreviewMotionDurations.get(resource.id);
+  if (cached) return cached;
+  const task = (async () => {
+    const settings = model?.internalModel.motionManager.settings;
+    if (!settings) return 4_000;
+    try {
+      const response = await fetch(settings.resolveURL(resource.file), { cache: 'force-cache' });
+      if (!response.ok) throw new Error(`HTTP ${response.status}`);
+      const source = await response.json() as { Meta?: { Duration?: unknown } };
+      const seconds = source.Meta?.Duration;
+      return typeof seconds === 'number' && Number.isFinite(seconds)
+        ? Math.max(250, Math.min(seconds * 1_000, 30_000))
+        : 4_000;
+    }
+    catch (error) {
+      console.warn('[asset-preview] motion duration unavailable', { resource: resource.id, error });
+      return 4_000;
+    }
+  })();
+  assetPreviewMotionDurations.set(resource.id, task);
+  return task;
+}
+
+function assetFileStem(file: string): string {
+  const name = file.replaceAll('\\', '/').split('/').at(-1) ?? file;
+  return name.replace(/\.(?:motion3|exp3)\.json$/u, '');
+}
+
 function registerDevelopmentUi(): void {
+  interactionUi.register({
+    id: 'avatar.expression-resources',
+    target: 'avatar',
+    order: 10,
+    build: () => {
+      const enabled = runtime?.getSnapshot().state === 'idle';
+      return {
+        label: '表情资源',
+        items: [
+          {
+            type: 'action',
+            id: 'expression-neutral',
+            label: 'Neutral / Reset',
+            enabled,
+            invoke: () => previewExpressionResource(null),
+          },
+          ...assetPreviewCatalog.expressions.map(resource => ({
+            type: 'action' as const,
+            id: `expression-${resource.id}`,
+            label: resource.id,
+            enabled,
+            invoke: () => previewExpressionResource(resource.id),
+          })),
+        ],
+      };
+    },
+  });
+  interactionUi.register({
+    id: 'avatar.motion-resources',
+    target: 'avatar',
+    order: 20,
+    build: () => {
+      const enabled = runtime?.getSnapshot().state === 'idle';
+      return {
+        label: '动作资源',
+        items: assetPreviewCatalog.motions.map(resource => ({
+          type: 'action' as const,
+          id: `motion-${resource.group}-${resource.index}`,
+          label: `${resource.group}[${resource.index}] · ${assetFileStem(resource.file)}`,
+          enabled,
+          invoke: () => previewMotionResource(resource),
+        })),
+      };
+    },
+  });
   immediateUi.register({
     id: 'avatar.runtime-settings',
     target: 'avatar',
@@ -1503,12 +1734,14 @@ function handleDesktopCursor(point: { x: number; y: number }): void {
   if (!desktopShell || !desktopBounds || !model || !runtime) return;
   const localX = point.x - desktopBounds.x;
   const localY = point.y - desktopBounds.y;
+  desktopCursorLocalPoint = { x: localX, y: localY };
   runtime.dispatch({
     type: 'user.look-target-changed',
     x: (point.x - (desktopBounds.x + desktopBounds.width / 2)) / (desktopBounds.width / 2),
     y: -(point.y - (desktopBounds.y + desktopBounds.height / 2)) / (desktopBounds.height / 2),
   });
   if (dragGesture.hasGesture) return;
+  const insideInteractionPanel = interactionPanelHost.trackClientPoint(localX, localY);
   const inside = localX >= 0 && localY >= 0 && localX < desktopBounds.width && localY < desktopBounds.height;
   if (!inside) {
     if (contextMenuHost.isOpen) return;
@@ -1526,6 +1759,10 @@ function handleDesktopCursor(point: { x: number; y: number }): void {
     updatePointerPresentation({ passthrough: false, cursor });
     return;
   }
+  if (insideInteractionPanel) {
+    updatePointerPresentation({ passthrough: false, cursor: 'pointer' });
+    return;
+  }
   pixelCursorPoint = { x: localX, y: localY };
   pixelPicker?.watch(pixelCursorPoint);
   if (!pixelSelection) document.body.dataset.pixelSelection = 'pending';
@@ -1536,6 +1773,7 @@ function beginAvatarDrag(event: PointerEvent): void {
   const hitArea = selectedHitArea(event.clientX, event.clientY);
   if (!hitArea) return;
   if (!dragGesture.begin(event.pointerId, hitArea, { x: event.screenX, y: event.screenY })) return;
+  avatarPointerClientPoint = { x: event.clientX, y: event.clientY };
   event.preventDefault();
   canvas.setPointerCapture(event.pointerId);
   pixelPicker?.invalidate();
@@ -1546,6 +1784,7 @@ function moveAvatarDrag(event: PointerEvent): void {
 }
 
 function endAvatarDrag(event: PointerEvent): void {
+  avatarPointerClientPoint = { x: event.clientX, y: event.clientY };
   if (!dragGesture.end(
     event.pointerId,
     { x: event.screenX, y: event.screenY },
@@ -1581,6 +1820,20 @@ function selectionPresentation(): PointerPresentation {
     : { passthrough: true, cursor: 'default' };
 }
 
+function currentSurfacePresentation(): PointerPresentation {
+  const point = desktopCursorLocalPoint;
+  if (contextMenuHost.isOpen) {
+    return {
+      passthrough: false,
+      cursor: point && contextMenuHost.containsClientPoint(point.x, point.y) ? 'pointer' : 'default',
+    };
+  }
+  if (point && interactionPanelHost.containsClientPoint(point.x, point.y)) {
+    return { passthrough: false, cursor: 'pointer' };
+  }
+  return selectionPresentation();
+}
+
 function samePointerPresentation(a: PointerPresentation | undefined, b: PointerPresentation): boolean {
   return a?.passthrough === b.passthrough && a.cursor === b.cursor;
 }
@@ -1608,7 +1861,9 @@ function applyPixelSelection(result: PixelCoverageResult): void {
   document.body.dataset.pixelSubmittedFrame = result.submittedFrame.toString();
   document.body.dataset.pixelResolvedFrame = result.resolvedFrame.toString();
   document.body.dataset.pixelReadbackFrames = result.latencyFrames.toString();
-  if (!dragGesture.hasGesture && !contextMenuHost.isOpen) updatePointerPresentation(selectionPresentation());
+  if (!dragGesture.hasGesture && !contextMenuHost.isOpen) {
+    updatePointerPresentation(currentSurfacePresentation());
+  }
 }
 
 function handlePixelSelectionError(error: Error): void {
@@ -1616,7 +1871,9 @@ function handlePixelSelectionError(error: Error): void {
   document.body.dataset.pixelSample = 'failed';
   document.body.dataset.pixelSelection = decision.selected ? 'covered' : 'transparent';
   document.body.dataset.pixelReadbackError = error.message;
-  if (!dragGesture.hasGesture && !contextMenuHost.isOpen) updatePointerPresentation(selectionPresentation());
+  if (!dragGesture.hasGesture && !contextMenuHost.isOpen) {
+    updatePointerPresentation(currentSurfacePresentation());
+  }
   console.error('Pixel coverage readback failed', error);
 }
 

@@ -56,7 +56,16 @@
         "headX": { "$ref": "#/$defs/gazeAxis" },
         "headY": { "$ref": "#/$defs/gazeAxis" },
         "eyeX": { "$ref": "#/$defs/gazeAxis" },
-        "eyeY": { "$ref": "#/$defs/gazeAxis" }
+        "eyeY": { "$ref": "#/$defs/gazeAxis" },
+        "smoothing": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["headResponseMs", "eyeResponseMs"],
+          "properties": {
+            "headResponseMs": { "type": "number", "minimum": 0 },
+            "eyeResponseMs": { "type": "number", "minimum": 0 }
+          }
+        }
       }
     },
     "lipSyncProfile": {

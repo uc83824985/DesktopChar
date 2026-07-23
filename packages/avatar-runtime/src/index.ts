@@ -1,4 +1,5 @@
 export * from './mixer.ts';
+export * from './gaze-interpolator.ts';
 export * from './gaze-profile.ts';
 export * from './lip-sync-envelope.ts';
 export * from './planner.ts';

@@ -55,6 +55,9 @@ export function reduceAvatarSnapshot(
         effects: [],
       };
 
+    case 'renderer.frame-tick':
+      return { snapshot, effects: [] };
+
     case 'renderer.failed':
       return { snapshot: withError(snapshot, event.error), effects: [] };
 

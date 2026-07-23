@@ -131,6 +131,8 @@ Scene UI 引擎不直接调用 Electron：
 - Actor state、Behavior mode、transform 和 presenter config 输入；
 - generation-safe UI 事件路由；
 - `scene-ui-dom` 的即时 UI 注册表和共享 DOM 右键菜单 Host；
+- 左键角色打开的共享 DOM 交互面板 Host；action 不自动关闭，hover/离开超时属于 Host
+  的短生命周期表现状态；
 - 角色、聊天气泡诊断和桌面窗口分别主动注册菜单贡献，菜单打开时重新读取当前 Runtime 状态；
 - 键盘 `Shift+F10` / Context Menu 键入口、菜单焦点导航，以及 Electron 穿透状态合并；
 - 动态状态更新、Actor 隐藏、层级排序和非法声明的测试。
@@ -166,6 +168,28 @@ registry.register({
 - `target: '*'` 用于桌面窗口等全局贡献，多个对象贡献按 `order + id` 确定性合并。
 
 当前角色右键菜单包含可勾选的眼部跟随、三种聊天气泡测试、两端 MCP 动态启停/连接测试/配置重载、隐藏角色、恢复窗口位置和退出；“恢复中立”不再作为容易与跟随状态混淆的一次性按钮。MCP checkbox 投影 Electron main 的服务状态并只发送异步命令，不在 DOM 中保存连接事实。菜单展开期间作为交互 Surface 暂停窗口穿透，关闭后重新回到像素 Coverage 决定的状态。隐藏角色只是向 Electron shell 发送白名单命令，托盘及窗口显隐仍由 main 独占。
+
+### 左键角色交互面板
+
+`DomInteractionPanelHost` 是后续对话输入框和角色快捷交互的共享容器。当前第一阶段先注册
+Mao 原始表情/动作资源预览，用于完成语义标注前的前台审阅：
+
+- 左键命中角色可见像素后以 120ms 动画打开；
+- 鼠标位于面板内时不会自动关闭，action 点击也不关闭；
+- 鼠标离开后等待 3000ms，再用 120ms 渐出；渐出完成前回到面板会复用原 DOM 并恢复；
+- 每次重新进入后，下一次离开重新获得完整 3000ms；
+- Host 使用不含回调函数的声明签名去重，视线 Runtime 的高频 snapshot 不会在
+  pointerdown 期间替换按钮节点；
+- Electron 把面板矩形加入 `interactiveUiSurfaceHit`，面板内部关闭窗口穿透，离开后
+  重新由角色 Coverage 决定穿透，不会把整块角色窗口永久变成可交互区域。
+
+面板当前从 `Mao.model3.json` 自动列出 8 个 expression、2 个 `Idle` motion 和 6 个
+`TapBody` motion，并提供 Neutral/Reset。原始资源预览只显示 `exp_02`、
+`TapBody[0] · mtn_02` 这类资源身份，不把尚未人工确认的动画冒充为 `sad`、`nod`
+等语义绑定。它属于开发期 Renderer 资源审阅 capability，不修改 Avatar Runtime 的
+语义 emotion/action；正式对话表演仍只能经过角色 Profile 白名单、Runtime Timeline
+和 renderer Effect。后续文本输入 presenter 复用同一 Host，但输入内容必须提交应用
+ConversationRuntime，不能由 DOM 直接调用 Agent。
 
 ### 已落地的应用 presenter：聊天气泡
 

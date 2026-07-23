@@ -27,7 +27,8 @@ import type { ParameterLayers } from './mixer.ts';
 import { ParameterMixer } from './mixer.ts';
 import { createInitialSnapshot, reduceAvatarSnapshot } from './reducer.ts';
 import { PerformanceTimeline } from './timeline.ts';
-import { DEFAULT_GAZE_PROFILE, mapGazeTarget, validateGazeProfile } from './gaze-profile.ts';
+import { DEFAULT_GAZE_PROFILE } from './gaze-profile.ts';
+import { GazeInterpolator } from './gaze-interpolator.ts';
 import { LipSyncEnvelope, validateLipSyncProfile } from './lip-sync-envelope.ts';
 import {
   DEFAULT_SPEECH_BUBBLE_DISMISS_DELAY_MS,
@@ -72,15 +73,14 @@ export class AvatarRuntime {
   private layers: ParameterLayers = emptyLayers();
   private readonly options: AvatarRuntimeOptions;
   private readonly policy: RuntimePolicy;
-  private readonly gazeProfile: GazeProfile;
+  private readonly gazeInterpolator: GazeInterpolator;
   private readonly lipSyncProfile: LipSyncProfile;
   private readonly lipSyncEnvelope: LipSyncEnvelope;
 
   constructor(options: AvatarRuntimeOptions) {
     this.options = options;
     this.policy = options.policy ?? DEFAULT_RUNTIME_POLICY;
-    this.gazeProfile = options.gazeProfile ?? DEFAULT_GAZE_PROFILE;
-    validateGazeProfile(this.gazeProfile);
+    this.gazeInterpolator = new GazeInterpolator(options.gazeProfile ?? DEFAULT_GAZE_PROFILE);
     this.lipSyncProfile = options.lipSyncProfile ?? { ...DEFAULT_LIP_SYNC_PROFILE };
     validateLipSyncProfile(this.lipSyncProfile);
     this.lipSyncEnvelope = new LipSyncEnvelope(this.lipSyncProfile);
@@ -103,6 +103,14 @@ export class AvatarRuntime {
 
   dispatch(event: AvatarEvent): void {
     if (this.disposed) return;
+    if (event.type === 'renderer.frame-tick') {
+      const frame = this.gazeInterpolator.advance(event.deltaMs);
+      if (frame) {
+        this.layers.gaze = gazeParameterLayer(frame);
+        this.emitFrame();
+      }
+      return;
+    }
 
     let acceptedEvent = event;
     let submittedPerformanceEffects: RuntimeEffect[] = [];
@@ -240,25 +248,6 @@ export class AvatarRuntime {
       this.emitFrame();
       this.resetBoundExpression();
     }
-    else if (
-      acceptedEvent.type === 'user.look-target-changed'
-      && this.snapshot.gaze.active
-      && this.snapshot.capabilities?.supportsGaze
-    ) {
-      this.layers.gaze = gazeLayer(acceptedEvent.x, acceptedEvent.y, this.gazeProfile);
-      this.emitFrame();
-    }
-    else if (acceptedEvent.type === 'user.gaze-follow-enabled' && this.snapshot.capabilities?.supportsGaze) {
-      this.layers.gaze = gazeLayer(this.snapshot.gaze.x, this.snapshot.gaze.y, this.gazeProfile);
-      this.emitFrame();
-    }
-    else if (acceptedEvent.type === 'user.gaze-follow-disabled') {
-      // Runtime owns the rendered parameter frame. Removing the gaze layer would
-      // leave the last authored eye/head values in Cubism until another motion
-      // happened to overwrite them, so disabling gaze must author neutral values.
-      this.layers.gaze = gazeLayer(0, 0, this.gazeProfile);
-      this.emitFrame();
-    }
     else if (acceptedEvent.type === 'runtime.plan-completed') {
       this.performanceRequests.clear();
       this.performanceSlots.clear();
@@ -270,10 +259,24 @@ export class AvatarRuntime {
     const bubbleTransition = this.transitionSpeechBubble(acceptedEvent);
     const transition = reduceAvatarSnapshot(this.snapshot, acceptedEvent);
     this.snapshot = { ...transition.snapshot, speechBubble: bubbleTransition.state };
+    if (
+      acceptedEvent.type === 'renderer.ready'
+      || acceptedEvent.type === 'user.look-target-changed'
+      || acceptedEvent.type === 'user.gaze-follow-enabled'
+      || acceptedEvent.type === 'user.gaze-follow-disabled'
+    ) {
+      this.gazeInterpolator.setReference(this.snapshot.gaze.x, this.snapshot.gaze.y);
+      this.gazeInterpolator.setActive(this.snapshot.gaze.active);
+      if (acceptedEvent.type === 'renderer.ready') {
+        const initialGazeFrame = this.gazeInterpolator.advance(0);
+        if (initialGazeFrame) this.layers.gaze = gazeParameterLayer(initialGazeFrame);
+      }
+    }
     this.notify();
     this.executeAll(transition.effects);
     this.executeAll(submittedPerformanceEffects);
     this.executeAll(bubbleTransition.effects);
+    if (acceptedEvent.type === 'renderer.ready') this.emitFrame();
 
     if (
       acceptedEvent.type === 'runtime.speech-bubble-dismissed'
@@ -289,11 +292,6 @@ export class AvatarRuntime {
         sequence: completed.sequence,
       });
       return;
-    }
-
-    if (acceptedEvent.type === 'renderer.ready' && this.snapshot.gaze.active) {
-      this.layers.gaze = gazeLayer(this.snapshot.gaze.x, this.snapshot.gaze.y, this.gazeProfile);
-      this.emitFrame();
     }
 
     if (
@@ -768,8 +766,8 @@ function speechBubbleConfig(
   return { ...(configured ?? { mode: 'complete' as const }), cues: structuredClone(aligned) };
 }
 
-function gazeLayer(x: number, y: number, profile: GazeProfile): Record<string, ParameterValue> {
-  return Object.fromEntries(Object.entries(mapGazeTarget(x, y, profile)).map(([parameter, value]) => (
+function gazeParameterLayer(frame: Record<string, number>): Record<string, ParameterValue> {
+  return Object.fromEntries(Object.entries(frame).map(([parameter, value]) => (
     [parameter, { value, blend: 'overwrite' as const }]
   )));
 }

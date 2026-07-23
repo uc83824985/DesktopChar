@@ -13,6 +13,7 @@ test('Mao asset-side profile compensates its authored gaze and lip response', as
   });
   assert.equal(profile.gazeProfile.headY.negative.limit, -20);
   assert.equal(profile.gazeProfile.headY.positive.limit, 30);
+  assert.deepEqual(profile.gazeProfile.smoothing, { headResponseMs: 120, eyeResponseMs: 45 });
   assert.equal(profile.lipSyncProfile.gain, 2.5);
   assert.deepEqual(
     { attackMs: profile.lipSyncProfile.attackMs, releaseMs: profile.lipSyncProfile.releaseMs, peakHoldMs: profile.lipSyncProfile.peakHoldMs },
@@ -54,6 +55,7 @@ test('character profile rejects path traversal and unregistered capabilities', (
   assert.throws(() => parseCharacterConfig({ ...valid, lipSynProfile: { gain: 2 } }), /unknown field/);
   const defaults = parseCharacterConfig(valid);
   assert.deepEqual(defaults.emotionBindings, {});
+  assert.deepEqual(defaults.gazeProfile.smoothing, { headResponseMs: 120, eyeResponseMs: 45 });
   assert.deepEqual(
     { attackMs: defaults.lipSyncProfile.attackMs, releaseMs: defaults.lipSyncProfile.releaseMs, peakHoldMs: defaults.lipSyncProfile.peakHoldMs },
     { attackMs: 30, releaseMs: 100, peakHoldMs: 25 },
@@ -61,6 +63,13 @@ test('character profile rejects path traversal and unregistered capabilities', (
   assert.throws(
     () => parseCharacterConfig({ ...valid, lipSyncProfile: { gain: 1, releaseMs: -1 } }),
     /releaseMs must be non-negative/,
+  );
+  assert.throws(
+    () => parseCharacterConfig({
+      ...valid,
+      gazeProfile: { ...valid.gazeProfile, smoothing: { headResponseMs: 120, eyeResponseMs: -1 } },
+    }),
+    /eyeResponseMs must be non-negative/,
   );
 });
 

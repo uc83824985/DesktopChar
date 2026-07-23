@@ -55,7 +55,18 @@ function threeSegmentPlan(): PerformancePlan {
 test('look events are projected through Runtime-owned renderer effects', () => {
   const effects = new ControlledEffects();
   const runtime = createRuntime(effects);
+  const initialFrameCount = effects.frames.length;
+  let notifications = 0;
+  runtime.subscribe(() => notifications++);
   runtime.dispatch({ type: 'user.look-target-changed', x: 0.5, y: -0.25 });
+  assert.equal(effects.frames.length, initialFrameCount);
+  const notificationsAfterTarget = notifications;
+  runtime.dispatch({ type: 'renderer.frame-tick', deltaMs: 45 });
+  assert.equal(notifications, notificationsAfterTarget);
+  assert.ok(effects.frames.at(-1)!.ParamAngleX! > 0);
+  assert.ok(effects.frames.at(-1)!.ParamAngleX! < 15);
+  assert.ok(effects.frames.at(-1)!.ParamEyeBallX! > effects.frames.at(-1)!.ParamAngleX! / 30);
+  runtime.dispatch({ type: 'renderer.frame-tick', deltaMs: 1_000 });
   assert.deepEqual(effects.frames.at(-1), {
     ParamAngleX: 15,
     ParamAngleY: -7.5,
@@ -71,6 +82,7 @@ test('gaze follow remains Runtime-owned across plans and interrupt until explici
   const effects = new ControlledEffects();
   const runtime = createRuntime(effects);
   runtime.dispatch({ type: 'user.look-target-changed', x: -0.4, y: 0.6 });
+  runtime.dispatch({ type: 'renderer.frame-tick', deltaMs: 1_000 });
   runtime.dispatch({ type: 'plan.submitted', plan: threeSegmentPlan() });
   assert.equal(runtime.getSnapshot().gaze.active, true);
   assert.equal(effects.frames.at(-1)?.ParamEyeBallX, -0.4);
@@ -81,6 +93,7 @@ test('gaze follow remains Runtime-owned across plans and interrupt until explici
 
   runtime.dispatch({ type: 'user.gaze-follow-disabled' });
   assert.equal(runtime.getSnapshot().gaze.active, false);
+  runtime.dispatch({ type: 'renderer.frame-tick', deltaMs: 1_000 });
   assert.deepEqual(effects.frames.at(-1), {
     ParamAngleX: 0,
     ParamAngleY: 0,
@@ -96,6 +109,8 @@ test('gaze follow remains Runtime-owned across plans and interrupt until explici
 
   runtime.dispatch({ type: 'user.gaze-follow-enabled' });
   assert.deepEqual(runtime.getSnapshot().gaze, { x: 0.8, y: -0.2, active: true });
+  assert.equal(effects.frames.length, disabledFrameCount);
+  runtime.dispatch({ type: 'renderer.frame-tick', deltaMs: 1_000 });
   assert.equal(effects.frames.at(-1)?.ParamEyeBallX, 0.8);
 });
 

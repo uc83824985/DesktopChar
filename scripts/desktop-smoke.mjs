@@ -1,22 +1,36 @@
 import os from 'node:os';
 import path from 'node:path';
+import { rm } from 'node:fs/promises';
 import { _electron as electron } from 'playwright-core';
 import { Client } from '@modelcontextprotocol/sdk/client/index.js';
 import { StreamableHTTPClientTransport } from '@modelcontextprotocol/sdk/client/streamableHttp.js';
+import koffi from 'koffi';
 
 const root = process.cwd();
 const isolatedConfigPath = path.join(
   os.tmpdir(),
   `desktop-char-smoke-missing-${process.pid}-${Date.now()}.json`,
 );
+const isolatedUserDataPath = path.join(
+  os.tmpdir(),
+  `desktop-char-smoke-user-data-${process.pid}-${Date.now()}`,
+);
 const application = await electron.launch({
-  args: [path.join(root, 'apps/desktop/electron/main.mjs')],
+  args: [
+    path.join(root, 'apps/desktop/electron/main.mjs'),
+    `--user-data-dir=${isolatedUserDataPath}`,
+  ],
   cwd: root,
   env: {
     ...process.env,
     DESKTOP_CHAR_CONFIG_PATH: isolatedConfigPath,
   },
 });
+const runNativeInteractionSmoke = process.env.DESKTOP_CHAR_NATIVE_INTERACTION_SMOKE === '1';
+const nativePointer = runNativeInteractionSmoke ? createNativePointer() : undefined;
+const originalCursorPoint = runNativeInteractionSmoke
+  ? await application.evaluate(({ screen }) => screen.getCursorScreenPoint())
+  : undefined;
 
 try {
   const page = await application.firstWindow({ timeout: 20_000 });
@@ -28,6 +42,7 @@ try {
   });
   page.on('pageerror', error => errors.push(error.stack ?? error.message));
   await page.locator('body[data-ready="true"][data-shell="floating"][data-live2d-update-pipeline="ordered-v1"]').waitFor({ timeout: 20_000 });
+  await page.locator('body[data-gaze-head-response-ms="120"][data-gaze-eye-response-ms="45"]').waitFor({ timeout: 2_000 });
   await page.locator('body[data-desktop-shell="ready"]').waitFor({ timeout: 2_000 });
   await page.locator('body[data-gaze-follow="enabled"]').waitFor({ timeout: 2_000 });
   await page.locator('body[data-pixel-selection]').waitFor({ timeout: 2_000 });
@@ -310,6 +325,10 @@ try {
   await page.evaluate(() => document.querySelector('#reset')?.click());
   await page.locator('body[data-speech-bubble="hidden"]').waitFor({ timeout: 2_000 });
 
+  if (runNativeInteractionSmoke) {
+    await verifyNativeInteractionPanel(application, page);
+  }
+
   const beforeVisibilityCycles = await page.evaluate(() => ({
     scale: document.body.dataset.modelScale,
     bounds: document.body.dataset.windowBounds,
@@ -407,7 +426,89 @@ try {
   console.log(`Electron floating smoke passed (${movedState.bounds.width}x${movedState.bounds.height} at ${movedState.bounds.x},${movedState.bounds.y}; pixel readback ${moved.pixelReadback}).`);
 }
 finally {
-  await application.close();
+  if (originalCursorPoint) {
+    await setNativePointer(application, originalCursorPoint).catch(() => {});
+  }
+  try {
+    await application.close();
+  }
+  finally {
+    await rm(isolatedUserDataPath, { recursive: true, force: true });
+  }
+}
+
+async function verifyNativeInteractionPanel(application, page) {
+  const state = await page.evaluate(() => window.desktopChar?.getWindowState());
+  if (!state) throw new Error('Desktop state is unavailable for native interaction smoke');
+  let coveredPoint;
+  for (const local of [
+    { x: 230, y: 350 },
+    { x: 230, y: 270 },
+    { x: 230, y: 450 },
+  ]) {
+    const absolute = { x: state.bounds.x + local.x, y: state.bounds.y + local.y };
+    await setNativePointer(application, absolute);
+    await page.waitForTimeout(250);
+    if (await page.locator('body').getAttribute('data-pixel-selection') === 'covered') {
+      coveredPoint = absolute;
+      break;
+    }
+  }
+  if (!coveredPoint) throw new Error('Native interaction smoke could not locate a covered avatar pixel');
+  await setNativePointer(application, coveredPoint, true);
+  const panel = page.locator('.scene-interaction-panel');
+  await panel.waitFor({ state: 'visible', timeout: 2_000 });
+  const buttonPoint = await page.locator('[data-item-id="expression-exp_01"]').evaluate((button, bounds) => {
+    const rect = button.getBoundingClientRect();
+    return {
+      x: bounds.x + rect.x + rect.width / 2,
+      y: bounds.y + rect.y + rect.height / 2,
+    };
+  }, state.bounds);
+  await setNativePointer(application, buttonPoint);
+  await page.waitForFunction(async () => {
+    const next = await window.desktopChar?.getWindowState();
+    return next?.pointerPresentation?.passthrough === false
+      && next.pointerPresentation.cursor === 'pointer';
+  }, undefined, { timeout: 2_000 });
+  await setNativePointer(application, buttonPoint, true);
+  await page.locator(
+    'body[data-asset-preview-kind="expression"]'
+      + '[data-asset-preview-resource="exp_01"]'
+      + '[data-asset-preview-state="applied"]',
+  ).waitFor({ timeout: 2_000 });
+  if (!await panel.isVisible()) throw new Error('Native expression click dismissed the interaction panel');
+  await setNativePointer(application, { x: state.bounds.x + 5, y: state.bounds.y + 5 });
+  await panel.waitFor({ state: 'detached', timeout: 4_000 });
+}
+
+async function setNativePointer(application, point, click = false) {
+  if (!nativePointer) throw new Error('Native pointer is unavailable');
+  nativePointer.move(point);
+  if (!click) return;
+  nativePointer.click();
+  await new Promise(resolve => setTimeout(resolve, 30));
+}
+
+function createNativePointer() {
+  const user32 = koffi.load('user32.dll');
+  const setCursorPos = user32.func('int __stdcall SetCursorPos(int x, int y)');
+  const mouseEvent = user32.func(
+    'void __stdcall mouse_event(uint32_t flags, uint32_t dx, uint32_t dy, uint32_t data, uintptr_t extra)',
+  );
+  return {
+    move(point) {
+      // This Node process is DPI-unaware, so Win32 virtualizes these coordinates
+      // into the same DIP space returned by Electron.
+      if (!setCursorPos(Math.round(point.x), Math.round(point.y))) {
+        throw new Error('SetCursorPos failed');
+      }
+    },
+    click() {
+      mouseEvent(0x0002, 0, 0, 0, 0n);
+      mouseEvent(0x0004, 0, 0, 0, 0n);
+    },
+  };
 }
 
 async function waitForMainWindowVisibility(application, expected) {

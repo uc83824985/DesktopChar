@@ -32,4 +32,8 @@ test('gaze profiles reject invalid directional limits and curves', () => {
     ...DEFAULT_GAZE_PROFILE,
     eyeY: { ...DEFAULT_GAZE_PROFILE.eyeY, positive: { limit: 1, exponent: 0 } },
   }), /positive\.exponent/);
+  assert.throws(() => validateGazeProfile({
+    ...DEFAULT_GAZE_PROFILE,
+    smoothing: { ...DEFAULT_GAZE_PROFILE.smoothing, eyeResponseMs: -1 },
+  }), /eyeResponseMs/);
 });

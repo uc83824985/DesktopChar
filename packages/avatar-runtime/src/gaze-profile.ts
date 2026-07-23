@@ -1,10 +1,16 @@
-import type { GazeAxisProfile, GazeProfile, ParameterFrame } from '../../contracts/src/index.ts';
+import {
+  DEFAULT_GAZE_SMOOTHING_PROFILE,
+  type GazeAxisProfile,
+  type GazeProfile,
+  type ParameterFrame,
+} from '../../contracts/src/index.ts';
 
 export const DEFAULT_GAZE_PROFILE: GazeProfile = {
   headX: axisProfile(-30, 30),
   headY: axisProfile(-30, 30),
   eyeX: axisProfile(-1, 1),
   eyeY: axisProfile(-1, 1),
+  smoothing: { ...DEFAULT_GAZE_SMOOTHING_PROFILE },
 };
 
 export function mapGazeTarget(x: number, y: number, profile: GazeProfile): ParameterFrame {
@@ -18,7 +24,8 @@ export function mapGazeTarget(x: number, y: number, profile: GazeProfile): Param
 }
 
 export function validateGazeProfile(profile: GazeProfile): void {
-  for (const [name, axis] of Object.entries(profile) as Array<[keyof GazeProfile, GazeAxisProfile]>) {
+  for (const name of ['headX', 'headY', 'eyeX', 'eyeY'] as const) {
+    const axis: GazeAxisProfile = profile[name];
     if (!Number.isFinite(axis.negative.limit) || axis.negative.limit > 0) {
       throw new RangeError(`${name}.negative.limit must be finite and non-positive`);
     }
@@ -32,6 +39,11 @@ export function validateGazeProfile(profile: GazeProfile): void {
     }
     if (!Number.isFinite(axis.deadZone) || axis.deadZone < 0 || axis.deadZone >= 1) {
       throw new RangeError(`${name}.deadZone must be in [0, 1)`);
+    }
+  }
+  for (const [name, responseMs] of Object.entries(profile.smoothing)) {
+    if (!Number.isFinite(responseMs) || responseMs < 0) {
+      throw new RangeError(`smoothing.${name} must be finite and non-negative`);
     }
   }
 }

@@ -22,6 +22,10 @@ interface GazeProfile {
   headY: GazeAxisProfile;
   eyeX: GazeAxisProfile;
   eyeY: GazeAxisProfile;
+  smoothing: {
+    headResponseMs: number;
+    eyeResponseMs: number;
+  };
 }
 ```
 
@@ -29,8 +33,10 @@ interface GazeProfile {
 - `exponent < 1`：较小输入更快产生明显响应。
 - `exponent > 1`：中心区域更缓和，靠近边缘才快速响应。
 - `deadZone`：抑制中心附近的鼠标抖动。
+- `headResponseMs`：头部完成目标变化 90% 所需时间。
+- `eyeResponseMs`：眼球完成目标变化 90% 所需时间；通常应短于头部。
 
-Runtime 只持有激活状态和标准化视线目标，映射结果仍通过 Gaze 参数层进入 Mixer；UI 不能直接写模型参数。
+鼠标位置只提供标准化参考目标，不决定动画推进频率。Runtime 同时持有参考目标和当前呈现值，并由显示帧的 `deltaTime` 推进帧率无关的插值；映射结果仍通过 Gaze 参数层进入 Mixer，UI 不能直接写模型参数。重复提交相同参考点不会重启或改变插值曲线。
 
 ## 校准步骤
 
@@ -60,5 +66,8 @@ Runtime 只持有激活状态和标准化视线目标，映射结果仍通过 Ga
 - 向下头部端点限制为 `-20`，向上保留 `30`；
 - 向上的 head/eye 曲线稍提前响应；
 - 头部和眼球保留小死区以抑制指针抖动。
+- 眼球以 `45ms`、头部以 `120ms` 的 90% 响应时间追踪参考点。
 
 这会改善日常跟随的视觉平衡，但不会增强 `ParamAngleY = 30` 时的最大抬头形变。若仍希望端点明显抬高，应修改 Mao 资源，而不是继续增加 Runtime 参数值。
+
+Live2D `motion3.json` 中的 `Fps` 是资源采样/导出信息，Cubism 会在每个显示帧按时间求值线性或贝塞尔曲线。除非资源明确使用 `Stepped` 段或存在低质量逐帧烘焙，不应为了提高屏幕刷新率而预处理动作资源。

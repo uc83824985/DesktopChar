@@ -367,9 +367,9 @@ Base
 
 该平滑属于 Runtime 状态，不修改声音、不修改 Player 的原始电平，也不允许 Renderer 二次平滑。将三个时间参数设为 `0` 可恢复直接电平映射，主要用于诊断对照。未来具备 viseme 数据时，viseme 可增加 MouthForm 轨道，但电平包络仍作为所有 TTS Provider 的通用回退。
 
-眼部跟随是 Runtime 持有的持续模式：模型具备 gaze 能力时默认开启，`user.look-target-changed` 只更新目标；在显式收到 `user.gaze-follow-disabled` 前，提交计划、中断、说话和原生 motion 都不能清除 gaze 层，Gaze 最终拥有 `ParamAngleX/Y` 与 `ParamEyeBallX/Y`。关闭后才释放这些参数给原生 motion/idle。
+眼部跟随是 Runtime 持有的持续模式：模型具备 gaze 能力时默认开启，`user.look-target-changed` 只更新参考目标；在显式收到 `user.gaze-follow-disabled` 前，提交计划、中断、说话和原生 motion 都不能清除 gaze 层，Gaze 最终拥有 `ParamAngleX/Y` 与 `ParamEyeBallX/Y`。关闭后由同一个 Runtime 插值器平滑返回中立值，避免最后一帧参数残留。
 
-标准化目标通过角色级 `GazeProfile` 映射到模型参数。每个轴的正负方向可分别配置端点和指数曲线，并共享中心死区；这使 Runtime 保持模型无关，同时允许补偿角色资源的非对称响应。配置调参与资源修改的边界见 [角色视线校准工作流](gaze-calibration.md)。
+标准化目标通过角色级 `GazeProfile` 映射到模型参数。每个轴的正负方向可分别配置端点和指数曲线，并共享中心死区；`headResponseMs` 与 `eyeResponseMs` 分别定义头部和眼球完成目标变化 90% 所需时间。Renderer 每个显示帧只发送 `deltaTime`，Runtime 内的插值状态独立推进且不广播高频完整 Snapshot，因此鼠标采样频率和显示器刷新率都不会改变相同时间点的曲线结果。配置调参与资源修改的边界见 [角色视线校准工作流](gaze-calibration.md)。
 
 ### 效果配置 revision
 

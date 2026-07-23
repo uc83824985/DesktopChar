@@ -237,11 +237,24 @@ export interface GazeAxisProfile {
   deadZone: number;
 }
 
+export interface GazeSmoothingProfile {
+  /** Time for head parameters to complete 90% of a target transition. */
+  headResponseMs: number;
+  /** Time for eye parameters to complete 90% of a target transition. */
+  eyeResponseMs: number;
+}
+
+export const DEFAULT_GAZE_SMOOTHING_PROFILE: Readonly<GazeSmoothingProfile> = Object.freeze({
+  headResponseMs: 120,
+  eyeResponseMs: 45,
+});
+
 export interface GazeProfile {
   headX: GazeAxisProfile;
   headY: GazeAxisProfile;
   eyeX: GazeAxisProfile;
   eyeY: GazeAxisProfile;
+  smoothing: GazeSmoothingProfile;
 }
 
 export interface LipSyncProfile {
@@ -335,6 +348,7 @@ export type PlaybackEvent =
 
 export type RendererEvent =
   | { type: 'renderer.ready'; capabilities: AvatarCapabilities }
+  | { type: 'renderer.frame-tick'; deltaMs: number }
   | { type: 'renderer.motion-completed'; generation: number; actionId: string }
   | { type: 'renderer.motion-failed'; generation: number; actionId: string; error: RuntimeError }
   | { type: 'renderer.failed'; error: RuntimeError };

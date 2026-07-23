@@ -1,4 +1,5 @@
 import {
+  DEFAULT_GAZE_SMOOTHING_PROFILE,
   DEFAULT_LIP_SYNC_PROFILE,
   type AvatarAction,
   type Emotion,
@@ -84,12 +85,23 @@ function emotionBindings(value: unknown, allowedEmotions: Emotion[]): EmotionBin
 
 function gazeProfile(value: unknown): GazeProfile {
   const profile = record(value, 'Character profile gazeProfile');
-  assertKnownKeys(profile, ['headX', 'headY', 'eyeX', 'eyeY'], 'Character profile gazeProfile');
+  assertKnownKeys(profile, ['headX', 'headY', 'eyeX', 'eyeY', 'smoothing'], 'Character profile gazeProfile');
   return {
     headX: gazeAxis(profile.headX, 'gazeProfile.headX'),
     headY: gazeAxis(profile.headY, 'gazeProfile.headY'),
     eyeX: gazeAxis(profile.eyeX, 'gazeProfile.eyeX'),
     eyeY: gazeAxis(profile.eyeY, 'gazeProfile.eyeY'),
+    smoothing: gazeSmoothing(profile.smoothing),
+  };
+}
+
+function gazeSmoothing(value: unknown): GazeProfile['smoothing'] {
+  if (value === undefined) return { ...DEFAULT_GAZE_SMOOTHING_PROFILE };
+  const smoothing = record(value, 'gazeProfile.smoothing');
+  assertKnownKeys(smoothing, ['headResponseMs', 'eyeResponseMs'], 'gazeProfile.smoothing');
+  return {
+    headResponseMs: nonNegativeNumber(smoothing.headResponseMs, 'gazeProfile.smoothing.headResponseMs'),
+    eyeResponseMs: nonNegativeNumber(smoothing.eyeResponseMs, 'gazeProfile.smoothing.eyeResponseMs'),
   };
 }
 
