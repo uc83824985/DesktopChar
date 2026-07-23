@@ -1,0 +1,24 @@
+[project]
+name = "desktop-char-performance-model-service"
+version = "0.1.0"
+description = "Reproducible local inference environment for DesktopChar performance planning"
+requires-python = ">=3.11,<3.13"
+dependencies = [
+  "pillow>=11.0.0",
+  "requests>=2.32.0",
+  "torch>=2.8.0",
+  "torchvision>=0.23.0",
+  "transformers[serving] @ git+https://github.com/huggingface/transformers.git@main",
+]
+
+[tool.uv]
+package = false
+
+[tool.uv.sources]
+torch = { index = "pytorch-cu128" }
+torchvision = { index = "pytorch-cu128" }
+
+[[tool.uv.index]]
+name = "pytorch-cu128"
+url = "https://download.pytorch.org/whl/cu128"
+explicit = true

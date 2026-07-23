@@ -62,7 +62,7 @@ test('interrupt is idempotent and stale generation events are ignored', () => {
   const first = reduceAvatarSnapshot(snapshot, { type: 'user.interrupt-requested' });
   assert.equal(first.snapshot.state, 'idle');
   assert.equal(first.snapshot.generation, 1);
-  assert.deepEqual(first.effects.map(effect => effect.type), ['tts.cancel', 'audio.stop']);
+  assert.deepEqual(first.effects.map(effect => effect.type), ['tts.cancel', 'performance.cancel', 'audio.stop']);
 
   const stale = reduceAvatarSnapshot(first.snapshot, {
     type: 'playback.started',

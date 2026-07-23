@@ -247,6 +247,7 @@ export function reduceAvatarSnapshot(
         },
         effects: [
           { type: 'tts.cancel', generation: oldGeneration },
+          { type: 'performance.cancel', generation: oldGeneration },
           { type: 'audio.stop', generation: oldGeneration },
         ],
       };
@@ -333,7 +334,7 @@ export function reduceAvatarSnapshot(
           emotion: { current: 'neutral', intensity: 0 },
           gesture: { actionId: null, action: null, queueLength: 0 },
         },
-        effects: [],
+        effects: [{ type: 'performance.cancel', generation: snapshot.generation }],
       };
 
     case 'runtime.effect-failed':
@@ -355,6 +356,8 @@ export function reduceAvatarSnapshot(
 
     case 'plan.completed':
     case 'tts.plan-completed':
+    case 'performance.suggestion-ready':
+    case 'performance.suggestion-failed':
     case 'plan.segment-appended':
     case 'presentation.chat-bubble-requested':
     case 'runtime.speech-bubble-dismissed':

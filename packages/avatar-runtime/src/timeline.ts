@@ -6,31 +6,14 @@ export type TimelineCue =
 
 export class PerformanceTimeline {
   readonly segmentId: string;
-  private readonly cues: TimelineCue[];
+  private cues: TimelineCue[];
   private emitted = new Set<string>();
   private paused = false;
   private cancelled = false;
 
   constructor(segment: PerformanceSegment) {
     this.segmentId = segment.id;
-    const cues: TimelineCue[] = [];
-    if (segment.emotion) {
-      cues.push({
-        id: `${segment.id}:emotion`,
-        type: 'emotion',
-        atMs: segment.emotion.atMs ?? 0,
-        payload: segment.emotion,
-      });
-    }
-    for (const action of segment.actions ?? []) {
-      cues.push({
-        id: action.id,
-        type: 'action',
-        atMs: action.atMs ?? 0,
-        payload: action,
-      });
-    }
-    this.cues = cues.sort((a, b) => a.atMs - b.atMs);
+    this.cues = timelineCues(segment);
   }
 
   advance(positionMs: number): TimelineCue[] {
@@ -48,7 +31,35 @@ export class PerformanceTimeline {
     if (!this.cancelled) this.paused = false;
   }
 
+  update(segment: PerformanceSegment): void {
+    if (segment.id !== this.segmentId) {
+      throw new Error(`Cannot update timeline ${this.segmentId} with segment ${segment.id}`);
+    }
+    if (!this.cancelled) this.cues = timelineCues(segment);
+  }
+
   cancel(): void {
     this.cancelled = true;
   }
+}
+
+function timelineCues(segment: PerformanceSegment): TimelineCue[] {
+  const cues: TimelineCue[] = [];
+  if (segment.emotion) {
+    cues.push({
+      id: `${segment.id}:emotion`,
+      type: 'emotion',
+      atMs: segment.emotion.atMs ?? 0,
+      payload: segment.emotion,
+    });
+  }
+  for (const action of segment.actions ?? []) {
+    cues.push({
+      id: action.id,
+      type: 'action',
+      atMs: action.atMs ?? 0,
+      payload: action,
+    });
+  }
+  return cues.sort((a, b) => a.atMs - b.atMs);
 }

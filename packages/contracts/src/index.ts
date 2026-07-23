@@ -23,6 +23,14 @@ export interface EmotionCue {
   atMs?: number;
 }
 
+/** Character-owned mapping from a semantic Runtime emotion to a renderer resource. */
+export interface EmotionBinding {
+  /** Live2D expression name from the model3 Expressions catalog, or null to reset. */
+  expression: string | null;
+}
+
+export type EmotionBindings = Partial<Record<Emotion, EmotionBinding>>;
+
 export interface ActionCue {
   id: string;
   action: AvatarAction;
@@ -72,6 +80,78 @@ export interface PerformanceSegment {
 export interface PerformancePlan {
   id: string;
   segments: PerformanceSegment[];
+}
+
+export const PERFORMANCE_PLANNING_CONTRACT_VERSION = 'desktop-char.performance-planning.v1' as const;
+
+export type PerformanceAnchor = 'segment-start' | 'after-clause' | 'segment-end';
+
+export interface PersonaPerformanceProjection {
+  id: string;
+  styleTags: string[];
+}
+
+export interface ScenePerformanceProjection {
+  id: string;
+  modeTags: string[];
+}
+
+export interface AvatarPerformanceProjection {
+  state: AvatarState;
+  currentEmotion: Emotion;
+}
+
+export interface PerformanceActionDescriptor {
+  actionId: AvatarAction;
+  label: string;
+  tags: string[];
+  allowedAnchors: PerformanceAnchor[];
+}
+
+export interface PerformancePlanningRequest {
+  contractVersion: typeof PERFORMANCE_PLANNING_CONTRACT_VERSION;
+  requestId: string;
+  planId: string;
+  segmentId: string;
+  segmentRevision: number;
+  text: string;
+  persona: PersonaPerformanceProjection;
+  scene: ScenePerformanceProjection;
+  avatar: AvatarPerformanceProjection;
+  emotions: Emotion[];
+  actions: PerformanceActionDescriptor[];
+}
+
+export interface PerformanceEmotionSuggestion {
+  emotion: Emotion;
+  intensity: number;
+  confidence: number;
+  anchor: 'segment-start';
+}
+
+export interface PerformanceActionSuggestion {
+  actionId: AvatarAction;
+  confidence: number;
+  anchor: PerformanceAnchor;
+  clauseIndex?: number;
+}
+
+export interface LocalPerformanceSuggestion {
+  contractVersion: typeof PERFORMANCE_PLANNING_CONTRACT_VERSION;
+  requestId: string;
+  segmentId: string;
+  segmentRevision: number;
+  source: 'model' | 'rules';
+  provider: string;
+  emotion?: PerformanceEmotionSuggestion;
+  actions: PerformanceActionSuggestion[];
+}
+
+export interface PerformanceInferenceCapabilities {
+  structuredOutput: 'json-schema' | 'json-object' | 'prompt-only';
+  thinkingControl: 'supported' | 'unsupported';
+  streaming: boolean;
+  maxContextTokens?: number;
 }
 
 export interface VisemeTiming {
@@ -223,6 +303,23 @@ export type TtsEvent =
   | { type: 'tts.segment-failed'; generation: number; segmentId: string; sequence: number; error: RuntimeError }
   | { type: 'tts.plan-completed'; generation: number; planId: string };
 
+export type PerformanceInferenceEvent =
+  | {
+      type: 'performance.suggestion-ready';
+      generation: number;
+      planId: string;
+      suggestion: LocalPerformanceSuggestion;
+    }
+  | {
+      type: 'performance.suggestion-failed';
+      generation: number;
+      planId: string;
+      requestId: string;
+      segmentId: string;
+      segmentRevision: number;
+      error: RuntimeError;
+    };
+
 export type PlaybackEvent =
   | { type: 'playback.buffering'; generation: number; segmentId: string; positionMs: number; bufferedMs: number }
   | { type: 'playback.started'; generation: number; segmentId: string; positionMs: number }
@@ -257,6 +354,7 @@ export type AvatarEvent =
   | PresentationEvent
   | PlanEvent
   | TtsEvent
+  | PerformanceInferenceEvent
   | PlaybackEvent
   | RendererEvent
   | RuntimeInternalEvent;
@@ -282,9 +380,17 @@ export interface MotionResult {
   completed: boolean;
 }
 
+export interface ExpressionCommand {
+  emotion: Emotion;
+  expressionId: string | null;
+  intensity: number;
+}
+
 export type RuntimeEffect =
   | { type: 'tts.synthesize'; generation: number; segment: PerformanceSegment }
   | { type: 'tts.cancel'; generation: number }
+  | { type: 'performance.infer'; generation: number; request: PerformancePlanningRequest }
+  | { type: 'performance.cancel'; generation: number }
   | { type: 'audio.play'; generation: number; segmentId: string; source: AudioSource }
   | { type: 'audio.pause'; generation: number }
   | { type: 'audio.resume'; generation: number }
@@ -292,6 +398,7 @@ export type RuntimeEffect =
   | { type: 'speech-bubble.schedule-dismiss'; generation: number; presentationId: number; delayMs: number }
   | { type: 'speech-bubble.cancel-dismiss'; generation: number; presentationId: number }
   | { type: 'renderer.apply-frame'; frame: ParameterFrame }
+  | { type: 'renderer.set-expression'; generation: number; command: ExpressionCommand }
   | { type: 'renderer.play-motion'; generation: number; command: MotionCommand };
 
 export interface RuntimeTransition {

@@ -15,12 +15,20 @@ interface PendingBubbleDismissal {
   dispatch: (event: AvatarEvent) => void;
 }
 
+interface PendingPerformance {
+  effect: Extract<RuntimeEffect, { type: 'performance.infer' }>;
+  dispatch: (event: AvatarEvent) => void;
+}
+
 export class ControlledEffects implements RuntimeEffectExecutor {
   readonly pendingTts = new Map<number, PendingTts>();
+  readonly pendingPerformance = new Map<string, PendingPerformance>();
   readonly playedSegments: string[] = [];
   readonly frames: Array<Record<string, number>> = [];
   readonly motions: string[] = [];
+  readonly expressions: Array<Extract<RuntimeEffect, { type: 'renderer.set-expression' }>['command']> = [];
   readonly cancelledGenerations: number[] = [];
+  readonly cancelledPerformanceGenerations: number[] = [];
   readonly stoppedGenerations: number[] = [];
   readonly pendingBubbleDismissals = new Map<number, PendingBubbleDismissal>();
   readonly cancelledBubbleDismissals: number[] = [];
@@ -38,6 +46,13 @@ export class ControlledEffects implements RuntimeEffectExecutor {
       case 'tts.cancel':
         this.cancelledGenerations.push(effect.generation);
         this.pendingTts.clear();
+        break;
+      case 'performance.infer':
+        this.pendingPerformance.set(effect.request.segmentId, { effect, dispatch });
+        break;
+      case 'performance.cancel':
+        this.cancelledPerformanceGenerations.push(effect.generation);
+        this.pendingPerformance.clear();
         break;
       case 'audio.play':
         this.playedSegments.push(effect.segmentId);
@@ -83,6 +98,9 @@ export class ControlledEffects implements RuntimeEffectExecutor {
       case 'renderer.apply-frame':
         this.frames.push(effect.frame);
         break;
+      case 'renderer.set-expression':
+        this.expressions.push(structuredClone(effect.command));
+        break;
       case 'renderer.play-motion':
         this.motions.push(effect.command.actionId);
         break;
@@ -117,6 +135,30 @@ export class ControlledEffects implements RuntimeEffectExecutor {
       segmentId: pending.effect.segment.id,
       sequence,
       error: { code: 'fake-tts-failed', message: 'fake failure', recoverable: true },
+    });
+  }
+
+  resolvePerformance(
+    segmentId: string,
+    suggestion: Partial<Extract<AvatarEvent, { type: 'performance.suggestion-ready' }>['suggestion']> = {},
+  ): void {
+    const pending = this.pendingPerformance.get(segmentId);
+    if (!pending) throw new Error(`No pending performance inference for ${segmentId}`);
+    this.pendingPerformance.delete(segmentId);
+    pending.dispatch({
+      type: 'performance.suggestion-ready',
+      generation: pending.effect.generation,
+      planId: pending.effect.request.planId,
+      suggestion: {
+        contractVersion: pending.effect.request.contractVersion,
+        requestId: pending.effect.request.requestId,
+        segmentId,
+        segmentRevision: pending.effect.request.segmentRevision,
+        source: 'model',
+        provider: 'controlled-test',
+        actions: [],
+        ...suggestion,
+      },
     });
   }
 

@@ -20,3 +20,23 @@ test('timeline freezes while paused and never resumes after cancel', () => {
   timeline.cancel();
   assert.deepEqual(timeline.advance(1000), []);
 });
+
+test('timeline accepts late cues without replaying cues already emitted', () => {
+  const segment = plan.segments[0]!;
+  const timeline = new PerformanceTimeline(segment);
+  assert.deepEqual(timeline.advance(0).map(cue => cue.type), ['emotion']);
+
+  timeline.update({
+    ...segment,
+    actions: [
+      ...(segment.actions ?? []),
+      { id: 'late-greet', action: 'greet', atMs: 0 },
+    ],
+  });
+
+  assert.deepEqual(timeline.advance(500).map(cue => cue.id), [
+    'late-greet',
+    segment.actions![0]!.id,
+  ]);
+  assert.deepEqual(timeline.advance(500), []);
+});

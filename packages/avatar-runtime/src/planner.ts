@@ -7,11 +7,13 @@ import type {
 export interface RuntimePolicy {
   defaultEmotionIntensity: number;
   maxActionsPerSegment: number;
+  minPerformanceConfidence: number;
 }
 
 export const DEFAULT_RUNTIME_POLICY: RuntimePolicy = {
   defaultEmotionIntensity: 0.5,
   maxActionsPerSegment: 1,
+  minPerformanceConfidence: 0.35,
 };
 
 export interface AvatarPlanner {

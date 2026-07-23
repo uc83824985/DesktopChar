@@ -1,18 +1,28 @@
 import {
   DEFAULT_LIP_SYNC_PROFILE,
+  PERFORMANCE_PLANNING_CONTRACT_VERSION,
   type AmplitudeSample,
   type AudioSource,
   type AvatarEvent,
   type AvatarSnapshot,
+  type Emotion,
+  type EmotionBindings,
   type GazeProfile,
   type LipSyncProfile,
   type ParameterValue,
+  type PerformanceActionDescriptor,
   type PerformancePlan,
+  type PersonaPerformanceProjection,
+  type ScenePerformanceProjection,
   type PerformanceSegment,
   type RuntimeEffect,
   type SpeechBubbleState,
 } from '../../contracts/src/index.ts';
-import type { AvatarPlanner, RuntimePolicy } from './planner.ts';
+import { DEFAULT_RUNTIME_POLICY, type AvatarPlanner, type RuntimePolicy } from './planner.ts';
+import {
+  applyPerformanceSuggestion,
+  type PerformanceSuggestionSlots,
+} from './performance-suggestion.ts';
 import type { ParameterLayers } from './mixer.ts';
 import { ParameterMixer } from './mixer.ts';
 import { createInitialSnapshot, reduceAvatarSnapshot } from './reducer.ts';
@@ -33,8 +43,16 @@ export interface AvatarRuntimeOptions {
   mixer: ParameterMixer;
   effects: RuntimeEffectExecutor;
   policy?: RuntimePolicy;
+  performancePlanning?: PerformancePlanningOptions;
+  emotionBindings?: EmotionBindings;
   gazeProfile?: GazeProfile;
   lipSyncProfile?: LipSyncProfile;
+}
+
+export interface PerformancePlanningOptions {
+  persona: PersonaPerformanceProjection;
+  scene: ScenePerformanceProjection;
+  actions?: PerformanceActionDescriptor[];
 }
 
 export class AvatarRuntime {
@@ -44,18 +62,23 @@ export class AvatarRuntime {
   private nextSegmentIndex = 0;
   private readonly readyAudio = new Map<number, AudioSource>();
   private readonly failedSequences = new Set<number>();
+  private readonly performanceRequests = new Map<string, { requestId: string; revision: number }>();
+  private readonly performanceSlots = new Map<string, PerformanceSuggestionSlots>();
+  private performanceRequestSequence = 0;
   private timeline: PerformanceTimeline | null = null;
   private currentSource: AudioSource | null = null;
   private textFallback: { presentationId: number; segmentId: string; sequence: number } | null = null;
   private disposed = false;
   private layers: ParameterLayers = emptyLayers();
   private readonly options: AvatarRuntimeOptions;
+  private readonly policy: RuntimePolicy;
   private readonly gazeProfile: GazeProfile;
   private readonly lipSyncProfile: LipSyncProfile;
   private readonly lipSyncEnvelope: LipSyncEnvelope;
 
   constructor(options: AvatarRuntimeOptions) {
     this.options = options;
+    this.policy = options.policy ?? DEFAULT_RUNTIME_POLICY;
     this.gazeProfile = options.gazeProfile ?? DEFAULT_GAZE_PROFILE;
     validateGazeProfile(this.gazeProfile);
     this.lipSyncProfile = options.lipSyncProfile ?? { ...DEFAULT_LIP_SYNC_PROFILE };
@@ -82,6 +105,7 @@ export class AvatarRuntime {
     if (this.disposed) return;
 
     let acceptedEvent = event;
+    let submittedPerformanceEffects: RuntimeEffect[] = [];
     if (event.type === 'presentation.chat-bubble-requested') {
       if (this.snapshot.state !== 'idle') {
         throw new Error('A chat-bubble presentation can only start while the Runtime is idle');
@@ -105,6 +129,13 @@ export class AvatarRuntime {
         throw new Error('Renderer capabilities must be ready before submitting a plan');
       }
       const normalized = this.options.planner.normalize(event.plan, capabilities, this.options.policy);
+      this.performanceSlots.clear();
+      for (const original of event.plan.segments) {
+        this.performanceSlots.set(original.id, {
+          emotion: original.emotion === undefined,
+          actions: original.actions === undefined,
+        });
+      }
       this.plan = normalized;
       this.nextSegmentIndex = 0;
       this.readyAudio.clear();
@@ -112,8 +143,10 @@ export class AvatarRuntime {
       this.timeline = null;
       this.currentSource = null;
       this.textFallback = null;
+      this.performanceRequests.clear();
       this.layers = performanceLayersWithGaze(this.layers.gaze);
       acceptedEvent = { type: 'plan.submitted', plan: normalized };
+      submittedPerformanceEffects = this.createPerformanceEffects(normalized);
     }
 
     if ('generation' in acceptedEvent && acceptedEvent.generation !== this.snapshot.generation) {
@@ -137,6 +170,19 @@ export class AvatarRuntime {
       ));
       if (!segment) return;
       this.failedSequences.add(acceptedEvent.sequence);
+    }
+    else if (acceptedEvent.type === 'performance.suggestion-ready') {
+      this.acceptPerformanceSuggestion(acceptedEvent);
+    }
+    else if (acceptedEvent.type === 'performance.suggestion-failed') {
+      const pending = this.performanceRequests.get(acceptedEvent.segmentId);
+      if (
+        acceptedEvent.planId === this.plan?.id
+        && pending?.requestId === acceptedEvent.requestId
+        && pending?.revision === acceptedEvent.segmentRevision
+      ) {
+        this.performanceRequests.delete(acceptedEvent.segmentId);
+      }
     }
     else if (acceptedEvent.type === 'playback.started') {
       this.lipSyncEnvelope.reset(acceptedEvent.positionMs);
@@ -187,9 +233,12 @@ export class AvatarRuntime {
       this.textFallback = null;
       this.readyAudio.clear();
       this.failedSequences.clear();
+      this.performanceRequests.clear();
+      this.performanceSlots.clear();
       this.lipSyncEnvelope.reset();
       this.layers = performanceLayersWithGaze(this.layers.gaze);
       this.emitFrame();
+      this.resetBoundExpression();
     }
     else if (
       acceptedEvent.type === 'user.look-target-changed'
@@ -211,8 +260,11 @@ export class AvatarRuntime {
       this.emitFrame();
     }
     else if (acceptedEvent.type === 'runtime.plan-completed') {
+      this.performanceRequests.clear();
+      this.performanceSlots.clear();
       this.layers = performanceLayersWithGaze(this.layers.gaze);
       this.emitFrame();
+      this.resetBoundExpression();
     }
 
     const bubbleTransition = this.transitionSpeechBubble(acceptedEvent);
@@ -220,6 +272,7 @@ export class AvatarRuntime {
     this.snapshot = { ...transition.snapshot, speechBubble: bubbleTransition.state };
     this.notify();
     this.executeAll(transition.effects);
+    this.executeAll(submittedPerformanceEffects);
     this.executeAll(bubbleTransition.effects);
 
     if (
@@ -323,6 +376,7 @@ export class AvatarRuntime {
           generation: this.snapshot.generation,
           cue: cue.payload,
         });
+        this.applyBoundExpression(cue.payload.emotion, cue.payload.intensity);
       }
       else {
         this.dispatch({
@@ -333,6 +387,84 @@ export class AvatarRuntime {
       }
     }
     this.emitFrame();
+  }
+
+  private createPerformanceEffects(plan: PerformancePlan): RuntimeEffect[] {
+    const planning = this.options.performancePlanning;
+    const capabilities = this.snapshot.capabilities;
+    if (!planning || !capabilities) return [];
+    const configuredActions = planning.actions ?? capabilities.actions.map(actionId => ({
+      actionId,
+      label: actionId,
+      tags: [],
+      allowedAnchors: ['segment-start'] as const,
+    }));
+    const actions = configuredActions.filter(descriptor => (
+      capabilities.actions.includes(descriptor.actionId)
+      && descriptor.allowedAnchors.length > 0
+    ));
+    return plan.segments.flatMap(segment => {
+      const slots = this.performanceSlots.get(segment.id);
+      const text = (segment.displayText || segment.speechText).trim();
+      if (!slots || (!slots.emotion && !slots.actions) || !text) return [];
+      const revision = 0;
+      const requestId = `g${this.snapshot.generation}:q${++this.performanceRequestSequence}:${plan.id}:${segment.id}:r${revision}`;
+      this.performanceRequests.set(segment.id, { requestId, revision });
+      return [{
+        type: 'performance.infer' as const,
+        generation: this.snapshot.generation,
+        request: {
+          contractVersion: PERFORMANCE_PLANNING_CONTRACT_VERSION,
+          requestId,
+          planId: plan.id,
+          segmentId: segment.id,
+          segmentRevision: revision,
+          text,
+          persona: structuredClone(planning.persona),
+          scene: structuredClone(planning.scene),
+          avatar: {
+            state: 'thinking',
+            currentEmotion: this.snapshot.emotion.current,
+          },
+          emotions: [...capabilities.emotions],
+          actions: structuredClone(actions),
+        },
+      }];
+    });
+  }
+
+  private acceptPerformanceSuggestion(
+    event: Extract<AvatarEvent, { type: 'performance.suggestion-ready' }>,
+  ): void {
+    if (!this.plan || event.planId !== this.plan.id) return;
+    const suggestion = event.suggestion;
+    const pending = this.performanceRequests.get(suggestion.segmentId);
+    if (
+      !pending
+      || pending.requestId !== suggestion.requestId
+      || pending.revision !== suggestion.segmentRevision
+    ) {
+      return;
+    }
+    this.performanceRequests.delete(suggestion.segmentId);
+    if (
+      suggestion.contractVersion !== PERFORMANCE_PLANNING_CONTRACT_VERSION
+      || !Array.isArray(suggestion.actions)
+    ) {
+      return;
+    }
+    const segmentIndex = this.plan.segments.findIndex(segment => segment.id === suggestion.segmentId);
+    if (segmentIndex < this.nextSegmentIndex || segmentIndex < 0) return;
+    const segment = this.plan.segments[segmentIndex]!;
+    const slots = this.performanceSlots.get(segment.id);
+    const capabilities = this.snapshot.capabilities;
+    if (!slots || !capabilities) return;
+    const updated = applyPerformanceSuggestion(segment, suggestion, slots, capabilities, this.policy);
+    this.plan.segments[segmentIndex] = updated;
+    if (this.timeline?.segmentId === updated.id) {
+      this.timeline.update(updated);
+      this.applyTimeline(this.snapshot.playback.positionMs);
+    }
   }
 
   private applyMouth(positionMs: number): void {
@@ -535,6 +667,9 @@ export class AvatarRuntime {
           error,
         });
         break;
+      case 'renderer.set-expression':
+        this.dispatch({ type: 'renderer.failed', error });
+        break;
       case 'renderer.apply-frame':
         this.dispatch({ type: 'renderer.failed', error });
         break;
@@ -550,15 +685,54 @@ export class AvatarRuntime {
       case 'audio.resume':
       case 'audio.stop':
       case 'tts.cancel':
+      case 'performance.cancel':
       case 'speech-bubble.schedule-dismiss':
       case 'speech-bubble.cancel-dismiss':
         this.dispatch({ type: 'runtime.effect-failed', generation: effect.generation, error });
+        break;
+      case 'performance.infer':
+        this.dispatch({
+          type: 'performance.suggestion-failed',
+          generation: effect.generation,
+          planId: effect.request.planId,
+          requestId: effect.request.requestId,
+          segmentId: effect.request.segmentId,
+          segmentRevision: effect.request.segmentRevision,
+          error,
+        });
         break;
     }
   }
 
   private notify(): void {
     for (const listener of this.listeners) listener(this.snapshot);
+  }
+
+  private applyBoundExpression(emotion: Emotion, intensity: number): void {
+    const binding = this.options.emotionBindings?.[emotion];
+    if (!binding) return;
+    this.execute({
+      type: 'renderer.set-expression',
+      generation: this.snapshot.generation,
+      command: {
+        emotion,
+        expressionId: binding.expression,
+        intensity,
+      },
+    });
+  }
+
+  private resetBoundExpression(): void {
+    if (!this.options.emotionBindings || Object.keys(this.options.emotionBindings).length === 0) return;
+    this.execute({
+      type: 'renderer.set-expression',
+      generation: this.snapshot.generation,
+      command: {
+        emotion: 'neutral',
+        expressionId: this.options.emotionBindings.neutral?.expression ?? null,
+        intensity: 0,
+      },
+    });
   }
 }
 
