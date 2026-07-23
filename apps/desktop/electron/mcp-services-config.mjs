@@ -66,7 +66,7 @@ export async function loadDesktopConfig(options = {}) {
 
 export function normalizeDesktopConfig(fileConfig = {}, env = {}, options = {}) {
   if (!isRecord(fileConfig)) throw new TypeError('Desktop config root must be an object');
-  assertKnownKeys(fileConfig, ['$schema', 'version', 'interaction', 'window', 'agentHttp', 'character', 'ttsMcp', 'characterMcp'], 'Desktop config');
+  assertKnownKeys(fileConfig, ['$schema', 'version', 'interaction', 'window', 'agentHttp', 'character', 'performanceInference', 'ttsMcp', 'characterMcp'], 'Desktop config');
   if (fileConfig.$schema !== undefined) text(fileConfig.$schema, '$schema');
   const version = fileConfig.version ?? 1;
   if (version !== 1) throw new TypeError('Desktop config version must be 1');
@@ -82,6 +82,12 @@ export function normalizeDesktopConfig(fileConfig = {}, env = {}, options = {}) 
   assertKnownKeys(agentHttp, ['enabled', 'host', 'port'], 'agentHttp');
   const characterProfile = optionalRecord(fileConfig.character, 'character');
   assertKnownKeys(characterProfile, ['profile'], 'character');
+  const performanceInference = optionalRecord(fileConfig.performanceInference, 'performanceInference');
+  assertKnownKeys(performanceInference, [
+    'enabled', 'lifecycle', 'provider', 'baseUrl', 'model', 'timeoutMs', 'maxOutputTokens',
+    'temperature', 'fallbackToRules',
+  ], 'performanceInference');
+  const performanceModel = optionalText(performanceInference.model, 'performanceInference.model');
   const tts = optionalRecord(fileConfig.ttsMcp, 'ttsMcp');
   assertKnownKeys(tts, ['autoStart', 'profile'], 'ttsMcp');
   const selectedTtsProfileName = options.ttsProfileName ?? requestedTtsProfileName(tts);
@@ -162,6 +168,34 @@ export function normalizeDesktopConfig(fileConfig = {}, env = {}, options = {}) 
     },
     characterProfile: {
       url: assetPath(characterProfile.profile ?? 'models/Mao/DesktopChar.character.json', 'character.profile'),
+    },
+    performanceInference: {
+      enabled: boolean(performanceInference.enabled, false, 'performanceInference.enabled'),
+      lifecycle: performanceInferenceLifecycle(performanceInference.lifecycle),
+      provider: text(performanceInference.provider ?? 'qwen35-transformers', 'performanceInference.provider'),
+      baseUrl: loopbackHttpUrl(
+        performanceInference.baseUrl ?? 'http://127.0.0.1:18090/v1',
+        'performanceInference.baseUrl',
+      ),
+      ...(performanceModel ? { model: performanceModel } : {}),
+      timeoutMs: positive(performanceInference.timeoutMs, 5_000, 'performanceInference.timeoutMs'),
+      maxOutputTokens: positiveInteger(
+        performanceInference.maxOutputTokens,
+        256,
+        'performanceInference.maxOutputTokens',
+      ),
+      temperature: boundedNumber(
+        performanceInference.temperature,
+        0.1,
+        0,
+        2,
+        'performanceInference.temperature',
+      ),
+      fallbackToRules: boolean(
+        performanceInference.fallbackToRules,
+        true,
+        'performanceInference.fallbackToRules',
+      ),
     },
     tts: {
       autoStart: boolean(tts.autoStart ?? env.DESKTOP_CHAR_TTS_MCP_ENABLED, true, 'ttsMcp.autoStart'),
@@ -350,6 +384,14 @@ function desktopEnvironmentOverrides(env) {
   };
 }
 
+function performanceInferenceLifecycle(value) {
+  const result = value ?? 'external';
+  if (result !== 'external') {
+    throw new TypeError('performanceInference.lifecycle currently only supports external');
+  }
+  return result;
+}
+
 function defaultLocalTtsProfile() {
   return {
     lifecycle: { type: 'managed' },
@@ -472,6 +514,22 @@ function boundedInteger(value, fallback, minimum, maximum, label) {
   const result = number(value, fallback, label);
   if (!Number.isInteger(result) || result < minimum || result > maximum) {
     throw new TypeError(`${label} must be an integer from ${minimum} to ${maximum}`);
+  }
+  return result;
+}
+
+function loopbackHttpUrl(value, label) {
+  const result = new URL(text(value, label));
+  if (result.protocol !== 'http:' || !LOOPBACK_HOSTS.has(result.hostname)) {
+    throw new TypeError(`${label} must use a loopback HTTP origin`);
+  }
+  return result.href;
+}
+
+function boundedNumber(value, fallback, minimum, maximum, label) {
+  const result = number(value, fallback, label);
+  if (result < minimum || result > maximum) {
+    throw new TypeError(`${label} must be from ${minimum} to ${maximum}`);
   }
   return result;
 }

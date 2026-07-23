@@ -55,6 +55,11 @@ export class DomContextMenuHost {
     this.#abort = abort;
     this.#context = { ...context };
     this.#signature = sectionSignature(sections);
+    // Keep the open surface geometrically stable while checkbox state and
+    // status-dependent labels are refreshed. Intrinsic text/marker metrics can
+    // otherwise change offsetWidth by a few pixels and make a right-clamped
+    // menu visibly jump sideways.
+    menu.style.width = `${menu.offsetWidth}px`;
     clampToViewport(menu);
     document.addEventListener('pointerdown', event => this.#dismissFromOutside(event), {
       capture: true,

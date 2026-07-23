@@ -17,6 +17,7 @@ const channels = {
   mcpServicesGet: 'mcp-services:get-state',
   mcpServicesSetEnabled: 'mcp-services:set-enabled',
   desktopConfigReload: 'desktop-config:reload',
+  performanceInferenceSetEnabled: 'performance-inference:set-enabled',
   mcpServicesTest: 'mcp-services:test',
   mcpServicesTestAll: 'mcp-services:test-all',
   mcpServicesState: 'mcp-services:state',
@@ -38,6 +39,7 @@ contextBridge.exposeInMainWorld('desktopChar', {
   getMcpServicesState: () => ipcRenderer.invoke(channels.mcpServicesGet),
   setMcpServiceEnabled: (service, enabled) => ipcRenderer.invoke(channels.mcpServicesSetEnabled, service, enabled),
   reloadDesktopConfig: () => ipcRenderer.invoke(channels.desktopConfigReload),
+  setPerformanceInferenceEnabled: enabled => ipcRenderer.invoke(channels.performanceInferenceSetEnabled, enabled),
   testMcpService: service => ipcRenderer.invoke(channels.mcpServicesTest, service),
   testAllMcpServices: () => ipcRenderer.invoke(channels.mcpServicesTestAll),
   onMcpServicesState(callback) {

@@ -12,11 +12,13 @@ const application = await electron.launch({
 try {
   const page = await application.firstWindow({ timeout: 20_000 });
   const errors = [];
+  const performanceLogs = [];
   page.on('console', message => {
+    if (message.text().startsWith('[performance] ')) performanceLogs.push(message.text());
     if (message.type() === 'error' && !message.text().includes('404')) errors.push(message.text());
   });
   page.on('pageerror', error => errors.push(error.stack ?? error.message));
-  await page.locator('body[data-ready="true"][data-shell="floating"]').waitFor({ timeout: 20_000 });
+  await page.locator('body[data-ready="true"][data-shell="floating"][data-live2d-update-pipeline="ordered-v1"]').waitFor({ timeout: 20_000 });
   await page.locator('body[data-desktop-shell="ready"]').waitFor({ timeout: 2_000 });
   await page.locator('body[data-gaze-follow="enabled"]').waitFor({ timeout: 2_000 });
   await page.locator('body[data-pixel-selection]').waitFor({ timeout: 2_000 });
@@ -49,6 +51,10 @@ try {
     || !['native-set-window-pos', 'setBounds'].includes(initial.interaction?.dragWindowApi)) {
     throw new Error(`Unexpected drag interaction config: ${JSON.stringify(initial.interaction)}`);
   }
+  if (initial.performanceInference?.enabled !== false
+    || initial.performanceInference?.provider !== 'qwen35-transformers') {
+    throw new Error(`Unexpected performance inference config: ${JSON.stringify(initial.performanceInference)}`);
+  }
 
   const bubbleBeforePlayback = await page.evaluate(() => {
     document.querySelector('#speak')?.click();
@@ -68,6 +74,7 @@ try {
     throw new Error(`Chat bubble template must not preserve source indentation as visible text: ${JSON.stringify(bubbleBeforePlayback)}`);
   }
   await page.locator('body[data-runtime-state="speaking"][data-speech-bubble="complete"]').waitFor({ timeout: 2_000 });
+  await page.locator('body[data-live2d-expression="exp_02"]').waitFor({ timeout: 2_000 });
   const bubble = await page.evaluate(() => ({
     mode: document.body.dataset.speechBubble,
     text: document.querySelector('#speech-bubble')?.textContent?.trim(),
@@ -76,6 +83,7 @@ try {
     throw new Error(`Speech bubble presenter did not render Runtime text: ${JSON.stringify(bubble)}`);
   }
   await page.locator('body[data-runtime-state="idle"][data-speech-bubble="complete"]').waitFor({ timeout: 2_000 });
+  await page.locator('body[data-live2d-expression="neutral"]').waitFor({ timeout: 1_000 });
   await page.locator('body[data-speech-bubble="hidden"]').waitFor({ timeout: 1_500 });
 
   await page.locator('#avatar').focus();
@@ -91,16 +99,21 @@ try {
     gazeChecked: document.querySelector('[data-item-id="gaze-follow"]')?.getAttribute('aria-checked'),
     bubbleItems: [...document.querySelectorAll('[data-item-id="complete"], [data-item-id="stream"], [data-item-id="karaoke"]')].map(node => node.textContent?.trim()),
     mcpItems: [...document.querySelectorAll('[data-item-id="character-mcp-enabled"], [data-item-id="tts-mcp-enabled"], [data-item-id="mcp-connection-test"]')].map(node => node.getAttribute('data-item-id')),
+    performanceInferenceChecked: document.querySelector('[data-item-id="performance-inference-enabled"]')?.getAttribute('aria-checked'),
+    emotionBindingTest: document.querySelector('[data-item-id="emotion-binding-test"]')?.textContent?.trim(),
     configReload: document.querySelector('[data-item-id="desktop-config-reload"]')?.textContent?.trim(),
     hideAvatar: document.querySelector('[data-item-id="hide-avatar"]')?.textContent?.trim(),
   }));
   if (menu.gazeChecked !== 'true' || menu.bubbleItems.length !== 3
+    || menu.performanceInferenceChecked !== 'false'
+    || menu.emotionBindingTest !== '测试 Happy 表情资源'
     || JSON.stringify(menu.mcpItems) !== JSON.stringify([
       'character-mcp-enabled', 'tts-mcp-enabled', 'mcp-connection-test',
     ])
     || menu.configReload !== '重新加载配置'
     || menu.hideAvatar !== '隐藏角色'
-    || !menu.headings.includes('角色设置') || !menu.headings.includes('聊天气泡测试')
+    || !menu.headings.includes('角色设置') || !menu.headings.includes('表现设置')
+    || !menu.headings.includes('聊天气泡测试')
     || !menu.headings.includes('MCP 服务')
     || !menu.headings.some(label => label?.startsWith('应用配置 · r'))
     || !menu.headings.includes('桌面窗口')) {
@@ -108,6 +121,58 @@ try {
   }
   await page.waitForTimeout(120);
   const stableMenuOrigin = await contextMenuOrigin(page);
+  await page.locator('[data-item-id="performance-inference-enabled"]').click();
+  await page.locator(
+    'body[data-context-menu="open"][data-performance-inference="enabled"] '
+      + '[data-item-id="performance-inference-enabled"][aria-checked="true"]',
+  ).waitFor({ timeout: 2_000 });
+  const enabledPerformanceState = await page.evaluate(() => window.desktopChar?.getWindowState());
+  if (enabledPerformanceState?.performanceInference?.enabled !== true) {
+    throw new Error(`Performance inference menu toggle did not reach main state: ${JSON.stringify(enabledPerformanceState?.performanceInference)}`);
+  }
+  if (!performanceLogs.some(entry => entry.includes('"event":"config.changed"') && entry.includes('"enabled":true'))) {
+    throw new Error(`Performance inference enablement did not emit a diagnostic log: ${JSON.stringify(performanceLogs)}`);
+  }
+  const performanceClient = new Client({ name: 'desktop-char-performance-log-smoke', version: '1.0.0' });
+  await performanceClient.connect(new StreamableHTTPClientTransport(new URL(initial.mcpServices.character.endpoint)));
+  try {
+    const suffix = Date.now();
+    const performed = await performanceClient.callTool({
+      name: 'desktop_char_perform',
+      arguments: { plan: {
+        id: `performance-log-${suffix}`,
+        segments: [{
+          id: `performance-log-segment-${suffix}`,
+          sequence: 0,
+          displayText: 'Performance inference logging smoke test.',
+          speechText: 'Performance inference logging smoke test.',
+        }],
+      } },
+    });
+    if (performed.structuredContent?.accepted !== true) {
+      throw new Error(`Character MCP rejected the performance logging plan: ${JSON.stringify(performed)}`);
+    }
+    await page.locator('body:not([data-runtime-state="idle"])').waitFor({ timeout: 2_000 });
+    await performanceClient.callTool({ name: 'desktop_char_interrupt', arguments: {} });
+    await page.locator('body[data-runtime-state="idle"]').waitFor({ timeout: 2_000 });
+  }
+  finally {
+    await performanceClient.close();
+  }
+  if (!performanceLogs.some(entry => entry.includes('"event":"request.started"'))
+    || !performanceLogs.some(entry => (
+      entry.includes('"event":"request.completed"')
+      || entry.includes('"event":"request.cancelled"')
+    ))) {
+    throw new Error(`Performance inference request lifecycle was not logged: ${JSON.stringify(performanceLogs)}`);
+  }
+  assertContextMenuOrigin(await contextMenuOrigin(page), stableMenuOrigin, 'enabling performance inference');
+  await page.locator('[data-item-id="performance-inference-enabled"]').click();
+  await page.locator(
+    'body[data-context-menu="open"][data-performance-inference="disabled"] '
+      + '[data-item-id="performance-inference-enabled"][aria-checked="false"]',
+  ).waitFor({ timeout: 2_000 });
+  assertContextMenuOrigin(await contextMenuOrigin(page), stableMenuOrigin, 'disabling performance inference');
   await page.locator('[data-item-id="character-mcp-enabled"]').click();
   await page.locator('body[data-context-menu="open"][data-character-mcp-service="disabled"] [data-item-id="character-mcp-enabled"][aria-checked="false"]').waitFor({ timeout: 5_000 });
   assertContextMenuOrigin(await contextMenuOrigin(page), stableMenuOrigin, 'disabling character-access MCP');

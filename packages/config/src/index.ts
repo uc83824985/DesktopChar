@@ -2,6 +2,7 @@ import {
   DEFAULT_LIP_SYNC_PROFILE,
   type AvatarAction,
   type Emotion,
+  type EmotionBindings,
   type GazeProfile,
   type LipSyncProfile,
 } from '../../contracts/src/index.ts';
@@ -12,6 +13,7 @@ export interface CharacterConfig {
   defaultEmotion: Emotion;
   allowedEmotions: Emotion[];
   allowedActions: AvatarAction[];
+  emotionBindings: EmotionBindings;
   expressionCooldownMs: number;
   idleReturnDelayMs: number;
   gazeProfile: GazeProfile;
@@ -36,7 +38,7 @@ export function parseCharacterConfig(value: unknown, profileUrl = DEFAULT_CHARAC
   const profile = record(value, 'Character profile');
   assertKnownKeys(profile, [
     '$schema', 'version', 'id', 'model', 'defaultEmotion', 'allowedEmotions', 'allowedActions',
-    'expressionCooldownMs', 'idleReturnDelayMs', 'gazeProfile', 'lipSyncProfile',
+    'emotionBindings', 'expressionCooldownMs', 'idleReturnDelayMs', 'gazeProfile', 'lipSyncProfile',
   ], 'Character profile');
   if (profile.$schema !== undefined) nonEmptyText(profile.$schema, 'Character profile $schema');
   if ((profile.version ?? 1) !== 1) throw new TypeError('Character profile version must be 1');
@@ -48,17 +50,36 @@ export function parseCharacterConfig(value: unknown, profileUrl = DEFAULT_CHARAC
     throw new TypeError('Character profile allowedEmotions must contain defaultEmotion');
   }
   const allowedActions = enumArray(profile.allowedActions, ACTIONS, 'Character profile allowedActions');
+  const bindings = emotionBindings(profile.emotionBindings, allowedEmotions);
   return {
     id,
     modelJsonUrl: resolveProfileAsset(profileUrl, model),
     defaultEmotion,
     allowedEmotions,
     allowedActions,
+    emotionBindings: bindings,
     expressionCooldownMs: nonNegativeNumber(profile.expressionCooldownMs, 'Character profile expressionCooldownMs'),
     idleReturnDelayMs: nonNegativeNumber(profile.idleReturnDelayMs, 'Character profile idleReturnDelayMs'),
     gazeProfile: gazeProfile(profile.gazeProfile),
     lipSyncProfile: lipSyncProfile(profile.lipSyncProfile),
   };
+}
+
+function emotionBindings(value: unknown, allowedEmotions: Emotion[]): EmotionBindings {
+  if (value === undefined) return {};
+  const configured = record(value, 'Character profile emotionBindings');
+  return Object.fromEntries(Object.entries(configured).map(([emotion, bindingValue]) => {
+    const semanticEmotion = enumValue(emotion, EMOTIONS, `Character profile emotionBindings.${emotion}`);
+    if (!allowedEmotions.includes(semanticEmotion)) {
+      throw new TypeError(`Character profile emotionBindings.${emotion} is not listed in allowedEmotions`);
+    }
+    const binding = record(bindingValue, `Character profile emotionBindings.${emotion}`);
+    assertKnownKeys(binding, ['expression'], `Character profile emotionBindings.${emotion}`);
+    const expression = binding.expression === null
+      ? null
+      : nonEmptyText(binding.expression, `Character profile emotionBindings.${emotion}.expression`);
+    return [semanticEmotion, { expression }];
+  })) as EmotionBindings;
 }
 
 function gazeProfile(value: unknown): GazeProfile {

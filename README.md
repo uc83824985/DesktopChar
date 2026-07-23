@@ -13,6 +13,8 @@
 - `packages/tts-mcp-adapter`：语音合成 MCP（技术标识 TTS）输出适配。
 - `packages/transport`、`packages/config`：传输和配置边界。
 - `local-tts-mcp`：可独立运行的真实 Streamable HTTP MCP/HTTP PCM 参考服务；默认固定音高 `jrpg-blip` 按字生成提示音、标点停顿及 sample-aligned 文本 cue，并保留确定性变化音调 `jrpg-blip-varied`。
+- `performance-model-service`：Qwen3.5-2B 首个本地表现模型开发环境；通过独立
+  Transformers OpenAI-compatible 服务暴露能力，不向引擎包泄漏模型实现。
 
 详细设计见 [架构文档](docs/architecture.md)、[Avatar Runtime](docs/avatar-runtime.md)、[Scene Engine 抽象](docs/scene-engine.md) 和 [配置所有权与 JSON 重构方案](docs/configuration.md)。
 
@@ -24,6 +26,27 @@
 可独立运行的样例见 [本地语音合成 MCP 参考服务](local-tts-mcp/README.md)；Adapter、流式 MCP/HTTP 绑定和真实服务接入契约见 [TTS Adapter 文档](docs/tts-adapter.md)；MCP 侧新增语速、sample 时间线和可选生成事件时参照 [Qwen3-TTS MCP 流式扩展说明](docs/tts-mcp-streaming-extension.md)；Qwen3-TTS 当前公开推理接口的流式能力核对见 [Qwen3-TTS 阅读记录](docs/references/qwen3-tts.md)。
 
 外部 Agent 可通过角色接入 MCP 或兼容的 loopback HTTP 控制面提交完整表演计划、发起中断并读取 Runtime 状态；HTTP 协议与 PowerShell 示例见 [外部 Agent 本地 HTTP 接入指南](docs/external-agent-http.md)。
+
+高频输入、主动聊天和多 Agent 的目标架构由应用统一持有 ConversationLedger、版本化 Persona、Turn/Task 调度和唯一 PerformanceQueue；设计缺陷约束及下一阶段决策项见 [对话上下文与任务编排设计](docs/conversation-orchestration.md)。
+
+表情和已有 Live2D 动作的语义选择暂由本地表现推理端口完成，Qwen3.5-2B non-thinking 只是首个验证 Profile，不进入外部 Agent 关键路径；同协议模型只需替换 Profile，不同协议通过新 Adapter 接入。首个模型使用 OpenAI-compatible HTTP，当前生命周期明确为 `external`，不新增 MCP；后续 managed Supervisor 仍可复用同一 Adapter。边界与 Profile 草案见 [本地表现模型接入设计](docs/performance-model-integration.md)，官方模型配置阅读结论见 [Qwen3.5-2B 阅读记录](docs/references/qwen3.5-2b.md)。
+
+Qwen3.5-2B 环境可通过 `npm run performance:bootstrap` 初始化，通过
+`npm run performance:start` 启动；服务启动后在另一个终端执行
+`npm run performance:smoke` 可完成真实 UTF-8 Chat Completions 验证。完整说明见
+[本地表现模型服务](performance-model-service/README.md)。
+`npm run diagnose:performance` 会进一步使用桌面端同一 Adapter 和严格白名单校验完成
+领域契约诊断。要让桌面端实际使用该服务，将 `desktop-char.config.json` 中
+`performanceInference.enabled` 设为 `true`；配置热重载后，新的 plan 会自动并行请求
+表情/动作建议。
+桌面版也可通过右键菜单“表现设置 → 表情动作推理”即时启停。菜单切换是本次运行的
+临时覆盖，不改写 JSON；重新加载配置或文件热重载后重新采用
+`performanceInference.enabled`。当前菜单明确标记“外部”，勾选只启用 Adapter，
+不会启动 `npm run performance:start` 所管理的 Qwen 服务进程。
+通过 `npm run desktop` 启动时，终端会输出 `[performance]` 前缀的结构化日志。
+`request.completed` 中的 `source: "model"` 表示实际采用了模型响应；
+`source: "rules"` 表示模型不可用后使用了规则回退。只有回复段没有显式表情或动作时
+才会发起对应的推理请求。
 
 ## 一键前台测试
 

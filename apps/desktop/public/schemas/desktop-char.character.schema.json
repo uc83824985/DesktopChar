@@ -34,6 +34,18 @@
       "uniqueItems": true,
       "items": { "$ref": "#/$defs/action" }
     },
+    "emotionBindings": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "neutral": { "$ref": "#/$defs/emotionBinding" },
+        "happy": { "$ref": "#/$defs/emotionBinding" },
+        "sad": { "$ref": "#/$defs/emotionBinding" },
+        "angry": { "$ref": "#/$defs/emotionBinding" },
+        "surprised": { "$ref": "#/$defs/emotionBinding" },
+        "thinking": { "$ref": "#/$defs/emotionBinding" }
+      }
+    },
     "expressionCooldownMs": { "type": "number", "minimum": 0 },
     "idleReturnDelayMs": { "type": "number", "minimum": 0 },
     "gazeProfile": {
@@ -67,6 +79,17 @@
     },
     "emotion": {
       "enum": ["neutral", "happy", "sad", "angry", "surprised", "thinking"]
+    },
+    "emotionBinding": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["expression"],
+      "properties": {
+        "expression": {
+          "type": ["string", "null"],
+          "minLength": 1
+        }
+      }
     },
     "action": { "enum": ["nod", "shake", "tap", "greet"] },
     "direction": {

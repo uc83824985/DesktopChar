@@ -89,6 +89,9 @@ test('desktop config owns interaction, window, agent and character profile setti
   assert.equal(config.agentHttp.enabled, false);
   assert.equal(config.agentHttp.port, 0);
   assert.equal(config.characterProfile.url, 'models/Test/DesktopChar.character.json');
+  assert.equal(config.performanceInference.enabled, false);
+  assert.equal(config.performanceInference.lifecycle, 'external');
+  assert.equal(config.performanceInference.baseUrl, 'http://127.0.0.1:18090/v1');
   assert.equal(Object.isFrozen(config.interaction.drag), true);
   assert.equal(config.tts.profile, 'local');
 });
@@ -106,6 +109,16 @@ test('desktop config path prefers the new bootstrap variable and validates appli
   assert.throws(() => normalizeDesktopConfig({ interaction: { drag: { holdDelyMs: 100 } } }), /unknown field/);
   assert.throws(() => normalizeDesktopConfig({ agentHttp: { host: '0.0.0.0' } }), /loopback/);
   assert.throws(() => normalizeDesktopConfig({ character: { profile: '../escape.json' } }), /parent traversal/);
+  assert.throws(() => normalizeDesktopConfig({ performanceInference: { temperature: 3 } }), /0 to 2/);
+  assert.throws(() => normalizeDesktopConfig({ performanceInference: { maxOutputTokens: 0 } }), /positive integer/);
+  assert.throws(
+    () => normalizeDesktopConfig({ performanceInference: { lifecycle: 'managed' } }),
+    /only supports external/,
+  );
+  assert.throws(
+    () => normalizeDesktopConfig({ performanceInference: { baseUrl: 'https://example.com/v1' } }),
+    /loopback HTTP origin/,
+  );
 });
 
 test('MCP config rejects unsafe server binding and malformed reconnect policy', () => {

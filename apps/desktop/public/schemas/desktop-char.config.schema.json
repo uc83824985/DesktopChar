@@ -52,6 +52,7 @@
         "profile": { "$ref": "#/$defs/applicationAssetPath" }
       }
     },
+    "performanceInference": { "$ref": "#/$defs/performanceInference" },
     "ttsMcp": { "$ref": "#/$defs/ttsMcp" },
     "characterMcp": { "$ref": "#/$defs/characterMcp" }
   },
@@ -60,6 +61,21 @@
       "type": "string",
       "minLength": 1,
       "pattern": "^(?![/\\\\])(?![A-Za-z][A-Za-z0-9+.-]*:)(?!.*(?:^|[/\\\\])\\.\\.(?:[/\\\\]|$)).+$"
+    },
+    "performanceInference": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "enabled": { "type": "boolean" },
+        "lifecycle": { "const": "external" },
+        "provider": { "type": "string", "minLength": 1 },
+        "baseUrl": { "type": "string", "format": "uri" },
+        "model": { "type": "string", "minLength": 1 },
+        "timeoutMs": { "type": "number", "exclusiveMinimum": 0 },
+        "maxOutputTokens": { "type": "integer", "minimum": 1 },
+        "temperature": { "type": "number", "minimum": 0, "maximum": 2 },
+        "fallbackToRules": { "type": "boolean" }
+      }
     },
     "reconnect": {
       "type": "object",

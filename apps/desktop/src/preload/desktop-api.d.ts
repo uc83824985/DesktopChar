@@ -25,6 +25,7 @@ export interface DesktopWindowState {
   tray: { available: boolean; iconScaleFactors: number[] };
   interaction: DesktopInteractionConfig;
   character: DesktopCharacterConfig;
+  performanceInference: DesktopPerformanceInferenceConfig;
   tts: DesktopTtsConfig;
   mcpServices: McpServicesState;
 }
@@ -36,6 +37,18 @@ export interface DesktopCharacterConfig {
 export interface DesktopInteractionConfig {
   dragHoldDelayMs: number;
   dragWindowApi: 'native-set-window-pos' | 'setBounds';
+}
+
+export interface DesktopPerformanceInferenceConfig {
+  enabled: boolean;
+  lifecycle: 'external';
+  provider: string;
+  baseUrl: string;
+  model?: string;
+  timeoutMs: number;
+  maxOutputTokens: number;
+  temperature: number;
+  fallbackToRules: boolean;
 }
 
 export type DesktopCursorIntent = 'default' | 'pointer' | 'move';
@@ -60,6 +73,7 @@ export interface DesktopCharApi {
   getMcpServicesState(): Promise<McpServicesState>;
   setMcpServiceEnabled(service: McpServiceId, enabled: boolean): Promise<McpServicesState>;
   reloadDesktopConfig(): Promise<McpServicesState>;
+  setPerformanceInferenceEnabled(enabled: boolean): Promise<DesktopWindowState>;
   testMcpService(service: McpServiceId): Promise<McpServiceTest>;
   testAllMcpServices(): Promise<Record<McpServiceId, McpServiceTest>>;
   onMcpServicesState(callback: (state: McpServicesState) => void): () => void;

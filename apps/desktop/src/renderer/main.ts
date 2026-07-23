@@ -1,9 +1,21 @@
 import { ShaderSystem } from '@pixi/core';
 import { install as installCspShaderCompiler } from '@pixi/unsafe-eval';
 import { Application, Renderer, Ticker } from 'pixi.js';
-import { Live2DModel, MotionPriority } from 'pixi-live2d-display/cubism4';
+import {
+  Live2DModel,
+  MotionPriority,
+  type Cubism4InternalModel,
+} from 'pixi-live2d-display/cubism4';
 import { DEFAULT_LIP_SYNC_PROFILE } from '../../../../packages/contracts/src/index.ts';
-import type { AvatarEvent, LipSyncProfile, RuntimeEffect, SpeechBubbleMode } from '../../../../packages/contracts/src/index.ts';
+import type {
+  AvatarEvent,
+  LipSyncProfile,
+  LocalPerformanceSuggestion,
+  PerformanceInferenceCapabilities,
+  PerformancePlanningRequest,
+  RuntimeEffect,
+  SpeechBubbleMode,
+} from '../../../../packages/contracts/src/index.ts';
 import type { AmplitudeSample } from '../../../../packages/contracts/src/index.ts';
 import {
   KNOWN_TONE_PULSES,
@@ -19,13 +31,26 @@ import {
   loadCharacterConfig,
 } from '../../../../packages/config/src/index.ts';
 import {
+  activateRepeatableExpression,
   AsyncPixelCoveragePicker,
   HoldDragController,
+  installCubism4UpdatePipeline,
   PixelCoverageLatch,
   RuntimeParameterFrame,
   WebGLPixelReadbackBackend,
 } from '../../../../packages/live2d-renderer/src/index.ts';
-import type { PixelCoverageResult } from '../../../../packages/live2d-renderer/src/index.ts';
+import type {
+  Cubism4UpdatePipelineHandle,
+  PixelCoverageResult,
+} from '../../../../packages/live2d-renderer/src/index.ts';
+import {
+  FallbackPerformanceInference,
+  NoopPerformanceInference,
+  OpenAiCompatiblePerformanceAdapter,
+  PerformanceRuntimeEffectHandler,
+  RuleBasedPerformanceInference,
+} from '../../../../packages/performance-inference/src/index.ts';
+import type { PerformanceInferencePort } from '../../../../packages/performance-inference/src/index.ts';
 import {
   DomContextMenuHost,
   ImmediateUiRegistry,
@@ -44,6 +69,7 @@ import { JsonConsoleTtsLogger, McpTtsAdapter, TtsRuntimeEffectHandler } from '..
 import './style.css';
 import type {
   DesktopTtsConfig,
+  DesktopPerformanceInferenceConfig,
   McpServiceId,
   McpServiceState,
   McpServiceTest,
@@ -140,17 +166,145 @@ class ReloadableTtsAdapter implements TtsAdapter {
   }
 }
 
-let model: Live2DModel | undefined;
+class ReloadablePerformanceInference implements PerformanceInferencePort {
+  private current: PerformanceInferencePort = new NoopPerformanceInference();
+  private signature = '';
+  private enabled = false;
+  private provider = 'disabled';
+
+  configure(config: DesktopPerformanceInferenceConfig): boolean {
+    const signature = JSON.stringify(config);
+    if (signature === this.signature) return false;
+    this.signature = signature;
+    this.enabled = config.enabled;
+    this.provider = config.provider;
+    if (!config.enabled) {
+      this.current = new NoopPerformanceInference();
+      writePerformanceLog('config.changed', 'info', {
+        enabled: false,
+        lifecycle: config.lifecycle,
+        provider: config.provider,
+      });
+      return true;
+    }
+    const primary = new OpenAiCompatiblePerformanceAdapter({
+      provider: config.provider,
+      baseUrl: config.baseUrl,
+      ...(config.model ? { model: config.model } : {}),
+      timeoutMs: config.timeoutMs,
+      maxOutputTokens: config.maxOutputTokens,
+      temperature: config.temperature,
+    });
+    this.current = config.fallbackToRules
+      ? new FallbackPerformanceInference(primary, new RuleBasedPerformanceInference(), {
+          onFallback: (error, request) => writePerformanceLog('request.fallback', 'warn', {
+            requestId: request.requestId,
+            segmentId: request.segmentId,
+            provider: config.provider,
+            error: performanceErrorDetails(error),
+          }),
+        })
+      : primary;
+    writePerformanceLog('config.changed', 'info', {
+      enabled: true,
+      lifecycle: config.lifecycle,
+      provider: config.provider,
+      endpoint: config.baseUrl,
+      fallbackToRules: config.fallbackToRules,
+      message: 'waiting for a reply segment with an unfilled emotion or action slot',
+    });
+    return true;
+  }
+
+  describe(): PerformanceInferenceCapabilities {
+    return this.current.describe();
+  }
+
+  plan(
+    request: PerformancePlanningRequest,
+    signal: AbortSignal,
+  ): Promise<LocalPerformanceSuggestion> {
+    if (!this.enabled) return this.current.plan(request, signal);
+    const startedAt = performance.now();
+    writePerformanceLog('request.started', 'info', {
+      requestId: request.requestId,
+      planId: request.planId,
+      segmentId: request.segmentId,
+      provider: this.provider,
+      textCharacters: [...request.text].length,
+      allowedEmotions: request.emotions,
+      allowedActions: request.actions.map(action => action.actionId),
+    });
+    return this.current.plan(request, signal).then(suggestion => {
+      writePerformanceLog('request.completed', 'info', {
+        requestId: request.requestId,
+        segmentId: request.segmentId,
+        durationMs: Math.round(performance.now() - startedAt),
+        source: suggestion.source,
+        provider: suggestion.provider,
+        emotion: suggestion.emotion ?? null,
+        actions: suggestion.actions,
+      });
+      return suggestion;
+    }).catch(error => {
+      writePerformanceLog(
+        signal.aborted ? 'request.cancelled' : 'request.failed',
+        signal.aborted ? 'info' : 'error',
+        {
+          requestId: request.requestId,
+          segmentId: request.segmentId,
+          durationMs: Math.round(performance.now() - startedAt),
+          provider: this.provider,
+          error: performanceErrorDetails(error),
+        },
+      );
+      throw error;
+    });
+  }
+}
+
+type PerformanceLogLevel = 'info' | 'warn' | 'error';
+
+function writePerformanceLog(
+  event: string,
+  level: PerformanceLogLevel,
+  data: Record<string, unknown>,
+): void {
+  const message = `[performance] ${JSON.stringify({
+    timestamp: new Date().toISOString(),
+    event,
+    ...data,
+  })}`;
+  if (level === 'error') console.error(message);
+  else if (level === 'warn') console.warn(message);
+  else console.info(message);
+}
+
+function performanceErrorDetails(error: unknown): Record<string, unknown> {
+  return error instanceof Error
+    ? {
+        name: error.name,
+        message: error.message,
+        ...('code' in error && typeof error.code === 'string' ? { code: error.code } : {}),
+      }
+    : { message: String(error) };
+}
+
+let model: Live2DModel<Cubism4InternalModel> | undefined;
+let cubismUpdatePipeline: Cubism4UpdatePipelineHandle | undefined;
 let runtime: AvatarRuntime | undefined;
 let playbackTimer: ReturnType<typeof setInterval> | undefined;
 let motionTimer: ReturnType<typeof setTimeout> | undefined;
 let motionRequestToken = 0;
+let expressionRequestToken = 0;
 let toneAcceptance: ToneAcceptanceRun | null = null;
 let applyingToneTrace: ToneSyncTrace | null = null;
 let knownToneAvailable = false;
 let mcpServicesState: McpServicesState | undefined;
 let ttsConfigSignature = '';
 const reloadableTtsAdapter = new ReloadableTtsAdapter();
+const reloadablePerformanceInference = new ReloadablePerformanceInference();
+let performanceInferenceConfig: DesktopPerformanceInferenceConfig | undefined;
 let currentLipSyncProfile: LipSyncProfile = { ...DEFAULT_LIP_SYNC_PROFILE };
 let desktopBounds: { x: number; y: number; width: number; height: number } | undefined;
 let pointerPresentation: PointerPresentation | undefined;
@@ -238,6 +392,7 @@ const runtimeFrame = new RuntimeParameterFrame({
   aliases: { ParamMouthOpenY: 'ParamA', ParamMouthForm: 'ParamMouthUp' },
 });
 let ttsEffects: TtsRuntimeEffectHandler | undefined;
+let performanceEffects: PerformanceRuntimeEffectHandler | undefined;
 let audioPlayer: WebAudioPcmStreamPlayer | undefined;
 const speechBubbleDismissTimers = new Map<number, ReturnType<typeof setTimeout>>();
 document.body.dataset.toneAcceptance = 'idle';
@@ -269,6 +424,8 @@ try {
     shellState?.character.profileUrl ?? DEFAULT_CHARACTER_PROFILE_URL,
   );
   const tts = createTtsComposition(shellState?.tts);
+  performanceInferenceConfig = shellState?.performanceInference ?? browserPerformanceInferenceConfig();
+  reloadablePerformanceInference.configure(performanceInferenceConfig);
   mcpServicesState = shellState?.mcpServices;
   const ttsOperational = desktopShell ? isOperationalMcpService(mcpServicesState?.tts) : true;
   reloadableTtsAdapter.configure(tts.adapter, shellState?.tts ?? browserTtsConfig(), ttsOperational);
@@ -276,12 +433,20 @@ try {
   knownToneAvailable = tts.supportsKnownToneFixture && ttsOperational;
   if (!knownToneAvailable) tone.title = '当前 TTS MCP 未声明 known-tone-v1 测试能力';
   ttsEffects = new TtsRuntimeEffectHandler(reloadableTtsAdapter);
+  performanceEffects = new PerformanceRuntimeEffectHandler(reloadablePerformanceInference);
   audioPlayer = createRuntimeAudioPlayer(tts.openStream);
   audioPlayer.subscribe(handleTonePlaybackEvent);
   document.body.dataset.ttsMode = shellState?.tts.lifecycle ?? 'external';
   document.body.dataset.ttsHealth = 'checking';
 
-  model = await Live2DModel.from(characterConfig.modelJsonUrl, { autoInteract: false });
+  model = await Live2DModel.from(characterConfig.modelJsonUrl, {
+    autoInteract: false,
+  }) as Live2DModel<Cubism4InternalModel>;
+  cubismUpdatePipeline = installCubism4UpdatePipeline(model.internalModel);
+  document.body.dataset.live2dUpdatePipeline = 'ordered-v1';
+  document.body.dataset.live2dUpdaterOrder = cubismUpdatePipeline.scheduler.list()
+    .map(updater => `${updater.id}@${updater.executionOrder}`)
+    .join(',');
   model.internalModel.on('beforeModelUpdate', applyRuntimeFrame);
   app.stage.addChild(model);
   fitModel();
@@ -296,6 +461,17 @@ try {
       ParamEyeBallX: { min: -1, max: 1 }, ParamEyeBallY: { min: -1, max: 1 },
     } }),
     effects: { execute },
+    performancePlanning: {
+      persona: { id: characterConfig.id, styleTags: [] },
+      scene: { id: 'desktop-default', modeTags: ['desktop', 'foreground'] },
+      actions: characterConfig.allowedActions.map(actionId => ({
+        actionId,
+        label: actionId,
+        tags: [],
+        allowedAnchors: ['segment-start'],
+      })),
+    },
+    emotionBindings: characterConfig.emotionBindings,
     gazeProfile: characterConfig.gazeProfile,
     lipSyncProfile: characterConfig.lipSyncProfile,
   });
@@ -377,6 +553,9 @@ try {
   if (mcpServicesState) applyMcpServicesState(mcpServicesState);
   void desktopShell?.getMcpServicesState().then(state => applyMcpServicesState(state));
   window.addEventListener('beforeunload', () => {
+    performanceEffects?.cancelAll();
+    cubismUpdatePipeline?.restore();
+    cubismUpdatePipeline = undefined;
     contextMenuHost.dispose();
     for (const timer of speechBubbleDismissTimers.values()) clearTimeout(timer);
     speechBubbleDismissTimers.clear();
@@ -442,6 +621,7 @@ function submitDemo(withAction: boolean): void {
 }
 
 function execute(effect: RuntimeEffect, dispatch: (event: AvatarEvent) => void): void {
+  if (performanceEffects?.handle(effect, dispatch)) return;
   if (ttsEffects?.handle(effect, dispatch)) return;
   if (effect.type === 'speech-bubble.schedule-dismiss') {
     const existing = speechBubbleDismissTimers.get(effect.presentationId);
@@ -506,6 +686,49 @@ function execute(effect: RuntimeEffect, dispatch: (event: AvatarEvent) => void):
     if (toneAcceptance && applyingToneTrace && effect.frame.ParamMouthOpenY !== undefined) {
       pendingToneTraces.push(applyingToneTrace);
     }
+  }
+  else if (effect.type === 'renderer.set-expression' && model) {
+    const activeModel = model;
+    const requestToken = ++expressionRequestToken;
+    const expressionId = effect.command.expressionId;
+    if (expressionId === null) {
+      activeModel.internalModel.motionManager.expressionManager?.resetExpression();
+      document.body.dataset.live2dExpression = 'neutral';
+      writePerformanceLog('expression.reset', 'info', {
+        emotion: effect.command.emotion,
+        generation: effect.generation,
+      });
+      return;
+    }
+    document.body.dataset.live2dExpression = 'loading';
+    const expressionManager = activeModel.internalModel.motionManager.expressionManager;
+    void activateRepeatableExpression(
+      expressionManager,
+      id => activeModel.expression(id),
+      expressionId,
+    ).then(activation => {
+      if (requestToken !== expressionRequestToken) return;
+      if (!activation.applied) throw new Error(`Live2D expression ${expressionId} did not start`);
+      document.body.dataset.live2dExpression = expressionId;
+      writePerformanceLog('expression.applied', 'info', {
+        emotion: effect.command.emotion,
+        expressionId,
+        activation: activation.mode,
+        intensity: effect.command.intensity,
+        generation: effect.generation,
+      });
+    }).catch(error => {
+      if (requestToken !== expressionRequestToken) return;
+      document.body.dataset.live2dExpression = 'failed';
+      dispatch({
+        type: 'renderer.failed',
+        error: {
+          code: 'live2d-expression-failed',
+          message: error instanceof Error ? error.message : String(error),
+          recoverable: true,
+        },
+      });
+    });
   }
   else if (effect.type === 'renderer.play-motion' && model) {
     const activeModel = model;
@@ -638,6 +861,19 @@ function browserTtsConfig(): DesktopTtsConfig {
     timeoutMs: DEFAULT_TTS_CONFIG.mcp.timeoutMs,
     format: DEFAULT_TTS_CONFIG.mcp.format,
     testFixtures: (parameters.get('ttsTestFixtures') ?? '').split(',').map(value => value.trim()).filter(Boolean),
+  };
+}
+
+function browserPerformanceInferenceConfig(): DesktopPerformanceInferenceConfig {
+  return {
+    enabled: false,
+    lifecycle: 'external',
+    provider: 'browser-disabled',
+    baseUrl: 'http://127.0.0.1:18090/v1',
+    timeoutMs: 5_000,
+    maxOutputTokens: 256,
+    temperature: 0.1,
+    fallbackToRules: true,
   };
 }
 
@@ -818,6 +1054,19 @@ function submitBubbleDemo(mode: SpeechBubbleMode): void {
   }] } });
 }
 
+function submitEmotionBindingDemo(): void {
+  if (!runtime || runtime.getSnapshot().state !== 'idle') return;
+  const suffix = Date.now();
+  runtime.dispatch({ type: 'plan.submitted', plan: { id: `emotion-binding-${suffix}`, segments: [{
+    id: `emotion-binding-segment-${suffix}`,
+    sequence: 0,
+    displayText: 'Happy 表情资源测试：正在应用角色级 expression 绑定。',
+    speechText: '很高兴见到你，这是角色表情资源测试。',
+    emotion: { emotion: 'happy', intensity: 0.8, atMs: 0 },
+    actions: [],
+  }] } });
+}
+
 function registerDevelopmentUi(): void {
   immediateUi.register({
     id: 'avatar.runtime-settings',
@@ -835,6 +1084,36 @@ function registerDevelopmentUi(): void {
             invoke: enabled => runtime?.dispatch({
               type: enabled ? 'user.gaze-follow-enabled' : 'user.gaze-follow-disabled',
             }),
+          },
+        ],
+      };
+    },
+  });
+  if (desktopShell) immediateUi.register({
+    id: 'desktop.performance-inference',
+    target: '*',
+    order: 15,
+    build: () => {
+      const config = performanceInferenceConfig;
+      if (!config) return null;
+      const canTestHappy = runtime?.getSnapshot().state === 'idle'
+        && (runtime?.getSnapshot().capabilities?.emotions.includes('happy') ?? false);
+      return {
+        label: '表现设置',
+        items: [
+          {
+            type: 'checkbox',
+            id: 'performance-inference-enabled',
+            label: `表情动作推理（外部） · ${config.provider}`,
+            checked: config.enabled,
+            invoke: setPerformanceInferenceEnabled,
+          },
+          {
+            type: 'action',
+            id: 'emotion-binding-test',
+            label: '测试 Happy 表情资源',
+            enabled: canTestHappy,
+            invoke: submitEmotionBindingDemo,
           },
         ],
       };
@@ -932,6 +1211,12 @@ function registerDevelopmentUi(): void {
 async function setMcpServiceEnabled(service: McpServiceId, enabled: boolean): Promise<void> {
   if (!desktopShell) return;
   applyMcpServicesState(await desktopShell.setMcpServiceEnabled(service, enabled));
+}
+
+async function setPerformanceInferenceEnabled(enabled: boolean): Promise<void> {
+  if (!desktopShell) return;
+  const state = await desktopShell.setPerformanceInferenceEnabled(enabled);
+  applyPerformanceInferenceConfig(state.performanceInference);
 }
 
 async function testAllMcpServices(): Promise<void> {
@@ -1177,6 +1462,7 @@ function initializeDesktopInteraction(initialState: Awaited<ReturnType<NonNullab
     pixelPicker = undefined;
   }, { once: true });
   const applyReadyState = (state: Awaited<ReturnType<NonNullable<typeof desktopShell>['ready']>>) => {
+    applyPerformanceInferenceConfig(state.performanceInference);
     dragGesture.setHoldDelayMs(state.interaction.dragHoldDelayMs);
     document.body.dataset.dragHoldDelayMs = state.interaction.dragHoldDelayMs.toString();
     document.body.dataset.dragWindowApi = state.interaction.dragWindowApi;
@@ -1193,6 +1479,13 @@ function initializeDesktopInteraction(initialState: Awaited<ReturnType<NonNullab
     document.body.dataset.desktopShell = 'failed';
     console.error('Desktop shell initialization failed', error);
   });
+}
+
+function applyPerformanceInferenceConfig(config: DesktopPerformanceInferenceConfig): void {
+  performanceInferenceConfig = structuredClone(config);
+  if (reloadablePerformanceInference.configure(config)) performanceEffects?.cancelAll();
+  document.body.dataset.performanceInference = config.enabled ? 'enabled' : 'disabled';
+  contextMenuHost.refresh();
 }
 
 function handleDesktopCursor(point: { x: number; y: number }): void {

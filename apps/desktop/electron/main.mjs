@@ -14,6 +14,7 @@ import { createNativeCursorRefresh } from './cursor-refresh.mjs';
 import { createNativeWindowPosition } from './native-window-position.mjs';
 import { createMcpServicesController } from './mcp-services-controller.mjs';
 import { normalizeDesktopConfig, resolveDesktopConfigPath } from './mcp-services-config.mjs';
+import { createPerformanceInferenceConfigState } from './performance-inference-config-state.mjs';
 import {
   nextAvatarVisibility,
   trayIconRepresentations,
@@ -29,6 +30,9 @@ const packagedExampleConfigPath = app.isPackaged
   : undefined;
 const desktopConfigPath = resolveDesktopConfigPath(process.env, process.cwd(), packagedConfigPath);
 let desktopConfig = normalizeDesktopConfig({}, process.env);
+const performanceInferenceConfigState = createPerformanceInferenceConfigState(
+  desktopConfig.performanceInference,
+);
 const rawConsoleLog = console.log.bind(console);
 const rawConsoleError = console.error.bind(console);
 const channels = {
@@ -48,6 +52,7 @@ const channels = {
   mcpServicesGet: 'mcp-services:get-state',
   mcpServicesSetEnabled: 'mcp-services:set-enabled',
   desktopConfigReload: 'desktop-config:reload',
+  performanceInferenceSetEnabled: 'performance-inference:set-enabled',
   mcpServicesTest: 'mcp-services:test',
   mcpServicesTestAll: 'mcp-services:test-all',
   mcpServicesState: 'mcp-services:state',
@@ -253,6 +258,10 @@ function createAvatarWindow() {
   avatarWindow.webContents.setWindowOpenHandler(() => ({ action: 'deny' }));
   avatarWindow.webContents.on('will-navigate', event => event.preventDefault());
   avatarWindow.webContents.on('console-message', (_event, level, message, line, sourceId) => {
+    if (message.startsWith('[performance] ')) {
+      safeLog(message);
+      return;
+    }
     if (level >= 3) safeError('[renderer-console-error]', { message, line, sourceId });
   });
   avatarWindow.webContents.on('did-fail-load', (_event, errorCode, errorDescription, validatedURL) => {
@@ -477,6 +486,12 @@ function registerIpc() {
     requireAvatarSender(event);
     return mcpServices.reload('ui');
   });
+  ipcMain.handle(channels.performanceInferenceSetEnabled, (event, enabled) => {
+    requireAvatarSender(event);
+    performanceInferenceConfigState.setEnabled(enabled);
+    publishDesktopConfigState();
+    return windowState();
+  });
   ipcMain.handle(channels.mcpServicesTest, (event, service) => {
     requireAvatarSender(event);
     return mcpServices.test(service);
@@ -577,6 +592,7 @@ function windowState() {
       dragWindowApi,
     },
     character: { profileUrl: desktopConfig.characterProfile.url },
+    performanceInference: performanceInferenceConfigState.snapshot(),
     tts: mcpServices.currentTtsConfig(),
     mcpServices: mcpServices.snapshot(),
   };
@@ -584,11 +600,12 @@ function windowState() {
 
 function applyDesktopConfig(config, metadata = {}) {
   desktopConfig = config;
+  performanceInferenceConfigState.replace(config.performanceInference);
   if (avatarWindow && !avatarWindow.isDestroyed()) {
     if (avatarWindow.isAlwaysOnTop() !== config.window.alwaysOnTop) {
       avatarWindow.setAlwaysOnTop(config.window.alwaysOnTop);
     }
-    avatarWindow.webContents.send(channels.desktopConfigState, windowState());
+    publishDesktopConfigState();
   }
   if (desktopStarted && !metadata.initial) {
     agentServerOperation = agentServerOperation
@@ -596,6 +613,11 @@ function applyDesktopConfig(config, metadata = {}) {
       .then(() => rebindAgentServer(metadata.reason ?? 'config-reload'))
       .catch(error => safeError('[agent-http] config reload failed; keeping previous listener', error));
   }
+}
+
+function publishDesktopConfigState() {
+  if (!avatarWindow || avatarWindow.isDestroyed()) return;
+  avatarWindow.webContents.send(channels.desktopConfigState, windowState());
 }
 
 async function rebindAgentServer(reason) {

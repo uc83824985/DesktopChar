@@ -18,6 +18,11 @@ External Agent --MCP Client--> DesktopChar 角色接入 MCP Server
 
 Electron main 的 `McpServicesController` 独占配置 revision、服务生命周期、MCP session、重连计时器和连接测试结果。Renderer 右键 UI 只发送启停、重载和测试意图；Avatar Runtime 仍是角色状态唯一所有者。
 
+本地表情/动作规划服务不属于第三个 MCP。它虽然复用 `external / managed` 生命周期术语，
+但只通过 OpenAI-compatible HTTP 接收 sealed 文本和当前 Live2D 动作目录，并返回受
+JSON Schema 约束的建议。原因、Supervisor 边界和 Profile 草案见
+[本地表现模型接入设计](performance-model-integration.md)。
+
 ## 右键菜单
 
 角色右键菜单的“MCP 服务”分区提供：

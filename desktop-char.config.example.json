@@ -19,6 +19,16 @@
   "character": {
     "profile": "models/Mao/DesktopChar.character.json"
   },
+  "performanceInference": {
+    "enabled": false,
+    "lifecycle": "external",
+    "provider": "qwen35-transformers",
+    "baseUrl": "http://127.0.0.1:18090/v1",
+    "timeoutMs": 5000,
+    "maxOutputTokens": 256,
+    "temperature": 0.1,
+    "fallbackToRules": true
+  },
   "ttsMcp": {
     "autoStart": true,
     "profile": "local"

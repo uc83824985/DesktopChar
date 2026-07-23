@@ -52,6 +52,50 @@ interface AvatarRuntime {
 
 Runtime 不直接调用 Web Audio、Electron、Pixi、Live2D SDK 或 MCP 客户端。
 
+## 子 Runtime 与稳定门面
+
+`AvatarRuntime` 保留为角色领域的唯一公共门面和聚合快照发布者，但不应继续把所有状态机实现堆叠在单个类中。目标拆分为：
+
+```text
+AvatarRuntime（门面、事件路由、聚合快照）
+├─ PerformanceRuntime
+│  └─ PerformanceUnit / plan / segment / generation / interrupt
+├─ SpeechRuntime
+│  └─ TTS segment readiness / playback facts / failure / cancellation
+├─ SpeechBubbleRuntime
+│  └─ playing / holding / dismiss / text fallback
+├─ GazeRuntime
+│  └─ follow mode / target / GazeProfile / neutral fallback
+└─ LipSyncRuntime
+   └─ audio level envelope / attack-release / neutral mouth
+```
+
+职责边界：
+
+- `PerformanceRuntime` 是整体呈现顺序和 generation 的唯一所有者；其他子 Runtime 不能自行取下一段；
+- `SpeechRuntime` 记录语音合成与真实播放事实，只向 `PerformanceRuntime` 报告 ready、started、progress、completed、failed；
+- `SpeechBubbleRuntime` 根据播放时间线或无 TTS 回退时钟维护聊天气泡，不拥有音频队列；
+- `GazeRuntime` 独立维护常驻注视状态，表演计划结束或语音中断不得意外清除它；
+- `LipSyncRuntime` 将播放电平映射为嘴型参数层，播放器只报告电平和时点；
+- 表情、手势和动作在形成独立队列、恢复点或并发策略后再提取相应 Runtime；当前纯 cue 计算可继续留在 Planner/Timeline 服务中。
+
+不是每个类都应命名为 Runtime。只有拥有可观察状态、明确事件和生命周期的组件才是子 Runtime；
+`AvatarPlanner`、`PerformanceTimeline`、参数 `Mixer`、Gaze 映射和 Context Compiler
+仍应是纯服务。子 Runtime 之间通过有类型的领域事件与 Effect 协作，不直接写对方状态。
+
+对外接口仍只暴露一个 `AvatarRuntime`。它聚合各子 Runtime 的 revision 生成
+`AvatarSnapshot`，保证 UI 无需订阅多个对象，也不会重新成为状态协调者。
+
+建议按当前实现的耦合顺序渐进迁移：
+
+1. 先提取 `SpeechBubbleRuntime` 和 `LipSyncRuntime`，它们已有清晰状态与输入事件；
+2. 再提取 `SpeechRuntime`，统一 TTS ready、音频播放和失败回退；
+3. 将 plan/segment/generation/中断保留并收敛到 `PerformanceRuntime`；
+4. 最后让 `AvatarRuntime` 退化为稳定门面、事件路由和聚合 Snapshot。
+
+任何阶段都必须保持“整体呈现队列只有一个所有者”，不能在拆分期间形成
+`SpeechRuntime` 与 `PerformanceRuntime` 各自推进 segment 的双队列。
+
 ## Reducer 与 Transition
 
 状态变化统一经过 reducer：
@@ -275,6 +319,17 @@ Timeline 是 Runtime 内部组件：
 
 Timeline 不使用 TTS 请求时间、音频下载时间或系统墙上时钟推测播放位置。首版以每个 segment 独立时间轴、按 sequence 串行播放。
 
+本地表现推理作为可取消的次级 Effect 与 TTS 并行启动。它只返回建议，不持有
+Avatar 状态：Runtime 记录请求 identity/revision、原计划允许补全的字段及角色能力
+白名单。迟到建议可以更新当前 `PerformanceTimeline`，但 Timeline 保留已触发 cue
+集合，所以不会重放动作。显式 emotion、显式 action（包括空数组）、旧 generation、
+已完成 segment、低置信度或能力目录之外的建议全部不会修改最终 plan。
+
+语义 emotion 与具体 Live2D expression 的关系由角色 sidecar 的
+`emotionBindings` 声明。Runtime 在 cue 生效时发出 `renderer.set-expression`
+Effect，并在计划完成或中断时发出 neutral/reset；Renderer 不参与 emotion 选择，
+也不持有独立表情状态。未绑定的 emotion 保留通用 ParameterMixer 降级路径。
+
 ## Parameter Mixer 职责
 
 Mixer 是帧级纯计算组件：
@@ -347,6 +402,52 @@ interface Live2DRenderer {
 ```
 
 Renderer 不接受领域级 `setEmotion()`，不理解 LLM、TTS provider、会话或 AvatarState。
+
+### 可排序 Parameter Updater
+
+`pixi-live2d-display@0.4.0` 把旧版 Cubism Framework 打包在自身产物中，
+不能直接安装新版官方 Framework 或把官方
+`CubismExpressionUpdater/CubismEyeBlinkUpdater` 挂到现有 Manager 实例。
+官方 Framework 本身也不是公开 npm 包；完整替换意味着同时重写 Pixi
+DisplayObject、纹理、WebGL 状态、坐标和命中适配，不作为当前缺陷的补丁。
+
+Renderer 改为复用 Live2D Cubism 5-r.5 的排序思想和默认执行顺序，在
+`live2d-renderer` 内维护模型无关的 `ParameterUpdateScheduler`：
+
+```text
+Motion / saveParameters
+  -> EyeBlink      200
+  -> Expression    300
+  -> Gaze/Focus    400
+  -> Breath        500
+  -> Physics       600
+  -> LipSync       700
+  -> Pose          800
+  -> RuntimeFinal  900
+  -> Cubism model.update()
+```
+
+顺序常量与官方 `CubismUpdateOrder` 对齐；`RuntimeFinal` 是 DesktopChar
+增加的提交点，不属于官方枚举。当前 Cubism4 Adapter 只包装已有组件，
+不复制官方具体 Updater，也不建立第二套 Cubism Model。安装时只替换单个
+`Cubism4InternalModel` 实例的 `update()`，模型销毁或显式卸载时必须恢复，
+禁止修改 `node_modules`。
+
+这一区分不改变状态所有权：Runtime 仍决定当前 emotion、gaze、mouth 和
+最终 ParameterFrame；Updater Scheduler 只决定同一渲染帧内技术效果的
+计算顺序。表情资源依靠自身 Add/Multiply/Overwrite 语义覆盖较低顺序的
+自动眨眼，不在 `emotionBindings` 中增加 `suppressEyeBlink` 等实现耦合。
+普通表情未写眼睛参数时仍能自然眨眼。
+
+官方参考：
+
+- [Cubism 5-r.5 Changelog：增加 motion calculation order](https://github.com/Live2D/CubismWebFramework/blob/develop/CHANGELOG.md)
+- [CubismUpdateOrder 与 ICubismUpdater](https://github.com/Live2D/CubismWebFramework/blob/develop/src/motion/icubismupdater.ts)
+- [CubismUpdateScheduler](https://github.com/Live2D/CubismWebFramework/blob/develop/src/motion/cubismupdatescheduler.ts)
+
+后续若完整迁移到官方 Framework，保留 `ParameterUpdateScheduler` 的端口与
+验收，只替换各 Cubism Adapter；引入官方源码时另行核对 Live2D Open
+Software License、Core Proprietary Software License 和发行许可。
 
 ## 中断事务
 

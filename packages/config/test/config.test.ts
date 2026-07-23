@@ -7,6 +7,10 @@ test('Mao asset-side profile compensates its authored gaze and lip response', as
   const profileUrl = new URL('../../../apps/desktop/public/models/Mao/DesktopChar.character.json', import.meta.url);
   const profile = parseCharacterConfig(JSON.parse(await readFile(profileUrl, 'utf8')), 'models/Mao/DesktopChar.character.json');
   assert.equal(profile.modelJsonUrl, 'models/Mao/Mao.model3.json');
+  assert.deepEqual(profile.emotionBindings, {
+    neutral: { expression: null },
+    happy: { expression: 'exp_02' },
+  });
   assert.equal(profile.gazeProfile.headY.negative.limit, -20);
   assert.equal(profile.gazeProfile.headY.positive.limit, 30);
   assert.equal(profile.lipSyncProfile.gain, 2.5);
@@ -33,8 +37,23 @@ test('character profile rejects path traversal and unregistered capabilities', (
   };
   assert.throws(() => parseCharacterConfig({ ...valid, model: '../secret' }), /relative/);
   assert.throws(() => parseCharacterConfig({ ...valid, allowedActions: ['execute-script'] }), /unsupported/);
+  assert.throws(
+    () => parseCharacterConfig({
+      ...valid,
+      emotionBindings: { happy: { expression: 'exp_02' } },
+    }),
+    /not listed in allowedEmotions/,
+  );
+  assert.throws(
+    () => parseCharacterConfig({
+      ...valid,
+      emotionBindings: { neutral: { expression: '' } },
+    }),
+    /non-empty string/,
+  );
   assert.throws(() => parseCharacterConfig({ ...valid, lipSynProfile: { gain: 2 } }), /unknown field/);
   const defaults = parseCharacterConfig(valid);
+  assert.deepEqual(defaults.emotionBindings, {});
   assert.deepEqual(
     { attackMs: defaults.lipSyncProfile.attackMs, releaseMs: defaults.lipSyncProfile.releaseMs, peakHoldMs: defaults.lipSyncProfile.peakHoldMs },
     { attackMs: 30, releaseMs: 100, peakHoldMs: 25 },

@@ -38,6 +38,10 @@ models/Mao/
   "defaultEmotion": "neutral",
   "allowedEmotions": ["neutral", "happy"],
   "allowedActions": ["nod"],
+  "emotionBindings": {
+    "neutral": { "expression": null },
+    "happy": { "expression": "exp_02" }
+  },
   "expressionCooldownMs": 500,
   "idleReturnDelayMs": 800,
   "gazeProfile": {
@@ -70,6 +74,13 @@ models/Mao/
   }
 }
 ```
+
+`emotionBindings` 把 Runtime 的语义表情映射到当前 Live2D 模型
+`model3.json -> Expressions` 中的资源名。值为 `null` 表示恢复模型默认表情。
+Runtime 仍独占当前 emotion 和复位时机；Renderer 只能执行
+`renderer.set-expression` Effect，不能自行选择表情。Mao 的 `happy` 当前绑定
+`exp_02`，用于以双眼笑资源提供清晰的前台验收效果。未声明绑定的旧资产继续使用
+通用参数层降级，不会隐式猜测 expression 编号。
 
 原先 `packages/config` 中硬编码的 `MAO_CHARACTER_CONFIG` 已迁移到该文件。`DESKTOP_CHAR_LIP_SYNC_GAIN` 也已退出常规配置入口，因为相同音频电平在不同模型上的嘴部表现是资产校准结果，而不是全局音频服务参数。
 
@@ -120,6 +131,12 @@ Windows 通常对应 `%APPDATA%/DesktopChar/config.json`。程序只通过 Elect
   "character": {
     "profile": "models/Mao/DesktopChar.character.json"
   },
+  "performanceInference": {
+    "enabled": false,
+    "lifecycle": "external",
+    "provider": "qwen35-transformers",
+    "baseUrl": "http://127.0.0.1:18090/v1"
+  },
   "ttsMcp": {
     "profile": "local"
   },
@@ -134,6 +151,11 @@ Windows 通常对应 `%APPDATA%/DesktopChar/config.json`。程序只通过 Elect
 - 语音合成 MCP、角色接入 MCP、重连与内置本地语音合成参数；
 - 窗口默认尺寸、边距、置顶策略等用户偏好；
 - 当前角色资产 Profile 路径。
+
+`performanceInference.lifecycle` 当前只接受 `external`。右键菜单的动态开关只改变
+Adapter 是否向已就绪 endpoint 发请求；它不启动、关闭或监控 Qwen 进程。开发期需由
+用户在独立终端执行 `npm run performance:start`，未来 managed 模式应由独立
+Supervisor 显式持有进程，而不是把启动职责塞进 Adapter。
 
 聊天气泡的全局默认显示/纯文本回退计时，以及后续增加的拖动距离阈值仍需先改造成可注入的 Runtime Policy，再加入 JSON；在完成该边界前不提供“写入了但没有实际生效”的字段。
 

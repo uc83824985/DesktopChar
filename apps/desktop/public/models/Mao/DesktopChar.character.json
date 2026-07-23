@@ -6,6 +6,10 @@
   "defaultEmotion": "neutral",
   "allowedEmotions": ["neutral", "happy"],
   "allowedActions": ["nod"],
+  "emotionBindings": {
+    "neutral": { "expression": null },
+    "happy": { "expression": "exp_02" }
+  },
   "expressionCooldownMs": 500,
   "idleReturnDelayMs": 800,
   "gazeProfile": {
