@@ -6,18 +6,23 @@ import process from 'node:process';
 import { chromium, type Browser, type Page } from 'playwright-core';
 import { createLocalTtsMcpService } from '../local-tts-mcp/service.mjs';
 import {
-  createFixedMotionAuditPlan,
+  createImportanceMotionAuditPlan,
   type Live2dMotionSourceSummary,
   type MotionAuditMotionPlan,
+  type MotionAuditSampleReason,
 } from '../packages/live2d-renderer/src/motion-audit.ts';
 
 const DEFAULT_INTERVAL_MS = 500;
 const DEFAULT_RECOVERY_MS = 150;
-const DEFAULT_MAX_FRAMES = 120;
+const DEFAULT_MAX_FRAMES = 144;
 const DEFAULT_MAX_FRAMES_PER_MOTION = 32;
+const DEFAULT_IMPORTANCE_RADIUS_MS = 150;
+const DEFAULT_IMPORTANCE_SAMPLES_PER_MOTION = 6;
 const HARD_MAX_FRAMES = 160;
 const PARAMETER_EPSILON = 1e-4;
 const DRAWABLE_EPSILON = 1 / 255;
+const MAX_ACCEPTABLE_TIMING_ERROR_MS = 100;
+const MAX_SAMPLE_RESTARTS = 2;
 
 interface AuditOptions {
   outputDirectory: string;
@@ -25,6 +30,8 @@ interface AuditOptions {
   recoveryMs: number;
   maxFrames: number;
   maxFramesPerMotion: number;
+  importanceRadiusMs: number;
+  maxImportanceSamplesPerMotion: number;
   groups: Set<string> | undefined;
   motionIds: Set<string> | undefined;
   viewport: { width: number; height: number };
@@ -65,8 +72,9 @@ interface AuditTelemetry {
 interface ExportedSample {
   index: number;
   kind: 'motion' | 'recovery';
-  reason: 'fixed-cadence' | 'motion-end' | 'baseline-recovery';
+  reason: MotionAuditSampleReason;
   targetMs: number;
+  importance?: MotionAuditMotionPlan['samples'][number]['importance'];
   actualMotionMs: number | null;
   timingErrorMs: number | null;
   image: string;
@@ -142,18 +150,24 @@ try {
     if (missing.length) throw new Error(`Unknown or filtered motion IDs: ${missing.join(', ')}`);
   }
 
-  const plan = createFixedMotionAuditPlan(
-    resources.map(resource => ({ id: resource.id, durationMs: resource.source.durationMs })),
+  const plan = createImportanceMotionAuditPlan(
+    resources.map(resource => ({
+      id: resource.id,
+      durationMs: resource.source.durationMs,
+      importanceEvents: resource.source.importance.events,
+    })),
     {
       intervalMs: options.intervalMs,
       recoveryMs: options.recoveryMs,
       maxFrames: options.maxFrames,
       maxFramesPerMotion: options.maxFramesPerMotion,
+      importanceRadiusMs: options.importanceRadiusMs,
+      maxImportanceSamplesPerMotion: options.maxImportanceSamplesPerMotion,
     },
   );
   await writeJson(path.join(options.outputDirectory, 'sample-plan.json'), {
     schemaVersion: 1,
-    strategy: 'fixed-cadence',
+    strategy: 'fixed-cadence+curve-importance',
     options: publicOptions(options),
     ...plan,
   });
@@ -174,7 +188,7 @@ try {
     for (let sampleIndex = 0; sampleIndex < motionPlan.samples.length; sampleIndex++) {
       const point = motionPlan.samples[sampleIndex]!;
       const telemetry = point.kind === 'motion'
-        ? await callAudit<AuditTelemetry>(page, 'sampleAt', point.targetMs)
+        ? await sampleMotionAtWithRestart(page, resource.id, point.targetMs)
         : await callAudit<AuditTelemetry>(page, 'finish', options.recoveryMs);
       if (point.kind === 'recovery') finished = true;
       const imageName = `${String(sampleIndex).padStart(3, '0')}-${point.kind}-${String(Math.round(point.targetMs)).padStart(6, '0')}ms.png`;
@@ -216,12 +230,12 @@ try {
         ...resource.source,
         curves: resource.source.curves.filter(curve => curve.valueSpan > PARAMETER_EPSILON),
       },
-    sampling: {
-      requestedCount: motionPlan.requestedCount,
-      exportedCount: samples.length,
-      omittedCount: motionPlan.omittedCount,
-      omittedSamples: motionPlan.omittedSamples,
-    },
+      sampling: {
+        requestedCount: motionPlan.requestedCount,
+        exportedCount: samples.length,
+        omittedCount: motionPlan.omittedCount,
+        omittedSamples: motionPlan.omittedSamples,
+      },
       contactSheet: relativeArtifact(options.outputDirectory, contactSheetPath),
       observedParameterRanges: observedParameterRanges(samples),
       samples,
@@ -231,7 +245,7 @@ try {
   const manifest = {
     schemaVersion: 1,
     generatedAt: new Date().toISOString(),
-    strategy: 'fixed-cadence',
+    strategy: 'fixed-cadence+curve-importance',
     character: {
       id: description.characterId,
       viewport: description.viewport,
@@ -305,6 +319,20 @@ function parseOptions(args: string[]): AuditOptions {
       1,
       64,
     ),
+    importanceRadiusMs: integerOption(
+      values,
+      '--importance-radius-ms',
+      DEFAULT_IMPORTANCE_RADIUS_MS,
+      0,
+      250,
+    ),
+    maxImportanceSamplesPerMotion: integerOption(
+      values,
+      '--importance-samples-per-motion',
+      DEFAULT_IMPORTANCE_SAMPLES_PER_MOTION,
+      0,
+      12,
+    ),
     groups: commaSet(values.get('--groups')),
     motionIds: commaSet(values.get('--motions')),
     viewport: viewportOption(values.get('--viewport') ?? '720x900'),
@@ -313,7 +341,7 @@ function parseOptions(args: string[]): AuditOptions {
 }
 
 function printHelp(): void {
-  process.stdout.write(`DesktopChar fixed-cadence Live2D motion audit
+  process.stdout.write(`DesktopChar bounded Live2D motion audit
 
 Usage:
   npm run motion:audit -- [options]
@@ -322,8 +350,11 @@ Options:
   --output PATH                  Output directory (must not already exist)
   --interval-ms N                Requested motion cadence, default 500
   --recovery-ms N                Baseline recovery delay, default 150
-  --max-frames N                 Global budget, default 120, hard max ${HARD_MAX_FRAMES}
+  --max-frames N                 Global budget, default 144, hard max ${HARD_MAX_FRAMES}
   --max-frames-per-motion N      Per-motion budget, default 32
+  --importance-radius-ms N       Before/after radius for curve events, default 150
+  --importance-samples-per-motion N
+                                 Maximum supplemental frames per motion, default 6; 0 disables
   --groups Idle,TapBody          Include only these model3 motion groups
   --motions TapBody:0,TapBody:1  Include only these resource IDs
   --viewport WIDTHxHEIGHT         Capture viewport, default 720x900
@@ -337,6 +368,8 @@ function publicOptions(value: AuditOptions) {
     recoveryMs: value.recoveryMs,
     maxFrames: value.maxFrames,
     maxFramesPerMotion: value.maxFramesPerMotion,
+    importanceRadiusMs: value.importanceRadiusMs,
+    maxImportanceSamplesPerMotion: value.maxImportanceSamplesPerMotion,
     groups: value.groups ? [...value.groups] : null,
     motionIds: value.motionIds ? [...value.motionIds] : null,
     viewport: value.viewport,
@@ -362,6 +395,32 @@ async function callAudit<T>(
     if (typeof target !== 'function') throw new Error(`Motion audit method is unavailable: ${method}`);
     return argument === undefined ? target() : target(argument as never);
   }, { method, argument }) as Promise<T>;
+}
+
+async function sampleMotionAtWithRestart(
+  page: Page,
+  resourceId: string,
+  targetMs: number,
+): Promise<AuditTelemetry> {
+  for (let restartCount = 0; restartCount <= MAX_SAMPLE_RESTARTS; restartCount++) {
+    const telemetry = await callAudit<AuditTelemetry>(page, 'sampleAt', targetMs);
+    const timingErrorMs = telemetry.motionElapsedMs === null
+      ? Number.POSITIVE_INFINITY
+      : telemetry.motionElapsedMs - targetMs;
+    if (timingErrorMs <= MAX_ACCEPTABLE_TIMING_ERROR_MS) return telemetry;
+    if (restartCount >= MAX_SAMPLE_RESTARTS) {
+      throw new Error(
+        `Motion audit ${resourceId} missed ${targetMs}ms by ${timingErrorMs.toFixed(1)}ms after ${MAX_SAMPLE_RESTARTS} restarts`,
+      );
+    }
+    process.stdout.write(
+      `[motion-audit] ${resourceId} timing miss ${timingErrorMs.toFixed(1)}ms at ${targetMs}ms; restarting playback (${restartCount + 1}/${MAX_SAMPLE_RESTARTS})\n`,
+    );
+    await callAudit<AuditTelemetry>(page, 'finish', 0);
+    await callAudit<AuditTelemetry>(page, 'prepare');
+    await callAudit<AuditTelemetry>(page, 'startMotion', resourceId);
+  }
+  throw new Error(`Motion audit ${resourceId} could not sample ${targetMs}ms`);
 }
 
 function toExportedSample(
@@ -403,6 +462,7 @@ function toExportedSample(
     kind: point.kind,
     reason: point.reason,
     targetMs: point.targetMs,
+    ...(point.importance ? { importance: point.importance } : {}),
     actualMotionMs: telemetry.motionElapsedMs,
     timingErrorMs: point.kind === 'motion' && telemetry.motionElapsedMs !== null
       ? telemetry.motionElapsedMs - point.targetMs
@@ -458,10 +518,14 @@ async function createContactSheet(
       const actual = sample.actualMotionMs === null
         ? 'baseline recovery'
         : `${(sample.actualMotionMs / 1_000).toFixed(2)}s actual`;
-      return `<figure>
+      const importance = sample.importance
+        ? `<br />importance ${sample.importance.score.toFixed(0)}
+          · event ${(sample.importance.sourceEventMs / 1_000).toFixed(2)}s`
+        : '';
+      return `<figure${sample.importance ? ' class="importance"' : ''}>
         <img src="data:image/png;base64,${bytes.toString('base64')}" />
         <figcaption>#${String(sample.index).padStart(2, '0')} · ${sample.reason}<br />
-          target ${(sample.targetMs / 1_000).toFixed(2)}s · ${actual}</figcaption>
+          target ${(sample.targetMs / 1_000).toFixed(2)}s · ${actual}${importance}</figcaption>
       </figure>`;
     }));
     await page.setContent(`<!doctype html>
@@ -475,6 +539,7 @@ async function createContactSheet(
         main { display: grid; grid-template-columns: repeat(5, 1fr); gap: 12px; }
         figure { margin: 0; overflow: hidden; border: 1px solid #ffffff1f;
           border-radius: 10px; background: #24212d; }
+        figure.importance { border-color: #a98af0; }
         img { display: block; width: 100%; aspect-ratio: 4 / 5; object-fit: contain;
           background: repeating-conic-gradient(#302d38 0 25%, #292630 0 50%) 50% / 18px 18px; }
         figcaption { min-height: 48px; padding: 7px 9px; color: #d8d2e4;
@@ -503,14 +568,19 @@ function agentBrief(manifest: {
   };
   motions: Array<{
     resource: { id: string; file: string };
-    source: { durationMs: number; dynamicCurveCount: number };
+    source: {
+      durationMs: number;
+      dynamicCurveCount: number;
+      importance: { events: unknown[] };
+    };
     sampling: { exportedCount: number; omittedCount: number };
     contactSheet: string;
     observedParameterRanges: Array<{ id: string }>;
+    samples: Array<{ importance?: unknown }>;
   }>;
 }): string {
   const rows = manifest.motions.map(motion =>
-    `| \`${motion.resource.id}\` | \`${motion.resource.file}\` | ${(motion.source.durationMs / 1_000).toFixed(2)}s | ${motion.sampling.exportedCount} | ${motion.sampling.omittedCount} | [contact sheet](${motion.contactSheet.replaceAll('\\', '/')}) |`,
+    `| \`${motion.resource.id}\` | \`${motion.resource.file}\` | ${(motion.source.durationMs / 1_000).toFixed(2)}s | ${motion.source.importance.events.length} | ${motion.samples.filter(sample => sample.importance).length} | ${motion.sampling.exportedCount} | ${motion.sampling.omittedCount} | [contact sheet](${motion.contactSheet.replaceAll('\\', '/')}) |`,
   ).join('\n');
   return `# Motion audit agent brief
 
@@ -523,12 +593,14 @@ function agentBrief(manifest: {
 ## Token-conscious review order
 
 1. Inspect one contact sheet per motion first.
-2. Read \`manifest.json\` for authored curves, observed parameter ranges and exact sample timing.
-3. Open an individual full-resolution frame only when a contact-sheet thumbnail is ambiguous.
-4. Treat semantic labels and phase boundaries inferred from images as proposals requiring review.
+2. Purple-bordered cards are deterministic supplemental samples generated before Agent review.
+3. Read \`manifest.json\` for each supplemental sample's score, signals, source event and curves.
+4. Inspect omitted importance samples before concluding that a fast event does not exist.
+5. Open an individual full-resolution frame only when a contact-sheet thumbnail is ambiguous.
+6. Treat semantic labels and phase boundaries inferred from images as proposals requiring review.
 
-| Resource | File | Duration | Frames | Omitted | Primary visual artifact |
-| --- | --- | ---: | ---: | ---: | --- |
+| Resource | File | Duration | Curve events | Supplemental | Frames | Omitted | Primary visual artifact |
+| --- | --- | ---: | ---: | ---: | ---: | ---: | --- |
 ${rows}
 `;
 }
