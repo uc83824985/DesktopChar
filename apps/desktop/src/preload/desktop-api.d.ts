@@ -17,6 +17,11 @@ export interface DesktopWindowState {
   alwaysOnTop: boolean;
   visible: boolean;
   visibilityIntent: boolean;
+  nativeWindow: {
+    backend: string;
+    topmost: boolean | null;
+    exStyle: string | null;
+  };
   presentation: {
     phase: 'hidden' | 'warming' | 'visible';
     requestId: number;

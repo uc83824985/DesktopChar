@@ -5,6 +5,7 @@ import { _electron as electron } from 'playwright-core';
 import { Client } from '@modelcontextprotocol/sdk/client/index.js';
 import { StreamableHTTPClientTransport } from '@modelcontextprotocol/sdk/client/streamableHttp.js';
 import koffi from 'koffi';
+import { createNativeWindowTopmost } from '../apps/desktop/electron/native-window-topmost.mjs';
 
 const root = process.cwd();
 const isolatedConfigPath = path.join(
@@ -28,6 +29,7 @@ const application = await electron.launch({
 });
 const runNativeInteractionSmoke = process.env.DESKTOP_CHAR_NATIVE_INTERACTION_SMOKE === '1';
 const nativePointer = runNativeInteractionSmoke ? createNativePointer() : undefined;
+const nativeTopmost = createNativeWindowTopmost();
 const originalCursorPoint = runNativeInteractionSmoke
   ? await application.evaluate(({ screen }) => screen.getCursorScreenPoint())
   : undefined;
@@ -60,6 +62,11 @@ try {
   if (!initial || !initial.alwaysOnTop || !initial.visible || !initial.tray?.available
     || initial.bounds.width > 500 || initial.bounds.height > 740) {
     throw new Error(`Unexpected floating window state: ${JSON.stringify(initial)}`);
+  }
+  if (process.platform === 'win32'
+    && (initial.nativeWindow?.backend !== 'koffi-window-topmost'
+      || initial.nativeWindow.topmost !== true)) {
+    throw new Error(`Native avatar window did not start topmost: ${JSON.stringify(initial.nativeWindow)}`);
   }
   if (initial.presentation?.phase !== 'visible' || initial.presentation.opacity !== 1
     || initial.presentation.backgroundThrottling !== false) {
@@ -391,6 +398,33 @@ try {
       externallyRecovered,
     })}`);
   }
+
+  if (nativeTopmost.available) {
+    const nativeHandle = BigInt(await application.evaluate(({ BrowserWindow }) => {
+      const buffer = BrowserWindow.getAllWindows()[0]?.getNativeWindowHandle();
+      if (!buffer) return '0';
+      return (buffer.length >= 8
+        ? buffer.readBigUInt64LE(0)
+        : BigInt(buffer.readUInt32LE(0))).toString();
+    }));
+    const removed = nativeTopmost.set(nativeHandle, false);
+    if (removed.topmost !== false) {
+      throw new Error(`Could not simulate external TOPMOST loss: ${JSON.stringify(removed)}`);
+    }
+    await waitForNativeTopmost(nativeTopmost, nativeHandle, true);
+    const topmostRecovered = await page.evaluate(() => window.desktopChar?.getWindowState());
+    if (topmostRecovered?.nativeWindow?.topmost !== true
+      || topmostRecovered.visible !== true
+      || topmostRecovered.visibilityIntent !== true
+      || topmostRecovered.presentation.opacity !== 1
+      || topmostRecovered.presentation.requestId !== externallyRecovered.state.presentation.requestId) {
+      throw new Error(`Native TOPMOST loss did not recover without restarting presentation: ${JSON.stringify({
+        externallyRecovered: externallyRecovered.state,
+        topmostRecovered,
+      })}`);
+    }
+  }
+
   await page.evaluate(async () => {
     const api = window.desktopChar;
     if (!api) throw new Error('Desktop preload bridge is missing');
@@ -558,6 +592,15 @@ async function waitForPresentationPhase(page, expected) {
     await new Promise(resolve => setTimeout(resolve, 25));
   }
   throw new Error(`Avatar presentation did not become ${expected}`);
+}
+
+async function waitForNativeTopmost(bridge, windowHandle, expected) {
+  const deadline = Date.now() + 2_000;
+  while (Date.now() < deadline) {
+    if (bridge.inspect(windowHandle).topmost === expected) return;
+    await new Promise(resolve => setTimeout(resolve, 25));
+  }
+  throw new Error(`Avatar native TOPMOST did not become ${expected}`);
 }
 
 async function chatBubbleLayout(page) {

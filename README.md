@@ -79,6 +79,7 @@ npm run desktop
 ```bash
 npm run check
 npm run diagnose:tts
+npm run diagnose:topmost
 npm audit --omit=dev
 npm run test:smoke
 npm run test:desktop-smoke

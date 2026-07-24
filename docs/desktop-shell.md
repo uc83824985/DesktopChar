@@ -209,9 +209,15 @@ Koffi 只用于 Electron 没有公开等价能力、且调用短小同步的 Win
 npm run desktop
 npm run test:desktop
 npm run test:desktop-smoke
+npm run diagnose:topmost
 ```
 
 `npm run desktop` 会先构建再启动透明悬浮窗口。`body` 的 `data-pixel-readback` 会显示 `async-pbo` 或 `sync-readpixels`；`data-pixel-sample` 是最新原始样本，`data-pixel-selection` 是防抖后的确认状态，并额外记录 alpha、命中/透明连续计数、提交/完成帧号与 fence 延迟帧数。自动烟雾测试会验证窗口透明/置顶/尺寸、像素读取适配器已启用、初始穿透、拖动后原生 bounds，以及 renderer 收到的 bounds 是否一致。
+
+`diagnose:topmost` 使用隔离的 user-data 和动态 loopback 端口启动真实 Electron 窗口，
+从进程外清除原生 `WS_EX_TOPMOST`，再确认 watchdog 在不改变 presentation request、
+opacity 或焦点的情况下恢复置顶。它用于区分“窗口/渲染丢失”和“Electron 仍报告
+always-on-top，但原生 Z-order 已被截图工具修改”。
 
 ### PointerPresentation 单入口
 

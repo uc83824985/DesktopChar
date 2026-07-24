@@ -12,6 +12,7 @@ import {
 import { createAgentHttpServer } from './agent-http-server.mjs';
 import { createNativeCursorRefresh } from './cursor-refresh.mjs';
 import { createNativeWindowPosition } from './native-window-position.mjs';
+import { createNativeWindowTopmost } from './native-window-topmost.mjs';
 import { createMcpServicesController } from './mcp-services-controller.mjs';
 import { normalizeDesktopConfig, resolveDesktopConfigPath } from './mcp-services-config.mjs';
 import { createPerformanceModelController } from './performance-model-controller.mjs';
@@ -95,6 +96,7 @@ let avatarVisibilityRecoveryTimer;
 let avatarBounds = null;
 let cursorTimer;
 let cursorRefreshTimer;
+let avatarNativeStateTimer;
 let dragState = null;
 let agentServer;
 let agentServerSignature = '';
@@ -105,6 +107,8 @@ let pointerPresentation = { passthrough: true, cursor: 'default' };
 let pointerPresentationApplied = false;
 const nativeCursorRefresh = createNativeCursorRefresh();
 const nativeWindowPosition = createNativeWindowPosition();
+const nativeWindowTopmost = createNativeWindowTopmost();
+let nativeTopmostDriftActive = false;
 const requestedDragWindowApi = process.env.DESKTOP_CHAR_DRAG_WINDOW_API ?? 'auto';
 if (!['auto', 'native', 'setBounds'].includes(requestedDragWindowApi)) {
   throw new TypeError('DESKTOP_CHAR_DRAG_WINDOW_API must be auto, native, or setBounds');
@@ -212,6 +216,8 @@ const shutdown = createShutdownCoordinator({
     safeLog('[desktop-char] shutdown start', { reason });
     if (cursorTimer) clearInterval(cursorTimer);
     cursorTimer = undefined;
+    if (avatarNativeStateTimer) clearInterval(avatarNativeStateTimer);
+    avatarNativeStateTimer = undefined;
     if (cursorRefreshTimer) clearTimeout(cursorRefreshTimer);
     cursorRefreshTimer = undefined;
     await Promise.allSettled([
@@ -297,6 +303,7 @@ function createAvatarWindow() {
       if (avatarWindow.isAlwaysOnTop() !== desktopConfig.window.alwaysOnTop) {
         avatarWindow.setAlwaysOnTop(desktopConfig.window.alwaysOnTop);
       }
+      reconcileAvatarTopmost('window-show');
       avatarWindow.moveTop();
     }
   });
@@ -319,6 +326,9 @@ function createAvatarWindow() {
     if (!avatarWindow || avatarWindow.isDestroyed()) return;
     avatarWindow.webContents.send(channels.cursorPoint, screen.getCursorScreenPoint());
   }, 33);
+  avatarNativeStateTimer = setInterval(() => {
+    reconcileAvatarTopmost('watchdog', { deferForForegroundTopmost: true });
+  }, 250);
 }
 
 function createDesktopTray() {
@@ -379,6 +389,7 @@ function setAvatarVisibility(visible) {
     if (avatarWindow.isAlwaysOnTop() !== desktopConfig.window.alwaysOnTop) {
       avatarWindow.setAlwaysOnTop(desktopConfig.window.alwaysOnTop);
     }
+    reconcileAvatarTopmost('presentation-show');
     avatarFrameSubscriptionActive = true;
     avatarWindow.webContents.beginFrameSubscription(false, image => {
       if (image.isEmpty()) return;
@@ -410,6 +421,7 @@ function completeAvatarPresentation(requestId, source) {
   if (avatarWindow.isAlwaysOnTop() !== desktopConfig.window.alwaysOnTop) {
     avatarWindow.setAlwaysOnTop(desktopConfig.window.alwaysOnTop);
   }
+  reconcileAvatarTopmost('presentation-complete');
   avatarWindow.moveTop();
   avatarWindow.setOpacity(1);
   avatarPresentationPhase = 'visible';
@@ -463,6 +475,86 @@ function scheduleAvatarVisibilityRecovery(reason) {
 function cancelAvatarVisibilityRecovery() {
   if (avatarVisibilityRecoveryTimer) clearTimeout(avatarVisibilityRecoveryTimer);
   avatarVisibilityRecoveryTimer = undefined;
+}
+
+function reconcileAvatarTopmost(reason, options = {}) {
+  if (!avatarWindow || avatarWindow.isDestroyed() || !nativeWindowTopmost.available) return;
+  if (!avatarVisibilityIntent || avatarPresentationPhase === 'hidden') return;
+  const windowHandle = nativeWindowHandleAddress(avatarWindow.getNativeWindowHandle());
+  const expected = desktopConfig.window.alwaysOnTop;
+  const before = nativeWindowTopmost.inspect(windowHandle);
+  if (!before.valid) {
+    safeError('[avatar-visibility] native window inspection failed', {
+      reason,
+      backend: nativeWindowTopmost.backend,
+      error: before.error,
+    });
+    return;
+  }
+  if (before.topmost === expected) {
+    if (nativeTopmostDriftActive) {
+      safeLog('[avatar-visibility] native topmost restored externally', {
+        reason,
+        topmost: before.topmost,
+        exStyle: before.exStyle,
+      });
+      nativeTopmostDriftActive = false;
+    }
+    return;
+  }
+
+  const foreground = nativeWindowTopmost.foreground();
+  if (!nativeTopmostDriftActive) {
+    safeLog('[avatar-visibility] native topmost drift detected', {
+      reason,
+      expected,
+      electronTopmost: avatarWindow.isAlwaysOnTop(),
+      nativeTopmost: before.topmost,
+      exStyle: before.exStyle,
+      foreground: {
+        handle: foreground.handle ? `0x${foreground.handle.toString(16).toUpperCase()}` : null,
+        topmost: foreground.topmost,
+        exStyle: foreground.exStyle,
+      },
+    });
+    nativeTopmostDriftActive = true;
+  }
+  if (options.deferForForegroundTopmost
+    && foreground.valid
+    && foreground.handle !== windowHandle
+    && foreground.topmost) return;
+
+  const result = nativeWindowTopmost.set(windowHandle, expected);
+  const facts = {
+    reason,
+    expected,
+    electronTopmost: avatarWindow.isAlwaysOnTop(),
+    before: { topmost: before.topmost, exStyle: before.exStyle },
+    result,
+  };
+  if (result.topmost === expected) {
+    safeLog('[avatar-visibility] native topmost repaired', facts);
+    nativeTopmostDriftActive = false;
+  }
+  else safeError('[avatar-visibility] native topmost repair failed', facts);
+}
+
+function nativeAvatarWindowState() {
+  if (!avatarWindow || avatarWindow.isDestroyed() || !nativeWindowTopmost.available) {
+    return {
+      backend: nativeWindowTopmost.backend,
+      topmost: null,
+      exStyle: null,
+    };
+  }
+  const state = nativeWindowTopmost.inspect(
+    nativeWindowHandleAddress(avatarWindow.getNativeWindowHandle()),
+  );
+  return {
+    backend: nativeWindowTopmost.backend,
+    topmost: state.topmost,
+    exStyle: state.exStyle,
+  };
 }
 
 function registerIpc() {
@@ -673,6 +765,7 @@ function windowState() {
     alwaysOnTop: avatarWindow.isAlwaysOnTop(),
     visible: avatarWindowVisible(),
     visibilityIntent: avatarVisibilityIntent,
+    nativeWindow: nativeAvatarWindowState(),
     presentation: {
       phase: avatarPresentationPhase,
       requestId: avatarPresentationRequestId,
@@ -700,6 +793,7 @@ function applyDesktopConfig(config, metadata = {}) {
     if (avatarWindow.isAlwaysOnTop() !== config.window.alwaysOnTop) {
       avatarWindow.setAlwaysOnTop(config.window.alwaysOnTop);
     }
+    reconcileAvatarTopmost('config-apply');
     publishDesktopConfigState();
   }
   if (desktopStarted && !metadata.initial) {
