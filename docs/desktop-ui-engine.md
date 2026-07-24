@@ -122,6 +122,16 @@ Scene UI 引擎不直接调用 Electron：
 
 这保留了 NagaAgent 内容测量的有效流程，同时避免 UI 组件直接持有窗口状态。
 
+Electron main 分别保存“用户希望角色显示”的 visibility intent 和 BrowserWindow 的实际
+可见状态，托盘不能把两者当成同一个布尔值。Snipaste 等外部顶层工具若在截图或保存
+过程中隐藏、最小化透明窗口，`hide` / `minimize` 只被视为外部窗口事实，不会改写用户
+意图；main 延迟 250ms 复核后重新走“透明 → 等待有效渲染帧 → 恢复不透明”的 presentation
+握手，并用 `showInactive()` 与 `moveTop()` 恢复层级而不抢焦点。若外部工具已自行恢复，
+`show` 事件只重新确认 always-on-top 和 Z-order，不重复创建 presentation。托盘标签按
+实际状态显示，因此即使自动恢复失败，第一次点击也会执行“显示”而不是先把仍为 true 的
+内部意图切成隐藏。回归测试直接从 Electron 外部调用 `BrowserWindow.hide()`，确认模型
+缩放、bounds、WebGL context loss 计数均不变化，且只能在收到有效帧后恢复 opacity。
+
 ## 当前完成范围
 
 已完成：

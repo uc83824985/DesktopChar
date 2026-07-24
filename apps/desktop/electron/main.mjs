@@ -17,7 +17,9 @@ import { normalizeDesktopConfig, resolveDesktopConfigPath } from './mcp-services
 import { createPerformanceModelController } from './performance-model-controller.mjs';
 import { createShutdownCoordinator } from './shutdown-coordinator.mjs';
 import {
+  effectiveAvatarVisibility,
   nextAvatarVisibility,
+  shouldRecoverAvatarVisibility,
   trayIconRepresentations,
   trayVisibilityLabel,
 } from './tray-policy.mjs';
@@ -89,6 +91,7 @@ let avatarPresentationPhase = 'hidden';
 let avatarPresentationRequestId = 0;
 let avatarPresentationTimer;
 let avatarFrameSubscriptionActive = false;
+let avatarVisibilityRecoveryTimer;
 let avatarBounds = null;
 let cursorTimer;
 let cursorRefreshTimer;
@@ -193,6 +196,7 @@ function registerRendererProtocol() {
 
 const shutdown = createShutdownCoordinator({
   hidePresentation() {
+    cancelAvatarVisibilityRecovery();
     cancelAvatarPresentation();
     avatarVisibilityIntent = false;
     avatarPresentationPhase = 'hidden';
@@ -286,9 +290,26 @@ function createAvatarWindow() {
   });
   avatarWindow.on('move', publishBounds);
   avatarWindow.on('resize', publishBounds);
-  avatarWindow.on('show', updateTrayMenu);
-  avatarWindow.on('hide', updateTrayMenu);
+  avatarWindow.on('show', () => {
+    updateTrayMenu();
+    if (avatarVisibilityIntent && avatarPresentationPhase === 'visible') {
+      cancelAvatarVisibilityRecovery();
+      if (avatarWindow.isAlwaysOnTop() !== desktopConfig.window.alwaysOnTop) {
+        avatarWindow.setAlwaysOnTop(desktopConfig.window.alwaysOnTop);
+      }
+      avatarWindow.moveTop();
+    }
+  });
+  avatarWindow.on('hide', () => {
+    updateTrayMenu();
+    scheduleAvatarVisibilityRecovery('window-hide');
+  });
+  avatarWindow.on('minimize', () => {
+    updateTrayMenu();
+    scheduleAvatarVisibilityRecovery('window-minimize');
+  });
   avatarWindow.on('closed', () => {
+    cancelAvatarVisibilityRecovery();
     cancelAvatarPresentation();
     avatarWindow = null;
   });
@@ -323,9 +344,16 @@ function createDesktopTray() {
 
 function updateTrayMenu() {
   if (!desktopTray) return;
-  const avatarVisible = avatarVisibilityIntent;
+  const avatarVisible = effectiveAvatarVisibility({
+    intentVisible: avatarVisibilityIntent,
+    windowVisible: avatarWindowVisible(),
+    presentationPhase: avatarPresentationPhase,
+  });
   desktopTray.setContextMenu(Menu.buildFromTemplate([
-    { label: trayVisibilityLabel(avatarVisible), click: () => setAvatarVisibility(!avatarVisible) },
+    {
+      label: trayVisibilityLabel(avatarVisible),
+      click: () => setAvatarVisibility(nextAvatarVisibility(avatarVisible)),
+    },
     { label: '恢复默认位置', click: restoreDefaultPosition },
     { type: 'separator' },
     { label: '退出 DesktopChar', click: () => { void requestShutdown('tray-menu'); } },
@@ -334,14 +362,19 @@ function updateTrayMenu() {
 
 function setAvatarVisibility(visible) {
   if (!avatarWindow || avatarWindow.isDestroyed()) return;
-  if (visible === avatarVisibilityIntent && avatarPresentationPhase !== 'warming') return;
+  const windowVisible = avatarWindowVisible();
+  if (visible === avatarVisibilityIntent
+    && avatarPresentationPhase !== 'warming'
+    && (!visible || windowVisible)) return;
   avatarVisibilityIntent = visible;
   dragState = null;
   if (visible) {
+    cancelAvatarVisibilityRecovery();
     const requestId = ++avatarPresentationRequestId;
     cancelAvatarPresentation();
     avatarPresentationPhase = 'warming';
     avatarWindow.setOpacity(0);
+    if (avatarWindow.isMinimized()) avatarWindow.restore();
     avatarWindow.showInactive();
     if (avatarWindow.isAlwaysOnTop() !== desktopConfig.window.alwaysOnTop) {
       avatarWindow.setAlwaysOnTop(desktopConfig.window.alwaysOnTop);
@@ -358,6 +391,7 @@ function setAvatarVisibility(visible) {
     }, 1_000);
   }
   else {
+    cancelAvatarVisibilityRecovery();
     ++avatarPresentationRequestId;
     cancelAvatarPresentation();
     avatarPresentationPhase = 'hidden';
@@ -371,6 +405,12 @@ function completeAvatarPresentation(requestId, source) {
   if (!avatarWindow || avatarWindow.isDestroyed()
     || requestId !== avatarPresentationRequestId || !avatarVisibilityIntent) return;
   cancelAvatarPresentation();
+  if (avatarWindow.isMinimized()) avatarWindow.restore();
+  if (!avatarWindow.isVisible()) avatarWindow.showInactive();
+  if (avatarWindow.isAlwaysOnTop() !== desktopConfig.window.alwaysOnTop) {
+    avatarWindow.setAlwaysOnTop(desktopConfig.window.alwaysOnTop);
+  }
+  avatarWindow.moveTop();
   avatarWindow.setOpacity(1);
   avatarPresentationPhase = 'visible';
   updateTrayMenu();
@@ -384,6 +424,45 @@ function cancelAvatarPresentation() {
     avatarWindow.webContents.endFrameSubscription();
   }
   avatarFrameSubscriptionActive = false;
+}
+
+function avatarWindowVisible() {
+  return Boolean(avatarWindow)
+    && !avatarWindow.isDestroyed()
+    && avatarWindow.isVisible()
+    && !avatarWindow.isMinimized();
+}
+
+function scheduleAvatarVisibilityRecovery(reason) {
+  if (!avatarWindow || avatarWindow.isDestroyed()) return;
+  if (!shouldRecoverAvatarVisibility({
+    intentVisible: avatarVisibilityIntent,
+    windowVisible: avatarWindow.isVisible(),
+    minimized: avatarWindow.isMinimized(),
+    presentationPhase: avatarPresentationPhase,
+  })) return;
+  if (avatarVisibilityRecoveryTimer) clearTimeout(avatarVisibilityRecoveryTimer);
+  avatarVisibilityRecoveryTimer = setTimeout(() => {
+    avatarVisibilityRecoveryTimer = undefined;
+    if (!avatarWindow || avatarWindow.isDestroyed()) return;
+    if (!shouldRecoverAvatarVisibility({
+      intentVisible: avatarVisibilityIntent,
+      windowVisible: avatarWindow.isVisible(),
+      minimized: avatarWindow.isMinimized(),
+      presentationPhase: avatarPresentationPhase,
+    })) return;
+    safeLog('[avatar-visibility] recovering unexpected window state', {
+      reason,
+      visible: avatarWindow.isVisible(),
+      minimized: avatarWindow.isMinimized(),
+    });
+    setAvatarVisibility(true);
+  }, 250);
+}
+
+function cancelAvatarVisibilityRecovery() {
+  if (avatarVisibilityRecoveryTimer) clearTimeout(avatarVisibilityRecoveryTimer);
+  avatarVisibilityRecoveryTimer = undefined;
 }
 
 function registerIpc() {
@@ -592,7 +671,8 @@ function windowState() {
     mousePassthrough: pointerPresentation.passthrough,
     pointerPresentation: { ...pointerPresentation },
     alwaysOnTop: avatarWindow.isAlwaysOnTop(),
-    visible: avatarVisibilityIntent,
+    visible: avatarWindowVisible(),
+    visibilityIntent: avatarVisibilityIntent,
     presentation: {
       phase: avatarPresentationPhase,
       requestId: avatarPresentationRequestId,

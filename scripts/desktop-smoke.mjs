@@ -368,6 +368,29 @@ try {
     previousPresentationRequestId = restored.state.presentation.requestId;
   }
 
+  await application.evaluate(({ BrowserWindow }) => {
+    BrowserWindow.getAllWindows()[0]?.hide();
+  });
+  await waitForMainWindowVisibility(application, true);
+  await waitForPresentationPhase(page, 'visible');
+  const externallyRecovered = await page.evaluate(async () => ({
+    state: await window.desktopChar?.getWindowState(),
+    scale: document.body.dataset.modelScale,
+    bounds: document.body.dataset.windowBounds,
+    webglContextLosses: document.body.dataset.webglContextLosses,
+  }));
+  if (externallyRecovered.state?.visible !== true
+    || externallyRecovered.state.visibilityIntent !== true
+    || externallyRecovered.state.presentation.requestId <= previousPresentationRequestId
+    || externallyRecovered.state.presentation.opacity !== 1
+    || externallyRecovered.scale !== beforeVisibilityCycles.scale
+    || externallyRecovered.bounds !== beforeVisibilityCycles.bounds
+    || externallyRecovered.webglContextLosses !== beforeVisibilityCycles.webglContextLosses) {
+    throw new Error(`Externally hidden avatar did not recover through a valid rendered frame: ${JSON.stringify({
+      beforeVisibilityCycles,
+      externallyRecovered,
+    })}`);
+  }
   await page.evaluate(async () => {
     const api = window.desktopChar;
     if (!api) throw new Error('Desktop preload bridge is missing');

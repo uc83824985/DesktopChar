@@ -1,7 +1,9 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 import {
+  effectiveAvatarVisibility,
   nextAvatarVisibility,
+  shouldRecoverAvatarVisibility,
   trayIconRepresentations,
   trayVisibilityLabel,
 } from './tray-policy.mjs';
@@ -28,4 +30,54 @@ test('tray visibility action and label always describe the next transition', () 
   assert.equal(nextAvatarVisibility(true), false);
   assert.equal(trayVisibilityLabel(false), '显示角色');
   assert.equal(nextAvatarVisibility(false), true);
+});
+
+test('effective visibility distinguishes user intent from an externally hidden window', () => {
+  assert.equal(effectiveAvatarVisibility({
+    intentVisible: true,
+    windowVisible: true,
+    presentationPhase: 'visible',
+  }), true);
+  assert.equal(effectiveAvatarVisibility({
+    intentVisible: true,
+    windowVisible: false,
+    presentationPhase: 'visible',
+  }), false);
+  assert.equal(effectiveAvatarVisibility({
+    intentVisible: true,
+    windowVisible: true,
+    presentationPhase: 'warming',
+  }), true);
+  assert.equal(effectiveAvatarVisibility({
+    intentVisible: false,
+    windowVisible: true,
+    presentationPhase: 'visible',
+  }), false);
+});
+
+test('only an unintended visible-state loss requests recovery', () => {
+  assert.equal(shouldRecoverAvatarVisibility({
+    intentVisible: true,
+    windowVisible: false,
+    minimized: false,
+    presentationPhase: 'visible',
+  }), true);
+  assert.equal(shouldRecoverAvatarVisibility({
+    intentVisible: true,
+    windowVisible: true,
+    minimized: true,
+    presentationPhase: 'visible',
+  }), true);
+  assert.equal(shouldRecoverAvatarVisibility({
+    intentVisible: false,
+    windowVisible: false,
+    minimized: false,
+    presentationPhase: 'hidden',
+  }), false);
+  assert.equal(shouldRecoverAvatarVisibility({
+    intentVisible: true,
+    windowVisible: false,
+    minimized: false,
+    presentationPhase: 'warming',
+  }), false);
 });

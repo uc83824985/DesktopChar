@@ -23,3 +23,24 @@ export function trayVisibilityLabel(avatarVisible) {
 export function nextAvatarVisibility(avatarVisible) {
   return !avatarVisible;
 }
+
+export function effectiveAvatarVisibility({
+  intentVisible,
+  windowVisible,
+  presentationPhase,
+}) {
+  if (!intentVisible) return false;
+  if (presentationPhase === 'warming') return true;
+  return presentationPhase === 'visible' && windowVisible;
+}
+
+export function shouldRecoverAvatarVisibility({
+  intentVisible,
+  windowVisible,
+  minimized,
+  presentationPhase,
+}) {
+  return intentVisible
+    && presentationPhase === 'visible'
+    && (!windowVisible || minimized);
+}

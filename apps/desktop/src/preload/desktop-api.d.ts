@@ -16,6 +16,7 @@ export interface DesktopWindowState {
   pointerPresentation: PointerPresentation;
   alwaysOnTop: boolean;
   visible: boolean;
+  visibilityIntent: boolean;
   presentation: {
     phase: 'hidden' | 'warming' | 'visible';
     requestId: number;
