@@ -6,6 +6,7 @@ dist/
 out/
 coverage/
 *.log
+/artifacts/motion-audit/
 
 # Local environment
 .env

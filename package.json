@@ -23,6 +23,7 @@
     "diagnose:managed-exit": "npm run build && node scripts/managed-performance-exit-diagnostic.mjs",
     "diagnose:drag": "npm run build && node scripts/drag-compositor-diagnostic.mjs",
     "diagnose:topmost": "node scripts/topmost-recovery-diagnostic.mjs",
+    "motion:audit": "npm run build && node --experimental-strip-types scripts/motion-audit.ts",
     "test": "node --experimental-strip-types --test packages/*/test/*.test.ts && npm run test:local-mcp && npm run test:desktop",
     "typecheck": "tsc --noEmit",
     "check": "npm run typecheck && npm test && npm run test:native && npm run build"

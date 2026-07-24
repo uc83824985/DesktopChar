@@ -42,10 +42,12 @@ import {
   installCubism4UpdatePipeline,
   PixelCoverageLatch,
   RuntimeParameterFrame,
+  summarizeLive2dMotionSource,
   WebGLPixelReadbackBackend,
 } from '../../../../packages/live2d-renderer/src/index.ts';
 import type {
   Cubism4UpdatePipelineHandle,
+  Live2dMotionSourceSummary,
   Live2dAssetPreviewCatalog,
   Live2dMotionPreviewResource,
   PixelCoverageResult,
@@ -97,6 +99,8 @@ import type {
 installCspShaderCompiler({ ShaderSystem });
 Live2DModel.registerTicker(Ticker);
 const desktopShell = window.desktopChar;
+const motionAuditRequested = !desktopShell
+  && new URLSearchParams(location.search).get('motionAudit') === '1';
 if (desktopShell) {
   document.documentElement.dataset.shell = 'floating';
   document.body.dataset.shell = 'floating';
@@ -122,7 +126,62 @@ const app = new Application({ view: canvas, resizeTo: window, backgroundAlpha: 0
 type CubismCoreModel = {
   setParameterValueById(id: string, value: number): void;
   getParameterValueById(id: string): number;
+  saveParameters(): void;
+  getModel(): {
+    parameters: {
+      count: number;
+      ids: string[];
+      minimumValues: Float32Array;
+      maximumValues: Float32Array;
+      defaultValues: Float32Array;
+      values: Float32Array;
+    };
+    drawables: {
+      count: number;
+      ids: string[];
+      opacities: Float32Array;
+    };
+  };
 };
+interface MotionAuditParameterDefinition {
+  id: string;
+  minimumValue: number;
+  maximumValue: number;
+  defaultValue: number;
+}
+interface MotionAuditResourceDescription extends Live2dMotionPreviewResource {
+  source: Live2dMotionSourceSummary;
+}
+interface MotionAuditDescription {
+  schemaVersion: 1;
+  characterId: string;
+  viewport: { width: number; height: number; deviceScaleFactor: number };
+  resources: MotionAuditResourceDescription[];
+  parameters: MotionAuditParameterDefinition[];
+  drawables: string[];
+}
+interface MotionAuditTelemetry {
+  capturedAtMs: number;
+  resourceId: string | null;
+  motionElapsedMs: number | null;
+  motionState: string;
+  parameterValues: number[];
+  drawableOpacities: number[];
+  visibleDrawableCount: number;
+  modelBounds: { x: number; y: number; width: number; height: number };
+}
+interface MotionAuditBrowserApi {
+  describe(): Promise<MotionAuditDescription>;
+  prepare(): Promise<MotionAuditTelemetry>;
+  startMotion(resourceId: string): Promise<MotionAuditTelemetry>;
+  sampleAt(targetMs: number): Promise<MotionAuditTelemetry>;
+  finish(recoveryMs: number): Promise<MotionAuditTelemetry>;
+}
+declare global {
+  interface Window {
+    desktopCharMotionAudit?: MotionAuditBrowserApi;
+  }
+}
 interface ToneSyncTrace extends KnownToneResponseTrace {
   level: number;
   modelValue?: number;
@@ -412,7 +471,9 @@ let assetPreviewIsolation: AssetPreviewIsolationController | undefined;
 let restoreGazeAfterAssetPreviewIsolation = false;
 let assetPreviewMotionTimer: ReturnType<typeof setTimeout> | undefined;
 let assetPreviewMotionToken = 0;
+let assetPreviewMotionStartedAtMs: number | undefined;
 const assetPreviewMotionDurations = new Map<string, Promise<number>>();
+const motionAuditSourceSummaries = new Map<string, Promise<Live2dMotionSourceSummary>>();
 let cubismUpdatePipeline: Cubism4UpdatePipelineHandle | undefined;
 let runtime: AvatarRuntime | undefined;
 let gazeFrameDriverAttached = false;
@@ -708,6 +769,7 @@ try {
   }));
   reset.addEventListener('click', () => runtime?.dispatch({ type: 'user.interrupt-requested' }));
   registerDevelopmentUi();
+  if (motionAuditRequested) installMotionAuditApi(characterConfig.id);
   canvas.addEventListener('contextmenu', openAvatarContextMenu);
   if (!desktopShell) canvas.addEventListener('click', openBrowserInteractionPanel);
   canvas.addEventListener('keydown', event => {
@@ -738,6 +800,7 @@ try {
     stopAssetPreviewMotion('disposed');
     assetPreviewIsolation?.dispose();
     assetPreviewIsolation = undefined;
+    delete window.desktopCharMotionAudit;
     for (const timer of speechBubbleDismissTimers.values()) clearTimeout(timer);
     speechBubbleDismissTimers.clear();
   }, { once: true });
@@ -1397,6 +1460,7 @@ function previewMotionResource(resource: Live2dMotionPreviewResource): void {
     if (token !== assetPreviewMotionToken) return;
     if (!started) throw new Error(`Live2D motion ${resource.id} did not start`);
     const startedAt = performance.now();
+    assetPreviewMotionStartedAtMs = startedAt;
     document.body.dataset.assetPreviewState = 'playing';
     const durationMs = await duration;
     if (token !== assetPreviewMotionToken) return;
@@ -1406,6 +1470,7 @@ function previewMotionResource(resource: Live2dMotionPreviewResource): void {
       if (assetPreviewIsolation?.locked) assetPreviewIsolation.finishMotionPreview();
       else activeModel.internalModel.motionManager.stopAllMotions();
       assetPreviewMotionTimer = undefined;
+      assetPreviewMotionStartedAtMs = undefined;
       document.body.dataset.assetPreviewState = 'completed';
     }, remainingMs);
   }).catch(error => {
@@ -1426,6 +1491,7 @@ function stopAssetPreviewMotion(reason: string): void {
   assetPreviewMotionToken++;
   if (assetPreviewMotionTimer) clearTimeout(assetPreviewMotionTimer);
   assetPreviewMotionTimer = undefined;
+  assetPreviewMotionStartedAtMs = undefined;
   if (!active) return;
   model?.internalModel.motionManager.stopAllMotions();
   document.body.dataset.assetPreviewState = reason;
@@ -1453,6 +1519,177 @@ function motionPreviewDuration(resource: Live2dMotionPreviewResource): Promise<n
   })();
   assetPreviewMotionDurations.set(resource.id, task);
   return task;
+}
+
+function installMotionAuditApi(characterId: string): void {
+  if (!motionAuditRequested || !model) return;
+  document.documentElement.dataset.motionAudit = 'ready';
+  document.body.dataset.motionAudit = 'ready';
+  window.desktopCharMotionAudit = {
+    async describe() {
+      if (!model) throw new Error('Live2D model is unavailable');
+      const nativeModel = coreModel(model).getModel();
+      const resources = await Promise.all(assetPreviewCatalog.motions.map(async resource => ({
+        ...resource,
+        source: await motionAuditSourceSummary(resource),
+      })));
+      return {
+        schemaVersion: 1,
+        characterId,
+        viewport: {
+          width: innerWidth,
+          height: innerHeight,
+          deviceScaleFactor: devicePixelRatio,
+        },
+        resources,
+        parameters: Array.from(
+          { length: nativeModel.parameters.count },
+          (_, index): MotionAuditParameterDefinition => ({
+            id: nativeModel.parameters.ids[index]!,
+            minimumValue: nativeModel.parameters.minimumValues[index]!,
+            maximumValue: nativeModel.parameters.maximumValues[index]!,
+            defaultValue: nativeModel.parameters.defaultValues[index]!,
+          }),
+        ),
+        drawables: nativeModel.drawables.ids.slice(0, nativeModel.drawables.count),
+      };
+    },
+    async prepare() {
+      if (!model || !runtime || !assetPreviewIsolation || !cubismUpdatePipeline) {
+        throw new Error('Motion audit dependencies are unavailable');
+      }
+      if (runtime.getSnapshot().state !== 'idle') {
+        throw new Error(`Motion audit requires idle Runtime, received ${runtime.getSnapshot().state}`);
+      }
+      stopCurrentMotion('replaced');
+      stopAssetPreviewMotion('audit-prepare');
+      expressionRequestToken++;
+      if (!assetPreviewIsolation.locked) setAssetPreviewIsolationLocked(true);
+      else assetPreviewIsolation.resetBaseline();
+      cubismUpdatePipeline.scheduler.setEnabled('cubism.eye-blink', false);
+      cubismUpdatePipeline.scheduler.setEnabled('cubism.breath', false);
+      resetMotionAuditParameters();
+      document.body.dataset.assetPreviewKind = 'baseline';
+      document.body.dataset.assetPreviewResource = 'neutral';
+      document.body.dataset.assetPreviewState = 'audit-baseline';
+      await waitForRenderedFrames(2);
+      return captureMotionAuditTelemetry();
+    },
+    async startMotion(resourceId) {
+      const resource = assetPreviewCatalog.motions.find(candidate => candidate.id === resourceId);
+      if (!resource) throw new Error(`Unknown motion audit resource: ${resourceId}`);
+      if (!assetPreviewIsolation?.locked) {
+        throw new Error('Motion audit baseline must be prepared before playback');
+      }
+      previewMotionResource(resource);
+      await waitForMotionAuditState(resource.id, 3_000);
+      await nextRenderedFrame();
+      return captureMotionAuditTelemetry();
+    },
+    async sampleAt(targetMs) {
+      if (!Number.isFinite(targetMs) || targetMs < 0) {
+        throw new TypeError('Motion audit targetMs must be a non-negative finite number');
+      }
+      const startedAtMs = assetPreviewMotionStartedAtMs;
+      if (startedAtMs === undefined) throw new Error('Motion audit has no active motion');
+      const remainingMs = startedAtMs + targetMs - performance.now();
+      if (remainingMs > 0) await delay(remainingMs);
+      if (assetPreviewMotionStartedAtMs !== startedAtMs) {
+        throw new Error(`Motion audit playback completed before ${targetMs}ms`);
+      }
+      await nextRenderedFrame();
+      return captureMotionAuditTelemetry();
+    },
+    async finish(recoveryMs) {
+      if (!Number.isFinite(recoveryMs) || recoveryMs < 0) {
+        throw new TypeError('Motion audit recoveryMs must be a non-negative finite number');
+      }
+      stopAssetPreviewMotion('audit-finished');
+      assetPreviewIsolation?.resetBaseline();
+      if (recoveryMs > 0) await delay(recoveryMs);
+      await waitForRenderedFrames(2);
+      document.body.dataset.assetPreviewKind = 'baseline';
+      document.body.dataset.assetPreviewResource = 'neutral';
+      document.body.dataset.assetPreviewState = 'audit-recovered';
+      return captureMotionAuditTelemetry();
+    },
+  };
+}
+
+function motionAuditSourceSummary(
+  resource: Live2dMotionPreviewResource,
+): Promise<Live2dMotionSourceSummary> {
+  const cached = motionAuditSourceSummaries.get(resource.id);
+  if (cached) return cached;
+  const task = (async () => {
+    const settings = model?.internalModel.motionManager.settings;
+    if (!settings) throw new Error('Live2D motion settings are unavailable');
+    const response = await fetch(settings.resolveURL(resource.file), { cache: 'force-cache' });
+    if (!response.ok) throw new Error(`Motion audit could not load ${resource.file}: HTTP ${response.status}`);
+    return summarizeLive2dMotionSource(await response.json());
+  })();
+  motionAuditSourceSummaries.set(resource.id, task);
+  return task;
+}
+
+function captureMotionAuditTelemetry(): MotionAuditTelemetry {
+  if (!model) throw new Error('Live2D model is unavailable');
+  const nativeModel = coreModel(model).getModel();
+  const bounds = model.getBounds();
+  const capturedAtMs = performance.now();
+  const motionElapsedMs = assetPreviewMotionStartedAtMs === undefined
+    ? null
+    : capturedAtMs - assetPreviewMotionStartedAtMs;
+  let visibleDrawableCount = 0;
+  for (let index = 0; index < nativeModel.drawables.count; index++) {
+    if (nativeModel.drawables.opacities[index]! > 1 / 255) visibleDrawableCount++;
+  }
+  return {
+    capturedAtMs,
+    resourceId: motionElapsedMs === null
+      ? null
+      : document.body.dataset.assetPreviewResource ?? null,
+    motionElapsedMs,
+    motionState: document.body.dataset.assetPreviewState ?? 'unknown',
+    parameterValues: Array.from(nativeModel.parameters.values),
+    drawableOpacities: Array.from(nativeModel.drawables.opacities),
+    visibleDrawableCount,
+    modelBounds: {
+      x: bounds.x,
+      y: bounds.y,
+      width: bounds.width,
+      height: bounds.height,
+    },
+  };
+}
+
+function resetMotionAuditParameters(): void {
+  if (!model) throw new Error('Live2D model is unavailable');
+  const core = coreModel(model);
+  const parameters = core.getModel().parameters;
+  parameters.values.set(parameters.defaultValues);
+  core.saveParameters();
+}
+
+async function waitForMotionAuditState(resourceId: string, timeoutMs: number): Promise<void> {
+  const deadline = performance.now() + timeoutMs;
+  while (performance.now() < deadline) {
+    if (document.body.dataset.assetPreviewResource === resourceId) {
+      const state = document.body.dataset.assetPreviewState;
+      if (state === 'playing') return;
+      if (state === 'failed') throw new Error(`Motion audit resource failed to start: ${resourceId}`);
+    }
+    await delay(10);
+  }
+  throw new Error(`Motion audit resource did not start within ${timeoutMs}ms: ${resourceId}`);
+}
+
+async function waitForRenderedFrames(count: number): Promise<void> {
+  for (let index = 0; index < count; index++) await nextRenderedFrame();
+}
+
+function delay(milliseconds: number): Promise<void> {
+  return new Promise(resolve => setTimeout(resolve, milliseconds));
 }
 
 function assetFileStem(file: string): string {
@@ -2136,11 +2373,12 @@ function fitModel(): void {
   if (!model) return;
   const layoutWidth = model.internalModel.width;
   const layoutHeight = model.internalModel.height;
-  const scale = desktopShell
+  const compactPresentation = Boolean(desktopShell) || motionAuditRequested;
+  const scale = compactPresentation
     ? Math.min(innerWidth / layoutWidth * 0.92, innerHeight / layoutHeight * 0.94)
     : Math.min(innerWidth / layoutWidth * 0.7, innerHeight / layoutHeight * 0.82);
   model.scale.set(scale);
   model.anchor.set(0.5, 0.5);
-  model.position.set(innerWidth * (desktopShell ? 0.5 : 0.68), innerHeight * 0.5);
+  model.position.set(innerWidth * (compactPresentation ? 0.5 : 0.68), innerHeight * 0.5);
   document.body.dataset.modelScale = scale.toFixed(6);
 }

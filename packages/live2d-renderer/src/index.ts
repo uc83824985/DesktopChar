@@ -6,6 +6,7 @@ export * from './expression-binding.ts';
 export * from './parameter-update-scheduler.ts';
 export * from './asset-preview-catalog.ts';
 export * from './asset-preview-isolation.ts';
+export * from './motion-audit.ts';
 export * from './cubism4-update-pipeline.ts';
 export * from './pixel-picking.ts';
 export * from './hold-drag.ts';

@@ -49,3 +49,8 @@ button:disabled { opacity: .38; cursor: wait; }
 @media (max-width: 720px) { .panel { top: auto; right: 18px; bottom: 18px; left: 18px; width: auto; transform: none; padding: 20px; } h1 { font-size: 36px; } }
 html[data-shell="floating"], body[data-shell="floating"], body[data-shell="floating"] main { background: transparent; }
 body[data-shell="floating"] .panel { display: none; }
+html[data-motion-audit="ready"], body[data-motion-audit="ready"], body[data-motion-audit="ready"] main { background: transparent; }
+body[data-motion-audit="ready"] .panel,
+body[data-motion-audit="ready"] .speech-bubble,
+body[data-motion-audit="ready"] .scene-context-menu,
+body[data-motion-audit="ready"] .scene-interaction-panel { display: none; }
