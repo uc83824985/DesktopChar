@@ -26,7 +26,7 @@ Electron 壳层在领域链路之外：main 独占原生窗口位置、包围盒
 
 配置同样按所有权拆分：用户偏好与服务连接进入应用 JSON，模型入口、能力白名单、GazeProfile 和 LipSyncProfile 进入随资产分发的 CharacterProfile JSON，窗口位置等易变值进入程序自动维护的状态文件。main 独占配置 revision、校验、文件监听和原子写入，Renderer 只能发送白名单 patch intent。所有效果参数必须有带 revision 的运行时重载路径：帧级参数由 Runtime 平滑切换，任务默认值从下一任务生效，模型等结构变化在 idle 边界原子替换；完整分级及保留的环境变量见 [配置所有权与 JSON 重构方案](configuration.md)。
 
-应用接入层包含语音合成 MCP Client（技术标识 TTS）、角色接入 MCP Server（技术标识 `characterMcp`）和模型无关的 `PerformanceInferencePort`。Electron main 的服务控制器独占连接、配置 revision、热重载与重连状态；角色接入 MCP 和兼容 Agent HTTP 最终只向 renderer 发送相同的白名单命令。首个表现模型 Adapter 使用 OpenAI-compatible HTTP，但领域层不依赖 Qwen、llama.cpp 或 HTTP；它只对 sealed 文本返回受限的 emotion/action 建议，并复用 `external / managed` 进程所有权语义。完整边界见 [本地表现模型接入设计](performance-model-integration.md)，MCP 生命周期与工具见 [MCP 服务生命周期与角色接入接口](mcp-services.md)。
+应用接入层包含语音合成 MCP Client（技术标识 TTS）、角色接入 MCP Server（技术标识 `characterMcp`）和模型无关的表现推理端口。Electron main 的服务控制器独占连接、配置 revision、热重载与重连状态；角色接入 MCP 和兼容 Agent HTTP 最终只向 renderer 发送相同的白名单命令。表现规划 v2 已拆成领域 `ExpressionCatalogPlanningAdapter` 与通用 `PerformanceModelTransport`：前者只处理 affect/ranked logical key，后者才处理 OpenAI-compatible HTTP。Qwen、llama.cpp、规则实现和未来进程内模型均不能看到角色 binding；旧角色保留 v1 emotion/action。完整边界见 [本地表现模型接入设计](performance-model-integration.md) 和 [角色动态表情目录与选择设计](expression-catalog.md)，MCP 生命周期与工具见 [MCP 服务生命周期与角色接入接口](mcp-services.md)。
 
 面向高频桌面交互和后续多 Agent 接入，目标架构在 Avatar Runtime 上游增加独立 `ConversationRuntime`：应用以不可变 Ledger、Context revision、版本化 Persona 和 Turn/Task 状态持有规范上下文；多个 reply Agent 只为不同 Turn 并发生成文本，提交后的 context-maintenance Agent 异步提出摘要/记忆 patch；表情和动作由本地表现模型按真实 Live2D 动作目录选择。所有用户可见回复经过单一提交入口，Avatar/Presentation Runtime 持有覆盖文本、气泡、语音、情绪和动作的唯一呈现队列。自动合并只能合并任务覆盖范围，不能改写原始消息；随机主动聊天也是受优先级、冷却和 TTL 约束的应用 Turn。完整边界、风险和下一阶段决策项见 [对话上下文与任务编排设计](conversation-orchestration.md)。
 
@@ -114,7 +114,7 @@ config -> contracts
 - 官方模型仓库提供模型配置、chat template、tokenizer/权重制品和 OpenAI-compatible 服务说明；具体 `Qwen3_5ForConditionalGeneration` 实现由推理框架提供。
 - 2B 模型默认 non-thinking，首版只用于 sealed 文本的情绪分析和当前 Live2D 动作目录选择，不生成回复或直接执行 motion。
 - 表现模型使用短 HTTP JSON 请求而不是 MCP；Adapter 永远只连接已就绪 endpoint。`external` 由外部系统持有进程，`managed` 由 Electron Supervisor 启停入口进程、探测 readiness、监控异常退出并回收进程树，不改变 Adapter。
-- 本地参考目录跳过了 LFS 权重实体；实际权重与量化格式按本机 profile 单独管理。
+- 本地参考目录现已具有完整 4.55GB safetensors 权重；量化格式仍按本机 profile 单独管理。
 - 详细事实、未验证项和 3070 验收范围见 [Qwen3.5-2B 本地表现规划阅读记录](references/qwen3.5-2b.md)。
 
 ## 当前实施进度
@@ -126,6 +126,6 @@ config -> contracts
 5. 已完成 Electron 透明窗口、安全 preload、透明区穿透、角色点击/拖动和 bounds 同步。
 6. 已接入可动态启停的语音合成 MCP Client、角色接入 MCP Server 与兼容 Agent HTTP；后续 ASR/真实 Agent 仍只通过 Event/Effect 端口连接。
 7. 已确定多 Agent 前置架构：应用持有规范对话上下文和唯一呈现队列；同步面只保留多 Turn reply Agent，提交后由 context-maintenance Agent 异步维护摘要/记忆。
-8. 已确定表情和已有 Live2D 动作暂由本地 Qwen3.5-2B 规划；external/managed HTTP 生命周期、角色级 `emotionBindings` 和退出回收已接入，动态动作 schema 和 3070 并发压测尚待实现。
+8. 已接入角色动态 ExpressionCatalog、确定性 Resolver、performance-planning v2、Adapter/Transport 分层和 Runtime `expressionKey` 主状态；Mao 八项资源均有可达性回归。Qwen3.5-2B 是可选 Transport 后端，关闭或失败时使用确定性目录规则；v1 `emotionBindings` 只作旧角色兼容。安全表情插值、大目录 shortlist、动态动作 schema 和 3070 并发压测仍待实现。
 
 外部 Agent 可通过角色接入 MCP 或兼容的 `127.0.0.1` HTTP 控制面发送完整 `PerformancePlan` 和中断请求，由 Electron main 转为白名单 IPC，再由 renderer 提交 Runtime；Agent 通过 Runtime snapshot 判断实际播放完成。角色接入 MCP 工具与动态服务管理见 [MCP 服务生命周期](mcp-services.md)，HTTP 请求结构见 [外部 Agent 本地 HTTP 接入指南](external-agent-http.md)。

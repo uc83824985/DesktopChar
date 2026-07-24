@@ -191,6 +191,20 @@ Mao 原始表情/动作资源预览，用于完成语义标注前的前台审阅
 和 renderer Effect。后续文本输入 presenter 复用同一 Host，但输入内容必须提交应用
 ConversationRuntime，不能由 DOM 直接调用 Agent。
 
+面板顶部提供“基准姿态锁定”调试状态，用于排除环境动画后逐项比较资源：
+
+- 锁定时先停止当前 motion、恢复 Neutral expression，并把 MotionManager 的自动
+  `Idle` 选择临时映射到不可用组；因此不会在下一帧重新随机播放待机动作；
+- 同时暂停会周期性写入头部角度的 `cubism.breath` 自然运动 Updater，但保留
+  `cubism.eye-blink`，因此角色可以继续眨眼而头部不再随呼吸摇动；
+- 锁定会通过 Runtime 事件临时关闭眼部跟随，解锁时只在原本开启的情况下恢复；
+- Runtime 后续发出的自动 expression/motion Effect 在 Renderer 边界被抑制，其中
+  motion 仍立即回报 completed，不能让 Runtime 卡在等待状态；
+- 手动资源按钮仍可使用。表情预览前先停 motion，动作预览前先恢复 Neutral；
+  动作资源播放完后重新停在基准姿态；
+- 解锁恢复角色资源声明的原始 Idle 组。该状态属于开发期 Renderer 诊断能力，不进入
+  正式的 Avatar Runtime 领域状态，也不能成为应用业务逻辑的条件。
+
 ### 已落地的应用 presenter：聊天气泡
 
 现有 renderer 已装配第一个只读应用 presenter：角色聊天气泡。它读取 Avatar Runtime 的活动 segment 与播放快照，通过纯函数投影完整、渐进追加和 KTV 高亮状态；不进入 Scene Engine 内置类型，也不在 DOM 中持有计划或播放进度。当前为 `scene-ui-dom` 落地前的应用装配验证，后续只迁移 Host 和角色锚点定位，保留领域契约。详见 [角色聊天气泡](speech-bubble.md)。

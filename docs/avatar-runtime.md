@@ -320,15 +320,20 @@ Timeline 是 Runtime 内部组件：
 Timeline 不使用 TTS 请求时间、音频下载时间或系统墙上时钟推测播放位置。首版以每个 segment 独立时间轴、按 sequence 串行播放。
 
 本地表现推理作为可取消的次级 Effect 与 TTS 并行启动。它只返回建议，不持有
-Avatar 状态：Runtime 记录请求 identity/revision、原计划允许补全的字段及角色能力
-白名单。迟到建议可以更新当前 `PerformanceTimeline`，但 Timeline 保留已触发 cue
-集合，所以不会重放动作。显式 emotion、显式 action（包括空数组）、旧 generation、
-已完成 segment、低置信度或能力目录之外的建议全部不会修改最终 plan。
+Avatar 状态：Runtime 记录 request、segment revision、catalog revision、原计划允许
+补全的字段及角色能力白名单。迟到建议可以更新当前 `PerformanceTimeline`，但
+Timeline 保留已触发 cue 集合，所以不会重放动作。显式 expression/emotion、显式
+action（包括空数组）、旧 generation/revision、已完成 segment、低置信度或目录之外
+的建议全部不会修改最终 plan。
 
-语义 emotion 与具体 Live2D expression 的关系由角色 sidecar 的
-`emotionBindings` 声明。Runtime 在 cue 生效时发出 `renderer.set-expression`
-Effect，并在计划完成或中断时发出 neutral/reset；Renderer 不参与 emotion 选择，
-也不持有独立表情状态。未绑定的 emotion 保留通用 ParameterMixer 降级路径。
+带 `expressionCatalog` 的角色以 `snapshot.expression.currentKey` 作为正式状态。
+推理 Adapter 只看到角色的语义 descriptors；Runtime 用确定性 Resolver 综合 affect、
+候选、历史和冷却选出 key，再从本地 bindings 得到 Live2D expression。cue 生效时才
+发出 `renderer.set-expression` Effect，计划完成或中断时恢复目录默认 key。Renderer
+不参与选择，也不持有独立表情状态。
+
+没有动态目录的旧角色继续使用 `emotionBindings`。粗粒度 Emotion 在 v2 中只作为
+可选上下文事实和兼容输入，未绑定的旧 emotion 仍保留 ParameterMixer 降级路径。
 
 ## Parameter Mixer 职责
 

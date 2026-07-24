@@ -82,6 +82,39 @@ Runtime 仍独占当前 emotion 和复位时机；Renderer 只能执行
 `exp_02`，用于以双眼笑资源提供清晰的前台验收效果。未声明绑定的旧资产继续使用
 通用参数层降级，不会隐式猜测 expression 编号。
 
+这是 performance-planning v1 的兼容结构。当前 Mao sidecar 还包含已经启用的动态
+`expressionCatalog`，用角色作用域 `expressionKey`、语义标签、原型句、AffectVector、
+权重、冷却和持续时间描述八项资源；`emotionBindings` 在迁移完成前继续保留：
+
+```json
+{
+  "expressionCatalog": {
+    "revision": 1,
+    "defaultExpressionKey": "neutral",
+    "descriptors": [
+      {
+        "expressionKey": "neutral",
+        "label": "中立",
+        "semanticTags": ["neutral", "reset", "calm"],
+        "prototypeTexts": ["好的。", "我知道了。"],
+        "affectPrototype": { "valence": 0, "arousal": 0.15 },
+        "baseWeight": 1,
+        "cooldownMs": 0,
+        "holdMs": { "minMs": 400, "maxMs": 900 },
+        "compatibleAvatarStates": ["idle", "listening", "thinking", "speaking", "presenting"]
+      }
+    ],
+    "bindings": {
+      "neutral": { "expression": "exp_01" }
+    }
+  }
+}
+```
+
+完整 Mao Profile 包含 `exp_01` 到 `exp_08` 的八个逻辑条目。解析器要求 descriptor
+与 binding key 完全对应；推理只接收 descriptors，bindings 只在 Runtime 本地查找。
+详见 [角色动态表情目录与选择设计](expression-catalog.md)。
+
 原先 `packages/config` 中硬编码的 `MAO_CHARACTER_CONFIG` 已迁移到该文件。`DESKTOP_CHAR_LIP_SYNC_GAIN` 也已退出常规配置入口，因为相同音频电平在不同模型上的嘴部表现是资产校准结果，而不是全局音频服务参数。
 
 `LipSyncProfile` 的字段所有权如下：
