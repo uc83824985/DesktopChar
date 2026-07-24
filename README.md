@@ -20,6 +20,7 @@
 
 角色级视线校准及资源修改边界见 [GazeProfile 工作流](docs/gaze-calibration.md)；透明区穿透、角色点击/拖动和窗口包围盒同步见 [透明桌面悬浮壳](docs/desktop-shell.md)。
 动态场景 UI 使用与 Scene Frame 同 revision 的框架无关 Surface，参考项目取舍和引擎/应用边界见 [桌面 UI 引擎层设计](docs/desktop-ui-engine.md)。
+Live2D Motion 可通过受全局帧预算约束的真实 WebGL 采集器导出 Contact Sheet、采样时点和参数轨迹，使用方式见 [自动动作审阅工具](docs/motion-audit.md)。
 角色语音可通过应用层聊天气泡以完整、渐进追加或 KTV 高亮方式投影，契约和 Agent 示例见 [角色聊天气泡](docs/speech-bubble.md)。
 语音合成 MCP Client 与角色接入 MCP Server 均支持右键动态启停、JSON 配置热重载、指数退避重连和官方 Client 连接测试，配置及角色工具见 [MCP 服务生命周期与角色接入接口](docs/mcp-services.md)。
 

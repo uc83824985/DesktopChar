@@ -12,6 +12,8 @@ Live2D `model3.json` 中的 Motion group、index 和文件名只是 Renderer 资
 5. 资源可达性、完整播放和语义候选可达性测试。
 
 开发期资源面板只证明原始 Motion 可以加载和播放，不代表以上链路已经完成。
+自动逐帧导出、Contact Sheet、参数轨迹和 Agent 审阅顺序见
+[Live2D 自动动作审阅工具](motion-audit.md)。
 
 ## Mao 当前人工审阅
 
