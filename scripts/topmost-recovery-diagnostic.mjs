@@ -56,6 +56,7 @@ try {
     throw new Error(`Could not simulate external TOPMOST loss: ${JSON.stringify(removed)}`);
   }
   await waitForTopmost(topmost, windowHandle, true);
+  await waitForEventMonitor(page, before.nativeWindow.eventMonitor.nativeMessageCount);
 
   const after = await page.evaluate(() => window.desktopChar?.getWindowState());
   if (!after?.visible
@@ -63,7 +64,10 @@ try {
     || after.nativeWindow?.topmost !== true
     || after.presentation.phase !== 'visible'
     || after.presentation.opacity !== 1
-    || after.presentation.requestId !== before.presentation.requestId) {
+    || after.presentation.requestId !== before.presentation.requestId
+    || after.nativeWindow.eventMonitor.nativeMessageCount
+      <= before.nativeWindow.eventMonitor.nativeMessageCount
+    || after.nativeWindow.eventMonitor.incidentRetryActive) {
     throw new Error(`TOPMOST recovery changed presentation state: ${JSON.stringify({
       before,
       removed,
@@ -76,6 +80,7 @@ try {
     before: nativeBefore,
     removed,
     after: topmost.inspect(windowHandle),
+    eventMonitor: after.nativeWindow.eventMonitor,
     presentationRequestId: after.presentation.requestId,
   }, null, 2));
 }
@@ -94,6 +99,20 @@ async function waitForTopmost(bridge, windowHandle, expected) {
     await new Promise(resolve => setTimeout(resolve, 25));
   }
   throw new Error(`Native TOPMOST did not recover to ${expected}`);
+}
+
+async function waitForEventMonitor(page, previousMessageCount) {
+  const deadline = Date.now() + 3_000;
+  while (Date.now() < deadline) {
+    const monitor = await page.evaluate(async () => (
+      await window.desktopChar?.getWindowState()
+    )?.nativeWindow?.eventMonitor);
+    if (monitor?.nativeMessageCount > previousMessageCount
+      && !monitor.eventCheckPending
+      && !monitor.incidentRetryActive) return;
+    await new Promise(resolve => setTimeout(resolve, 25));
+  }
+  throw new Error('Native TOPMOST event monitor did not settle after the window message');
 }
 
 async function reserveLoopbackPort() {

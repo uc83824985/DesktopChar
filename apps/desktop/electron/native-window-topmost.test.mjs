@@ -81,3 +81,24 @@ test('does not resubmit a matching native state and reports invalid windows', ()
   assert.throws(() => invalid.inspect(0n), /valid HWND/);
   assert.equal(createNativeWindowTopmost({ platform: 'linux' }).available, false);
 });
+
+test('can restore topmost immediately below an existing foreground topmost window', () => {
+  let exStyle = 0n;
+  const calls = [];
+  const topmost = createNativeWindowTopmost({
+    platform: 'win32',
+    bindings: {
+      isWindow: () => 1,
+      getForegroundWindow: () => 123n,
+      getWindowLongPtr: () => exStyle,
+      setWindowPos(...args) {
+        calls.push(args);
+        exStyle |= 0x8n;
+        return 1;
+      },
+      getLastError: () => 0,
+    },
+  });
+  assert.equal(topmost.set(99n, true, { insertAfter: 123n }).topmost, true);
+  assert.deepEqual(calls, [[99n, 123n, 0, 0, 0, 0, 0x0613]]);
+});

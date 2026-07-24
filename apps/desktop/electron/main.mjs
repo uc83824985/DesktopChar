@@ -17,6 +17,7 @@ import { createMcpServicesController } from './mcp-services-controller.mjs';
 import { normalizeDesktopConfig, resolveDesktopConfigPath } from './mcp-services-config.mjs';
 import { createPerformanceModelController } from './performance-model-controller.mjs';
 import { createShutdownCoordinator } from './shutdown-coordinator.mjs';
+import { createTopmostEventMonitor } from './topmost-event-monitor.mjs';
 import {
   effectiveAvatarVisibility,
   nextAvatarVisibility,
@@ -96,7 +97,7 @@ let avatarVisibilityRecoveryTimer;
 let avatarBounds = null;
 let cursorTimer;
 let cursorRefreshTimer;
-let avatarNativeStateTimer;
+let avatarTopmostEventMonitor;
 let dragState = null;
 let agentServer;
 let agentServerSignature = '';
@@ -200,6 +201,8 @@ function registerRendererProtocol() {
 
 const shutdown = createShutdownCoordinator({
   hidePresentation() {
+    avatarTopmostEventMonitor?.dispose();
+    avatarTopmostEventMonitor = undefined;
     cancelAvatarVisibilityRecovery();
     cancelAvatarPresentation();
     avatarVisibilityIntent = false;
@@ -216,8 +219,6 @@ const shutdown = createShutdownCoordinator({
     safeLog('[desktop-char] shutdown start', { reason });
     if (cursorTimer) clearInterval(cursorTimer);
     cursorTimer = undefined;
-    if (avatarNativeStateTimer) clearInterval(avatarNativeStateTimer);
-    avatarNativeStateTimer = undefined;
     if (cursorRefreshTimer) clearTimeout(cursorRefreshTimer);
     cursorRefreshTimer = undefined;
     await Promise.allSettled([
@@ -316,19 +317,27 @@ function createAvatarWindow() {
     scheduleAvatarVisibilityRecovery('window-minimize');
   });
   avatarWindow.on('closed', () => {
+    avatarTopmostEventMonitor?.dispose();
+    avatarTopmostEventMonitor = undefined;
     cancelAvatarVisibilityRecovery();
     cancelAvatarPresentation();
     avatarWindow = null;
   });
+  if (process.platform === 'win32' && nativeWindowTopmost.available) {
+    avatarTopmostEventMonitor = createTopmostEventMonitor({
+      window: avatarWindow,
+      reconcile: reconcileAvatarTopmost,
+      onError(error) {
+        safeError('[avatar-visibility] topmost event monitor failed', error);
+      },
+    });
+  }
   void avatarWindow.loadURL(devUrl ?? 'desktop-char://app/');
 
   cursorTimer = setInterval(() => {
     if (!avatarWindow || avatarWindow.isDestroyed()) return;
     avatarWindow.webContents.send(channels.cursorPoint, screen.getCursorScreenPoint());
   }, 33);
-  avatarNativeStateTimer = setInterval(() => {
-    reconcileAvatarTopmost('watchdog', { deferForForegroundTopmost: true });
-  }, 250);
 }
 
 function createDesktopTray() {
@@ -478,8 +487,10 @@ function cancelAvatarVisibilityRecovery() {
 }
 
 function reconcileAvatarTopmost(reason, options = {}) {
-  if (!avatarWindow || avatarWindow.isDestroyed() || !nativeWindowTopmost.available) return;
-  if (!avatarVisibilityIntent || avatarPresentationPhase === 'hidden') return;
+  if (!avatarWindow || avatarWindow.isDestroyed() || !nativeWindowTopmost.available) {
+    return 'inactive';
+  }
+  if (!avatarVisibilityIntent || avatarPresentationPhase === 'hidden') return 'inactive';
   const windowHandle = nativeWindowHandleAddress(avatarWindow.getNativeWindowHandle());
   const expected = desktopConfig.window.alwaysOnTop;
   const before = nativeWindowTopmost.inspect(windowHandle);
@@ -489,7 +500,7 @@ function reconcileAvatarTopmost(reason, options = {}) {
       backend: nativeWindowTopmost.backend,
       error: before.error,
     });
-    return;
+    return 'failed';
   }
   if (before.topmost === expected) {
     if (nativeTopmostDriftActive) {
@@ -500,7 +511,7 @@ function reconcileAvatarTopmost(reason, options = {}) {
       });
       nativeTopmostDriftActive = false;
     }
-    return;
+    return 'healthy';
   }
 
   const foreground = nativeWindowTopmost.foreground();
@@ -519,24 +530,34 @@ function reconcileAvatarTopmost(reason, options = {}) {
     });
     nativeTopmostDriftActive = true;
   }
-  if (options.deferForForegroundTopmost
+  const insertAfterForeground = options.deferForForegroundTopmost
+    && expected
     && foreground.valid
     && foreground.handle !== windowHandle
-    && foreground.topmost) return;
+    && foreground.topmost
+    ? foreground.handle
+    : undefined;
 
-  const result = nativeWindowTopmost.set(windowHandle, expected);
+  const result = nativeWindowTopmost.set(windowHandle, expected, {
+    insertAfter: insertAfterForeground,
+  });
   const facts = {
     reason,
     expected,
     electronTopmost: avatarWindow.isAlwaysOnTop(),
     before: { topmost: before.topmost, exStyle: before.exStyle },
+    insertAfterForeground: insertAfterForeground
+      ? `0x${insertAfterForeground.toString(16).toUpperCase()}`
+      : null,
     result,
   };
   if (result.topmost === expected) {
     safeLog('[avatar-visibility] native topmost repaired', facts);
     nativeTopmostDriftActive = false;
+    return 'repaired';
   }
-  else safeError('[avatar-visibility] native topmost repair failed', facts);
+  safeError('[avatar-visibility] native topmost repair failed', facts);
+  return 'failed';
 }
 
 function nativeAvatarWindowState() {
@@ -545,6 +566,7 @@ function nativeAvatarWindowState() {
       backend: nativeWindowTopmost.backend,
       topmost: null,
       exStyle: null,
+      eventMonitor: avatarTopmostEventMonitor?.snapshot() ?? null,
     };
   }
   const state = nativeWindowTopmost.inspect(
@@ -554,6 +576,7 @@ function nativeAvatarWindowState() {
     backend: nativeWindowTopmost.backend,
     topmost: state.topmost,
     exStyle: state.exStyle,
+    eventMonitor: avatarTopmostEventMonitor?.snapshot() ?? null,
   };
 }
 

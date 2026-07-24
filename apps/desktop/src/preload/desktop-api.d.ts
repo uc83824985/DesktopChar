@@ -21,6 +21,16 @@ export interface DesktopWindowState {
     backend: string;
     topmost: boolean | null;
     exStyle: string | null;
+    eventMonitor: {
+      disposed: boolean;
+      eventCheckPending: boolean;
+      incidentRetryActive: boolean;
+      pendingReasons: string[];
+      nativeMessageCount: number;
+      reconcileCount: number;
+      lastReason: string | null;
+      lastOutcome: string | null;
+    } | null;
   };
   presentation: {
     phase: 'hidden' | 'warming' | 'visible';

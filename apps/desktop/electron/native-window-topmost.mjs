@@ -40,7 +40,7 @@ export function createNativeWindowTopmost(options = {}) {
         };
         return { handle, ...inspect(handle) };
       },
-      set(windowHandle, topmost) {
+      set(windowHandle, topmost, setOptions = {}) {
         const before = inspect(windowHandle);
         if (!before.valid) return {
           changed: false,
@@ -54,9 +54,12 @@ export function createNativeWindowTopmost(options = {}) {
           error: 0,
           flags: TOPMOST_ONLY_FLAGS,
         };
+        const insertAfter = topmost && setOptions.insertAfter
+          ? normalizeWindowHandle(setOptions.insertAfter)
+          : topmost ? HWND_TOPMOST : HWND_NOTOPMOST;
         const accepted = Boolean(bindings.setWindowPos(
           normalizeWindowHandle(windowHandle),
-          topmost ? HWND_TOPMOST : HWND_NOTOPMOST,
+          insertAfter,
           0,
           0,
           0,

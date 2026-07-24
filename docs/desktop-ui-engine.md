@@ -131,10 +131,12 @@ Electron main 分别保存“用户希望角色显示”的 visibility intent、
    握手，并用 `showInactive()` 恢复而不抢焦点；
 2. 更隐蔽的情况是 `isVisible=true`、layered alpha 为 255 且 DWM 未 cloak，但原生
    `WS_EX_TOPMOST` 被清除。Electron 的 `isAlwaysOnTop()` 仍可能报告内部期望值 true，
-   因此不能用它作为原生层级事实。Windows host 使用 Koffi 每 250ms 读取 HWND ex-style；
-   检测到漂移后，以 `SetWindowPos(HWND_TOPMOST, SWP_NOMOVE | SWP_NOSIZE |
-   SWP_NOACTIVATE)` 恢复。若当前前景本身是 topmost 截图/保存窗口，则延迟到该窗口退出
-   前景，避免在截图过程中抢到覆盖层上方。
+   因此不能用它作为原生层级事实。Windows host 常驻挂接 `WM_WINDOWPOSCHANGED` 与
+   `WM_STYLECHANGED`，同批消息合并 32ms 后才读取 HWND ex-style；没有窗口层级或样式
+   事件时不进行任何轮询。检测到漂移后，以 `SetWindowPos(SWP_NOMOVE | SWP_NOSIZE |
+   SWP_NOACTIVATE)` 恢复；若当前前景本身是 topmost 截图/保存窗口，则将角色插入该 HWND
+   正下方。这样角色立即恢复 `WS_EX_TOPMOST`，但不会盖住截图层；截图层关闭后角色自然
+   重新显露。只有原生修复失败或策略显式延迟时才创建临时 250ms retry，成功后立即销毁。
 
 托盘标签按实际状态显示，因此即使自动恢复失败，第一次点击也会执行“显示”，而不是先把
 仍为 true 的内部意图切成隐藏。诊断日志区分 `native topmost drift detected`、
