@@ -166,7 +166,8 @@ vLLM/SGLang），不改变 Runtime、Resolver 或角色 Profile。
 - 尚未确定最终量化格式和生产推理框架；Transformers 是首个开发验证 Provider；
 - 尚未在 GPU 空闲条件下记录首 token、完整 JSON 与显存峰值；
 - 尚未在 RTX 3070 上与 Qwen3-TTS 并发压测；
-- 尚未建立 Live2D 动作目录标注集；Mao 的 8 个表情已写入正式 v2
+- Mao 的 6 个 `TapBody` 资源已完成人工视觉审阅并形成候选逻辑键，但尚未写入正式
+  ActionCatalog、MotionBinding 和逐项可达性测试；Mao 的 8 个表情已写入正式 v2
   `ExpressionCatalog` Profile，并通过真实 `model3.json` 资源可达性测试；
 - 尚未验证 Qwen3.5-2B 对动态 `ExpressionDescriptor[]` 的 top-1/top-3 选择质量，
   也未验证 prompt-only JSON 在目标样本集上的稳定性；
