@@ -46,6 +46,26 @@
         "thinking": { "$ref": "#/$defs/emotionBinding" }
       }
     },
+    "expressionCatalog": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["revision", "defaultExpressionKey", "descriptors", "bindings"],
+      "properties": {
+        "revision": { "type": "integer", "minimum": 0 },
+        "defaultExpressionKey": { "$ref": "#/$defs/expressionKey" },
+        "descriptors": {
+          "type": "array",
+          "minItems": 1,
+          "items": { "$ref": "#/$defs/expressionDescriptor" }
+        },
+        "bindings": {
+          "type": "object",
+          "minProperties": 1,
+          "propertyNames": { "$ref": "#/$defs/expressionKey" },
+          "additionalProperties": { "$ref": "#/$defs/expressionBinding" }
+        }
+      }
+    },
     "expressionCooldownMs": { "type": "number", "minimum": 0 },
     "idleReturnDelayMs": { "type": "number", "minimum": 0 },
     "gazeProfile": {
@@ -97,6 +117,83 @@
         "expression": {
           "type": ["string", "null"],
           "minLength": 1
+        }
+      }
+    },
+    "expressionKey": {
+      "type": "string",
+      "pattern": "^[a-z0-9](?:[a-z0-9._-]*[a-z0-9])?$"
+    },
+    "expressionBinding": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["expression"],
+      "properties": {
+        "expression": {
+          "type": ["string", "null"],
+          "minLength": 1
+        }
+      }
+    },
+    "affectPrototype": {
+      "type": "object",
+      "additionalProperties": false,
+      "minProperties": 1,
+      "properties": {
+        "valence": { "type": "number", "minimum": -1, "maximum": 1 },
+        "arousal": { "type": "number", "minimum": 0, "maximum": 1 },
+        "approval": { "type": "number", "minimum": -1, "maximum": 1 },
+        "engagement": { "type": "number", "minimum": 0, "maximum": 1 },
+        "certainty": { "type": "number", "minimum": 0, "maximum": 1 }
+      }
+    },
+    "expressionDescriptor": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "expressionKey",
+        "label",
+        "semanticTags",
+        "prototypeTexts",
+        "baseWeight",
+        "cooldownMs",
+        "holdMs",
+        "compatibleAvatarStates"
+      ],
+      "properties": {
+        "expressionKey": { "$ref": "#/$defs/expressionKey" },
+        "label": { "type": "string", "minLength": 1 },
+        "semanticTags": {
+          "type": "array",
+          "minItems": 1,
+          "uniqueItems": true,
+          "items": { "type": "string", "minLength": 1 }
+        },
+        "prototypeTexts": {
+          "type": "array",
+          "minItems": 1,
+          "uniqueItems": true,
+          "items": { "type": "string", "minLength": 1 }
+        },
+        "affectPrototype": { "$ref": "#/$defs/affectPrototype" },
+        "baseWeight": { "type": "number", "exclusiveMinimum": 0 },
+        "cooldownMs": { "type": "number", "minimum": 0 },
+        "holdMs": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["minMs", "maxMs"],
+          "properties": {
+            "minMs": { "type": "number", "minimum": 0 },
+            "maxMs": { "type": "number", "minimum": 0 }
+          }
+        },
+        "compatibleAvatarStates": {
+          "type": "array",
+          "minItems": 1,
+          "uniqueItems": true,
+          "items": {
+            "enum": ["idle", "listening", "thinking", "speaking", "presenting"]
+          }
         }
       }
     },

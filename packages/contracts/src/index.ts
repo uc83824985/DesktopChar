@@ -23,6 +23,13 @@ export interface EmotionCue {
   atMs?: number;
 }
 
+export interface ExpressionCue {
+  expressionKey: ExpressionKey;
+  intensity: number;
+  atMs?: number;
+  holdMs?: number;
+}
+
 /** Character-owned mapping from a semantic Runtime emotion to a renderer resource. */
 export interface EmotionBinding {
   /** Live2D expression name from the model3 Expressions catalog, or null to reset. */
@@ -30,6 +37,76 @@ export interface EmotionBinding {
 }
 
 export type EmotionBindings = Partial<Record<Emotion, EmotionBinding>>;
+
+/**
+ * Character-scoped logical expression identifier.
+ *
+ * This is deliberately not a Live2D expression name or asset path. It is
+ * stable only inside one CharacterExpressionCatalog revision.
+ */
+export type ExpressionKey = string;
+
+export interface AffectVector {
+  valence: number;
+  arousal: number;
+  approval: number;
+  engagement: number;
+  certainty: number;
+}
+
+export interface ExpressionHoldRange {
+  minMs: number;
+  maxMs: number;
+}
+
+/**
+ * Asset-free semantic projection exposed to inference and selection logic.
+ */
+export interface ExpressionDescriptor {
+  expressionKey: ExpressionKey;
+  label: string;
+  semanticTags: string[];
+  prototypeTexts: string[];
+  affectPrototype?: Partial<AffectVector>;
+  baseWeight: number;
+  cooldownMs: number;
+  holdMs: ExpressionHoldRange;
+  compatibleAvatarStates: AvatarState[];
+}
+
+/**
+ * Character-owned renderer binding. This must never be sent to an inference
+ * Provider.
+ */
+export interface ExpressionBinding {
+  expression: string | null;
+}
+
+export interface CharacterExpressionCatalog {
+  revision: number;
+  defaultExpressionKey: ExpressionKey;
+  descriptors: ExpressionDescriptor[];
+  bindings: Record<ExpressionKey, ExpressionBinding>;
+}
+
+export interface ExpressionCandidate {
+  expressionKey: ExpressionKey;
+  confidence: number;
+  intensity: number;
+}
+
+export interface ExpressionSelectionHistoryEntry {
+  expressionKey: ExpressionKey;
+  selectedAtMs: number;
+}
+
+export interface ResolvedExpression {
+  expressionKey: ExpressionKey;
+  intensity: number;
+  holdMs: number;
+  score: number;
+  source: 'candidate' | 'affect' | 'fallback';
+}
 
 export interface ActionCue {
   id: string;
@@ -73,6 +150,7 @@ export interface PerformanceSegment {
   displayText: string;
   speechText: string;
   emotion?: EmotionCue;
+  expression?: ExpressionCue;
   actions?: ActionCue[];
   bubble?: SpeechBubbleConfig;
 }
@@ -144,6 +222,43 @@ export interface LocalPerformanceSuggestion {
   source: 'model' | 'rules';
   provider: string;
   emotion?: PerformanceEmotionSuggestion;
+  actions: PerformanceActionSuggestion[];
+}
+
+export const PERFORMANCE_PLANNING_V2_CONTRACT_VERSION = 'desktop-char.performance-planning.v2' as const;
+
+export interface AvatarPerformanceProjectionV2 {
+  state: AvatarState;
+  currentExpressionKey: ExpressionKey;
+  coarseEmotion?: Emotion;
+}
+
+export interface PerformancePlanningRequestV2 {
+  contractVersion: typeof PERFORMANCE_PLANNING_V2_CONTRACT_VERSION;
+  requestId: string;
+  planId: string;
+  segmentId: string;
+  segmentRevision: number;
+  catalogRevision: number;
+  defaultExpressionKey: ExpressionKey;
+  text: string;
+  persona: PersonaPerformanceProjection;
+  scene: ScenePerformanceProjection;
+  avatar: AvatarPerformanceProjectionV2;
+  expressions: ExpressionDescriptor[];
+  actions: PerformanceActionDescriptor[];
+}
+
+export interface LocalPerformanceSuggestionV2 {
+  contractVersion: typeof PERFORMANCE_PLANNING_V2_CONTRACT_VERSION;
+  requestId: string;
+  segmentId: string;
+  segmentRevision: number;
+  catalogRevision: number;
+  source: 'model' | 'rules';
+  provider: string;
+  affect?: AffectVector;
+  expressionCandidates: ExpressionCandidate[];
   actions: PerformanceActionSuggestion[];
 }
 
@@ -286,6 +401,13 @@ export interface AvatarSnapshot {
   };
   speechBubble: SpeechBubbleState;
   emotion: EmotionState;
+  expression: {
+    currentKey: ExpressionKey | null;
+    intensity: number;
+    catalogRevision: number | null;
+    startedAtMs: number | null;
+    holdUntilMs: number | null;
+  };
   gesture: GestureState;
   gaze: GazeState;
   interrupted: boolean;
@@ -333,6 +455,24 @@ export type PerformanceInferenceEvent =
       error: RuntimeError;
     };
 
+export type PerformanceInferenceV2Event =
+  | {
+      type: 'performance.suggestion-v2-ready';
+      generation: number;
+      planId: string;
+      suggestion: LocalPerformanceSuggestionV2;
+    }
+  | {
+      type: 'performance.suggestion-v2-failed';
+      generation: number;
+      planId: string;
+      requestId: string;
+      segmentId: string;
+      segmentRevision: number;
+      catalogRevision: number;
+      error: RuntimeError;
+    };
+
 export type PlaybackEvent =
   | { type: 'playback.buffering'; generation: number; segmentId: string; positionMs: number; bufferedMs: number }
   | { type: 'playback.started'; generation: number; segmentId: string; positionMs: number }
@@ -361,6 +501,13 @@ export type RuntimeInternalEvent =
   | { type: 'runtime.speech-bubble-dismissed'; generation: number; presentationId: number }
   | { type: 'runtime.effect-failed'; generation: number; error: RuntimeError }
   | { type: 'timeline.emotion-cue'; generation: number; cue: EmotionCue }
+  | {
+      type: 'timeline.expression-cue';
+      generation: number;
+      catalogRevision: number;
+      startedAtMs: number;
+      cue: ExpressionCue;
+    }
   | { type: 'timeline.action-cue'; generation: number; cue: ActionCue };
 
 export type AvatarEvent =
@@ -369,6 +516,7 @@ export type AvatarEvent =
   | PlanEvent
   | TtsEvent
   | PerformanceInferenceEvent
+  | PerformanceInferenceV2Event
   | PlaybackEvent
   | RendererEvent
   | RuntimeInternalEvent;
@@ -395,7 +543,8 @@ export interface MotionResult {
 }
 
 export interface ExpressionCommand {
-  emotion: Emotion;
+  expressionKey: ExpressionKey;
+  emotion?: Emotion;
   expressionId: string | null;
   intensity: number;
 }
@@ -405,6 +554,8 @@ export type RuntimeEffect =
   | { type: 'tts.cancel'; generation: number }
   | { type: 'performance.infer'; generation: number; request: PerformancePlanningRequest }
   | { type: 'performance.cancel'; generation: number }
+  | { type: 'performance.infer-v2'; generation: number; request: PerformancePlanningRequestV2 }
+  | { type: 'performance.cancel-v2'; generation: number }
   | { type: 'audio.play'; generation: number; segmentId: string; source: AudioSource }
   | { type: 'audio.pause'; generation: number }
   | { type: 'audio.resume'; generation: number }

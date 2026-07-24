@@ -10,6 +10,158 @@
     "neutral": { "expression": null },
     "happy": { "expression": "exp_02" }
   },
+  "expressionCatalog": {
+    "revision": 1,
+    "defaultExpressionKey": "neutral",
+    "descriptors": [
+      {
+        "expressionKey": "neutral",
+        "label": "中立",
+        "semanticTags": ["neutral", "reset", "calm"],
+        "prototypeTexts": ["好的。", "我知道了。", "先保持平常的状态。"],
+        "affectPrototype": {
+          "valence": 0,
+          "arousal": 0.15,
+          "approval": 0,
+          "engagement": 0.5,
+          "certainty": 0.7
+        },
+        "baseWeight": 1,
+        "cooldownMs": 0,
+        "holdMs": { "minMs": 400, "maxMs": 900 },
+        "compatibleAvatarStates": ["idle", "listening", "thinking", "speaking", "presenting"]
+      },
+      {
+        "expressionKey": "closed-eye-smile",
+        "label": "闭眼微笑",
+        "semanticTags": ["happy", "warm", "friendly", "grateful"],
+        "prototypeTexts": ["太好了！", "谢谢你。", "见到你很开心。"],
+        "affectPrototype": {
+          "valence": 0.9,
+          "arousal": 0.55,
+          "approval": 0.8,
+          "engagement": 0.85,
+          "certainty": 0.8
+        },
+        "baseWeight": 1,
+        "cooldownMs": 1200,
+        "holdMs": { "minMs": 900, "maxMs": 2200 },
+        "compatibleAvatarStates": ["idle", "listening", "thinking", "speaking", "presenting"]
+      },
+      {
+        "expressionKey": "eyes-closed-calm",
+        "label": "闭眼沉思",
+        "semanticTags": ["thinking", "calm", "pause", "reflective"],
+        "prototypeTexts": ["让我想一想。", "这个问题需要仔细考虑。", "嗯……"],
+        "affectPrototype": {
+          "valence": 0.05,
+          "arousal": 0.1,
+          "approval": 0,
+          "engagement": 0.65,
+          "certainty": 0.35
+        },
+        "baseWeight": 0.9,
+        "cooldownMs": 1500,
+        "holdMs": { "minMs": 900, "maxMs": 2400 },
+        "compatibleAvatarStates": ["idle", "listening", "thinking", "speaking", "presenting"]
+      },
+      {
+        "expressionKey": "starry-eyed",
+        "label": "星星眼",
+        "semanticTags": ["excited", "admiring", "expectant", "delighted"],
+        "prototypeTexts": ["哇，真的好厉害！", "我已经开始期待了！", "这个太棒了！"],
+        "affectPrototype": {
+          "valence": 1,
+          "arousal": 0.95,
+          "approval": 0.95,
+          "engagement": 1,
+          "certainty": 0.75
+        },
+        "baseWeight": 0.65,
+        "cooldownMs": 3500,
+        "holdMs": { "minMs": 800, "maxMs": 1800 },
+        "compatibleAvatarStates": ["idle", "listening", "thinking", "speaking", "presenting"]
+      },
+      {
+        "expressionKey": "sad-worried",
+        "label": "难过担忧",
+        "semanticTags": ["sad", "worried", "concerned", "apologetic"],
+        "prototypeTexts": ["听起来有点让人担心。", "真的很遗憾。", "对不起，让你难过了。"],
+        "affectPrototype": {
+          "valence": -0.8,
+          "arousal": 0.35,
+          "approval": 0.1,
+          "engagement": 0.75,
+          "certainty": 0.4
+        },
+        "baseWeight": 0.9,
+        "cooldownMs": 1800,
+        "holdMs": { "minMs": 1000, "maxMs": 2600 },
+        "compatibleAvatarStates": ["idle", "listening", "thinking", "speaking", "presenting"]
+      },
+      {
+        "expressionKey": "blushing-uneasy",
+        "label": "脸红害羞",
+        "semanticTags": ["shy", "embarrassed", "uneasy", "flustered"],
+        "prototypeTexts": ["这、这样说有点不好意思。", "别突然夸我啦。", "我会害羞的。"],
+        "affectPrototype": {
+          "valence": 0.35,
+          "arousal": 0.65,
+          "approval": 0.55,
+          "engagement": 0.75,
+          "certainty": 0.25
+        },
+        "baseWeight": 0.75,
+        "cooldownMs": 2600,
+        "holdMs": { "minMs": 900, "maxMs": 2200 },
+        "compatibleAvatarStates": ["idle", "listening", "thinking", "speaking", "presenting"]
+      },
+      {
+        "expressionKey": "startled",
+        "label": "惊讶",
+        "semanticTags": ["surprised", "startled", "alarmed", "shocked"],
+        "prototypeTexts": ["诶？真的吗？", "怎么会这样！", "这完全出乎意料。"],
+        "affectPrototype": {
+          "valence": 0,
+          "arousal": 1,
+          "approval": 0,
+          "engagement": 1,
+          "certainty": 0.35
+        },
+        "baseWeight": 0.8,
+        "cooldownMs": 2200,
+        "holdMs": { "minMs": 600, "maxMs": 1500 },
+        "compatibleAvatarStates": ["idle", "listening", "thinking", "speaking", "presenting"]
+      },
+      {
+        "expressionKey": "disdain",
+        "label": "嫌弃无语",
+        "semanticTags": ["displeased", "dismissive", "speechless", "annoyed"],
+        "prototypeTexts": ["……你是认真的吗？", "这就有点让人无语了。", "我不太认同这种做法。"],
+        "affectPrototype": {
+          "valence": -0.55,
+          "arousal": 0.35,
+          "approval": -0.9,
+          "engagement": 0.45,
+          "certainty": 0.8
+        },
+        "baseWeight": 0.7,
+        "cooldownMs": 2800,
+        "holdMs": { "minMs": 800, "maxMs": 1900 },
+        "compatibleAvatarStates": ["idle", "listening", "thinking", "speaking", "presenting"]
+      }
+    ],
+    "bindings": {
+      "neutral": { "expression": "exp_01" },
+      "closed-eye-smile": { "expression": "exp_02" },
+      "eyes-closed-calm": { "expression": "exp_03" },
+      "starry-eyed": { "expression": "exp_04" },
+      "sad-worried": { "expression": "exp_05" },
+      "blushing-uneasy": { "expression": "exp_06" },
+      "startled": { "expression": "exp_07" },
+      "disdain": { "expression": "exp_08" }
+    }
+  },
   "expressionCooldownMs": 500,
   "idleReturnDelayMs": 800,
   "gazeProfile": {

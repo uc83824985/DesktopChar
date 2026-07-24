@@ -1,12 +1,15 @@
 import {
   DEFAULT_LIP_SYNC_PROFILE,
   PERFORMANCE_PLANNING_CONTRACT_VERSION,
+  PERFORMANCE_PLANNING_V2_CONTRACT_VERSION,
   type AmplitudeSample,
   type AudioSource,
   type AvatarEvent,
   type AvatarSnapshot,
+  type CharacterExpressionCatalog,
   type Emotion,
   type EmotionBindings,
+  type ExpressionSelectionHistoryEntry,
   type GazeProfile,
   type LipSyncProfile,
   type ParameterValue,
@@ -21,8 +24,10 @@ import {
 import { DEFAULT_RUNTIME_POLICY, type AvatarPlanner, type RuntimePolicy } from './planner.ts';
 import {
   applyPerformanceSuggestion,
+  applyPerformanceSuggestionV2,
   type PerformanceSuggestionSlots,
 } from './performance-suggestion.ts';
+import { resolveExpression } from './expression-resolver.ts';
 import type { ParameterLayers } from './mixer.ts';
 import { ParameterMixer } from './mixer.ts';
 import { createInitialSnapshot, reduceAvatarSnapshot } from './reducer.ts';
@@ -46,6 +51,9 @@ export interface AvatarRuntimeOptions {
   policy?: RuntimePolicy;
   performancePlanning?: PerformancePlanningOptions;
   emotionBindings?: EmotionBindings;
+  expressionCatalog?: CharacterExpressionCatalog;
+  expressionRandomSeed?: number;
+  clock?: () => number;
   gazeProfile?: GazeProfile;
   lipSyncProfile?: LipSyncProfile;
 }
@@ -63,8 +71,13 @@ export class AvatarRuntime {
   private nextSegmentIndex = 0;
   private readonly readyAudio = new Map<number, AudioSource>();
   private readonly failedSequences = new Set<number>();
-  private readonly performanceRequests = new Map<string, { requestId: string; revision: number }>();
+  private readonly performanceRequests = new Map<string, {
+    requestId: string;
+    revision: number;
+    catalogRevision?: number;
+  }>();
   private readonly performanceSlots = new Map<string, PerformanceSuggestionSlots>();
+  private readonly expressionHistory: ExpressionSelectionHistoryEntry[] = [];
   private performanceRequestSequence = 0;
   private timeline: PerformanceTimeline | null = null;
   private currentSource: AudioSource | null = null;
@@ -76,6 +89,8 @@ export class AvatarRuntime {
   private readonly gazeInterpolator: GazeInterpolator;
   private readonly lipSyncProfile: LipSyncProfile;
   private readonly lipSyncEnvelope: LipSyncEnvelope;
+  private readonly expressionRandomSeed: number;
+  private readonly clock: () => number;
 
   constructor(options: AvatarRuntimeOptions) {
     this.options = options;
@@ -84,6 +99,24 @@ export class AvatarRuntime {
     this.lipSyncProfile = options.lipSyncProfile ?? { ...DEFAULT_LIP_SYNC_PROFILE };
     validateLipSyncProfile(this.lipSyncProfile);
     this.lipSyncEnvelope = new LipSyncEnvelope(this.lipSyncProfile);
+    this.expressionRandomSeed = options.expressionRandomSeed ?? 0x44534348;
+    if (!Number.isInteger(this.expressionRandomSeed)) {
+      throw new TypeError('expressionRandomSeed must be an integer');
+    }
+    this.clock = options.clock ?? (() => Date.now());
+    const catalog = options.expressionCatalog;
+    if (catalog) {
+      this.snapshot = {
+        ...this.snapshot,
+        expression: {
+          currentKey: catalog.defaultExpressionKey,
+          intensity: 0,
+          catalogRevision: catalog.revision,
+          startedAtMs: null,
+          holdUntilMs: null,
+        },
+      };
+    }
   }
 
   getSnapshot(): AvatarSnapshot {
@@ -137,10 +170,12 @@ export class AvatarRuntime {
         throw new Error('Renderer capabilities must be ready before submitting a plan');
       }
       const normalized = this.options.planner.normalize(event.plan, capabilities, this.options.policy);
+      this.validateExplicitExpressions(normalized);
       this.performanceSlots.clear();
       for (const original of event.plan.segments) {
         this.performanceSlots.set(original.id, {
           emotion: original.emotion === undefined,
+          expression: original.expression === undefined && original.emotion === undefined,
           actions: original.actions === undefined,
         });
       }
@@ -182,12 +217,26 @@ export class AvatarRuntime {
     else if (acceptedEvent.type === 'performance.suggestion-ready') {
       this.acceptPerformanceSuggestion(acceptedEvent);
     }
+    else if (acceptedEvent.type === 'performance.suggestion-v2-ready') {
+      this.acceptPerformanceSuggestionV2(acceptedEvent);
+    }
     else if (acceptedEvent.type === 'performance.suggestion-failed') {
       const pending = this.performanceRequests.get(acceptedEvent.segmentId);
       if (
         acceptedEvent.planId === this.plan?.id
         && pending?.requestId === acceptedEvent.requestId
         && pending?.revision === acceptedEvent.segmentRevision
+      ) {
+        this.performanceRequests.delete(acceptedEvent.segmentId);
+      }
+    }
+    else if (acceptedEvent.type === 'performance.suggestion-v2-failed') {
+      const pending = this.performanceRequests.get(acceptedEvent.segmentId);
+      if (
+        acceptedEvent.planId === this.plan?.id
+        && pending?.requestId === acceptedEvent.requestId
+        && pending?.revision === acceptedEvent.segmentRevision
+        && pending?.catalogRevision === acceptedEvent.catalogRevision
       ) {
         this.performanceRequests.delete(acceptedEvent.segmentId);
       }
@@ -259,6 +308,12 @@ export class AvatarRuntime {
     const bubbleTransition = this.transitionSpeechBubble(acceptedEvent);
     const transition = reduceAvatarSnapshot(this.snapshot, acceptedEvent);
     this.snapshot = { ...transition.snapshot, speechBubble: bubbleTransition.state };
+    if (
+      acceptedEvent.type === 'user.interrupt-requested'
+      || acceptedEvent.type === 'runtime.plan-completed'
+    ) {
+      this.restoreDefaultExpressionSnapshot();
+    }
     if (
       acceptedEvent.type === 'renderer.ready'
       || acceptedEvent.type === 'user.look-target-changed'
@@ -376,6 +431,24 @@ export class AvatarRuntime {
         });
         this.applyBoundExpression(cue.payload.emotion, cue.payload.intensity);
       }
+      else if (cue.type === 'expression') {
+        const catalog = this.options.expressionCatalog;
+        if (!catalog) continue;
+        const startedAtMs = this.clock();
+        this.dispatch({
+          type: 'timeline.expression-cue',
+          generation: this.snapshot.generation,
+          catalogRevision: catalog.revision,
+          startedAtMs,
+          cue: cue.payload,
+        });
+        this.expressionHistory.push({
+          expressionKey: cue.payload.expressionKey,
+          selectedAtMs: startedAtMs,
+        });
+        if (this.expressionHistory.length > 32) this.expressionHistory.splice(0, 16);
+        this.applyBoundExpressionKey(cue.payload.expressionKey, cue.payload.intensity);
+      }
       else {
         this.dispatch({
           type: 'timeline.action-cue',
@@ -401,6 +474,9 @@ export class AvatarRuntime {
       capabilities.actions.includes(descriptor.actionId)
       && descriptor.allowedAnchors.length > 0
     ));
+    if (this.options.expressionCatalog) {
+      return this.createPerformanceEffectsV2(plan, actions);
+    }
     return plan.segments.flatMap(segment => {
       const slots = this.performanceSlots.get(segment.id);
       const text = (segment.displayText || segment.speechText).trim();
@@ -425,6 +501,50 @@ export class AvatarRuntime {
             currentEmotion: this.snapshot.emotion.current,
           },
           emotions: [...capabilities.emotions],
+          actions: structuredClone(actions),
+        },
+      }];
+    });
+  }
+
+  private createPerformanceEffectsV2(
+    plan: PerformancePlan,
+    actions: PerformanceActionDescriptor[],
+  ): RuntimeEffect[] {
+    const planning = this.options.performancePlanning;
+    const catalog = this.options.expressionCatalog;
+    if (!planning || !catalog) return [];
+    return plan.segments.flatMap(segment => {
+      const slots = this.performanceSlots.get(segment.id);
+      const text = (segment.displayText || segment.speechText).trim();
+      if (!slots || (!slots.expression && !slots.actions) || !text) return [];
+      const revision = 0;
+      const requestId = `g${this.snapshot.generation}:q${++this.performanceRequestSequence}:${plan.id}:${segment.id}:r${revision}:c${catalog.revision}`;
+      this.performanceRequests.set(segment.id, {
+        requestId,
+        revision,
+        catalogRevision: catalog.revision,
+      });
+      return [{
+        type: 'performance.infer-v2' as const,
+        generation: this.snapshot.generation,
+        request: {
+          contractVersion: PERFORMANCE_PLANNING_V2_CONTRACT_VERSION,
+          requestId,
+          planId: plan.id,
+          segmentId: segment.id,
+          segmentRevision: revision,
+          catalogRevision: catalog.revision,
+          defaultExpressionKey: catalog.defaultExpressionKey,
+          text,
+          persona: structuredClone(planning.persona),
+          scene: structuredClone(planning.scene),
+          avatar: {
+            state: 'thinking',
+            currentExpressionKey: this.snapshot.expression.currentKey ?? catalog.defaultExpressionKey,
+            coarseEmotion: this.snapshot.emotion.current,
+          },
+          expressions: structuredClone(catalog.descriptors),
           actions: structuredClone(actions),
         },
       }];
@@ -458,6 +578,75 @@ export class AvatarRuntime {
     const capabilities = this.snapshot.capabilities;
     if (!slots || !capabilities) return;
     const updated = applyPerformanceSuggestion(segment, suggestion, slots, capabilities, this.policy);
+    this.plan.segments[segmentIndex] = updated;
+    if (this.timeline?.segmentId === updated.id) {
+      this.timeline.update(updated);
+      this.applyTimeline(this.snapshot.playback.positionMs);
+    }
+  }
+
+  private acceptPerformanceSuggestionV2(
+    event: Extract<AvatarEvent, { type: 'performance.suggestion-v2-ready' }>,
+  ): void {
+    const catalog = this.options.expressionCatalog;
+    if (!catalog || !this.plan || event.planId !== this.plan.id) return;
+    const suggestion = event.suggestion;
+    const pending = this.performanceRequests.get(suggestion.segmentId);
+    if (
+      !pending
+      || pending.requestId !== suggestion.requestId
+      || pending.revision !== suggestion.segmentRevision
+      || pending.catalogRevision !== suggestion.catalogRevision
+      || suggestion.catalogRevision !== catalog.revision
+    ) {
+      return;
+    }
+    this.performanceRequests.delete(suggestion.segmentId);
+    if (
+      suggestion.contractVersion !== PERFORMANCE_PLANNING_V2_CONTRACT_VERSION
+      || !Array.isArray(suggestion.expressionCandidates)
+      || !Array.isArray(suggestion.actions)
+    ) {
+      return;
+    }
+    const segmentIndex = this.plan.segments.findIndex(segment => (
+      segment.id === suggestion.segmentId
+    ));
+    if (segmentIndex < this.nextSegmentIndex || segmentIndex < 0) return;
+    const segment = this.plan.segments[segmentIndex]!;
+    const slots = this.performanceSlots.get(segment.id);
+    const capabilities = this.snapshot.capabilities;
+    const planning = this.options.performancePlanning;
+    if (!slots || !capabilities || !planning) return;
+    let resolved;
+    try {
+      resolved = resolveExpression({
+        catalog,
+        avatarState: this.snapshot.state,
+        resolutionId: suggestion.segmentId,
+        randomSeed: this.expressionRandomSeed,
+        nowMs: this.clock(),
+        candidates: suggestion.expressionCandidates,
+        ...(suggestion.affect ? { affect: suggestion.affect } : {}),
+        personaTags: planning.persona.styleTags,
+        sceneTags: planning.scene.modeTags,
+        ...(this.snapshot.expression.currentKey
+          ? { currentExpressionKey: this.snapshot.expression.currentKey }
+          : {}),
+        history: [...this.expressionHistory],
+      });
+    }
+    catch {
+      return;
+    }
+    const updated = applyPerformanceSuggestionV2(
+      segment,
+      suggestion,
+      resolved,
+      slots,
+      capabilities,
+      this.policy,
+    );
     this.plan.segments[segmentIndex] = updated;
     if (this.timeline?.segmentId === updated.id) {
       this.timeline.update(updated);
@@ -684,6 +873,7 @@ export class AvatarRuntime {
       case 'audio.stop':
       case 'tts.cancel':
       case 'performance.cancel':
+      case 'performance.cancel-v2':
       case 'speech-bubble.schedule-dismiss':
       case 'speech-bubble.cancel-dismiss':
         this.dispatch({ type: 'runtime.effect-failed', generation: effect.generation, error });
@@ -696,6 +886,18 @@ export class AvatarRuntime {
           requestId: effect.request.requestId,
           segmentId: effect.request.segmentId,
           segmentRevision: effect.request.segmentRevision,
+          error,
+        });
+        break;
+      case 'performance.infer-v2':
+        this.dispatch({
+          type: 'performance.suggestion-v2-failed',
+          generation: effect.generation,
+          planId: effect.request.planId,
+          requestId: effect.request.requestId,
+          segmentId: effect.request.segmentId,
+          segmentRevision: effect.request.segmentRevision,
+          catalogRevision: effect.request.catalogRevision,
           error,
         });
         break;
@@ -713,6 +915,7 @@ export class AvatarRuntime {
       type: 'renderer.set-expression',
       generation: this.snapshot.generation,
       command: {
+        expressionKey: emotion,
         emotion,
         expressionId: binding.expression,
         intensity,
@@ -720,17 +923,76 @@ export class AvatarRuntime {
     });
   }
 
-  private resetBoundExpression(): void {
-    if (!this.options.emotionBindings || Object.keys(this.options.emotionBindings).length === 0) return;
+  private applyBoundExpressionKey(expressionKey: string, intensity: number): void {
+    const binding = this.options.expressionCatalog?.bindings[expressionKey];
+    if (!binding) return;
     this.execute({
       type: 'renderer.set-expression',
       generation: this.snapshot.generation,
       command: {
+        expressionKey,
+        expressionId: binding.expression,
+        intensity,
+      },
+    });
+  }
+
+  private resetBoundExpression(): void {
+    const catalog = this.options.expressionCatalog;
+    if (catalog) {
+      const binding = catalog.bindings[catalog.defaultExpressionKey];
+      if (!binding) return;
+      this.execute({
+        type: 'renderer.set-expression',
+        generation: this.snapshot.generation,
+        command: {
+          expressionKey: catalog.defaultExpressionKey,
+          expressionId: binding.expression,
+          intensity: 0,
+        },
+      });
+      return;
+    }
+    if (!this.options.emotionBindings || Object.keys(this.options.emotionBindings).length === 0) {
+      return;
+    }
+    this.execute({
+      type: 'renderer.set-expression',
+      generation: this.snapshot.generation,
+      command: {
+        expressionKey: 'neutral',
         emotion: 'neutral',
         expressionId: this.options.emotionBindings.neutral?.expression ?? null,
         intensity: 0,
       },
     });
+  }
+
+  private restoreDefaultExpressionSnapshot(): void {
+    const catalog = this.options.expressionCatalog;
+    if (!catalog) return;
+    this.snapshot = {
+      ...this.snapshot,
+      expression: {
+        currentKey: catalog.defaultExpressionKey,
+        intensity: 0,
+        catalogRevision: catalog.revision,
+        startedAtMs: null,
+        holdUntilMs: null,
+      },
+    };
+  }
+
+  private validateExplicitExpressions(plan: PerformancePlan): void {
+    const catalog = this.options.expressionCatalog;
+    for (const segment of plan.segments) {
+      if (!segment.expression) continue;
+      if (!catalog?.bindings[segment.expression.expressionKey]) {
+        throw new Error(
+          `Expression ${segment.expression.expressionKey} is not available in the active character catalog`,
+        );
+      }
+    }
   }
 }
 

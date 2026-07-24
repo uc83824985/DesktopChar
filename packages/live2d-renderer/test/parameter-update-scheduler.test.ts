@@ -34,12 +34,32 @@ test('runtime order changes are applied on the next scheduler run', () => {
   assert.deepEqual(calls, ['expression', 'eye']);
 });
 
+test('updaters can be paused without changing their stable order', () => {
+  const scheduler = new ParameterUpdateScheduler<string[]>();
+  scheduler.register(updater('eye', PARAMETER_UPDATE_ORDER.EYE_BLINK));
+  scheduler.register(updater('breath', PARAMETER_UPDATE_ORDER.BREATH));
+  scheduler.setEnabled('breath', false);
+  const calls: string[] = [];
+
+  scheduler.run(calls);
+  assert.deepEqual(calls, ['eye']);
+  assert.equal(scheduler.isEnabled('eye'), true);
+  assert.equal(scheduler.isEnabled('breath'), false);
+
+  scheduler.setEnabled('breath', true);
+  scheduler.run(calls);
+  assert.deepEqual(calls, ['eye', 'eye', 'breath']);
+  assert.deepEqual(scheduler.list().map(entry => entry.id), ['eye', 'breath']);
+});
+
 test('registration validation, duplicate ids, disposal, and clear are explicit', () => {
   const scheduler = new ParameterUpdateScheduler<string[]>();
   const dispose = scheduler.register(updater('eye', PARAMETER_UPDATE_ORDER.EYE_BLINK));
   assert.throws(() => scheduler.register(updater('eye', 201)), /already registered/);
   assert.throws(() => scheduler.register(updater(' invalid ', 201)), /trimmed/);
   assert.throws(() => scheduler.setExecutionOrder('eye', -1), RangeError);
+  assert.throws(() => scheduler.setEnabled('missing', false), /not registered/);
+  assert.throws(() => scheduler.isEnabled('missing'), /not registered/);
   dispose();
   dispose();
   assert.deepEqual(scheduler.list(), []);

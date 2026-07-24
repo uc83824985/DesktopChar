@@ -1,7 +1,13 @@
-import type { ActionCue, EmotionCue, PerformanceSegment } from '../../contracts/src/index.ts';
+import type {
+  ActionCue,
+  EmotionCue,
+  ExpressionCue,
+  PerformanceSegment,
+} from '../../contracts/src/index.ts';
 
 export type TimelineCue =
   | { id: string; type: 'emotion'; atMs: number; payload: EmotionCue }
+  | { id: string; type: 'expression'; atMs: number; payload: ExpressionCue }
   | { id: string; type: 'action'; atMs: number; payload: ActionCue };
 
 export class PerformanceTimeline {
@@ -51,6 +57,14 @@ function timelineCues(segment: PerformanceSegment): TimelineCue[] {
       type: 'emotion',
       atMs: segment.emotion.atMs ?? 0,
       payload: segment.emotion,
+    });
+  }
+  if (segment.expression) {
+    cues.push({
+      id: `${segment.id}:expression`,
+      type: 'expression',
+      atMs: segment.expression.atMs ?? 0,
+      payload: segment.expression,
     });
   }
   for (const action of segment.actions ?? []) {

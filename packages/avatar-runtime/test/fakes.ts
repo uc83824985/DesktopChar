@@ -20,15 +20,22 @@ interface PendingPerformance {
   dispatch: (event: AvatarEvent) => void;
 }
 
+interface PendingPerformanceV2 {
+  effect: Extract<RuntimeEffect, { type: 'performance.infer-v2' }>;
+  dispatch: (event: AvatarEvent) => void;
+}
+
 export class ControlledEffects implements RuntimeEffectExecutor {
   readonly pendingTts = new Map<number, PendingTts>();
   readonly pendingPerformance = new Map<string, PendingPerformance>();
+  readonly pendingPerformanceV2 = new Map<string, PendingPerformanceV2>();
   readonly playedSegments: string[] = [];
   readonly frames: Array<Record<string, number>> = [];
   readonly motions: string[] = [];
   readonly expressions: Array<Extract<RuntimeEffect, { type: 'renderer.set-expression' }>['command']> = [];
   readonly cancelledGenerations: number[] = [];
   readonly cancelledPerformanceGenerations: number[] = [];
+  readonly cancelledPerformanceV2Generations: number[] = [];
   readonly stoppedGenerations: number[] = [];
   readonly pendingBubbleDismissals = new Map<number, PendingBubbleDismissal>();
   readonly cancelledBubbleDismissals: number[] = [];
@@ -53,6 +60,13 @@ export class ControlledEffects implements RuntimeEffectExecutor {
       case 'performance.cancel':
         this.cancelledPerformanceGenerations.push(effect.generation);
         this.pendingPerformance.clear();
+        break;
+      case 'performance.infer-v2':
+        this.pendingPerformanceV2.set(effect.request.segmentId, { effect, dispatch });
+        break;
+      case 'performance.cancel-v2':
+        this.cancelledPerformanceV2Generations.push(effect.generation);
+        this.pendingPerformanceV2.clear();
         break;
       case 'audio.play':
         this.playedSegments.push(effect.segmentId);
@@ -156,6 +170,34 @@ export class ControlledEffects implements RuntimeEffectExecutor {
         segmentRevision: pending.effect.request.segmentRevision,
         source: 'model',
         provider: 'controlled-test',
+        actions: [],
+        ...suggestion,
+      },
+    });
+  }
+
+  resolvePerformanceV2(
+    segmentId: string,
+    suggestion: Partial<Extract<AvatarEvent, {
+      type: 'performance.suggestion-v2-ready';
+    }>['suggestion']> = {},
+  ): void {
+    const pending = this.pendingPerformanceV2.get(segmentId);
+    if (!pending) throw new Error(`No pending performance v2 inference for ${segmentId}`);
+    this.pendingPerformanceV2.delete(segmentId);
+    pending.dispatch({
+      type: 'performance.suggestion-v2-ready',
+      generation: pending.effect.generation,
+      planId: pending.effect.request.planId,
+      suggestion: {
+        contractVersion: pending.effect.request.contractVersion,
+        requestId: pending.effect.request.requestId,
+        segmentId,
+        segmentRevision: pending.effect.request.segmentRevision,
+        catalogRevision: pending.effect.request.catalogRevision,
+        source: 'model',
+        provider: 'controlled-test-v2',
+        expressionCandidates: [],
         actions: [],
         ...suggestion,
       },

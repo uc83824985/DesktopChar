@@ -17,6 +17,13 @@ export function createInitialSnapshot(): AvatarSnapshot {
       phase: 'hidden', presentationId: 0, segmentId: null, displayText: '', positionMs: 0,
     },
     emotion: { current: 'neutral', intensity: 0 },
+    expression: {
+      currentKey: null,
+      intensity: 0,
+      catalogRevision: null,
+      startedAtMs: null,
+      holdUntilMs: null,
+    },
     gesture: { actionId: null, action: null, queueLength: 0 },
     gaze: { x: 0, y: 0, active: false },
     interrupted: false,
@@ -244,6 +251,13 @@ export function reduceAvatarSnapshot(
           sequence: null,
           playback: { status: 'stopped', positionMs: 0 },
           emotion: { current: 'neutral', intensity: 0 },
+          expression: {
+            currentKey: null,
+            intensity: 0,
+            catalogRevision: null,
+            startedAtMs: null,
+            holdUntilMs: null,
+          },
           gesture: { actionId: null, action: null, queueLength: 0 },
           gaze: snapshot.gaze,
           interrupted: false,
@@ -251,6 +265,7 @@ export function reduceAvatarSnapshot(
         effects: [
           { type: 'tts.cancel', generation: oldGeneration },
           { type: 'performance.cancel', generation: oldGeneration },
+          { type: 'performance.cancel-v2', generation: oldGeneration },
           { type: 'audio.stop', generation: oldGeneration },
         ],
       };
@@ -304,6 +319,23 @@ export function reduceAvatarSnapshot(
         effects: [],
       };
 
+    case 'timeline.expression-cue':
+      return {
+        snapshot: {
+          ...snapshot,
+          expression: {
+            currentKey: event.cue.expressionKey,
+            intensity: event.cue.intensity,
+            catalogRevision: event.catalogRevision,
+            startedAtMs: event.startedAtMs,
+            holdUntilMs: event.cue.holdMs === undefined
+              ? null
+              : event.startedAtMs + event.cue.holdMs,
+          },
+        },
+        effects: [],
+      };
+
     case 'timeline.action-cue':
       return {
         snapshot: {
@@ -335,9 +367,19 @@ export function reduceAvatarSnapshot(
           sequence: null,
           playback: { status: 'idle', positionMs: 0 },
           emotion: { current: 'neutral', intensity: 0 },
+          expression: {
+            currentKey: null,
+            intensity: 0,
+            catalogRevision: null,
+            startedAtMs: null,
+            holdUntilMs: null,
+          },
           gesture: { actionId: null, action: null, queueLength: 0 },
         },
-        effects: [{ type: 'performance.cancel', generation: snapshot.generation }],
+        effects: [
+          { type: 'performance.cancel', generation: snapshot.generation },
+          { type: 'performance.cancel-v2', generation: snapshot.generation },
+        ],
       };
 
     case 'runtime.effect-failed':
@@ -361,6 +403,8 @@ export function reduceAvatarSnapshot(
     case 'tts.plan-completed':
     case 'performance.suggestion-ready':
     case 'performance.suggestion-failed':
+    case 'performance.suggestion-v2-ready':
+    case 'performance.suggestion-v2-failed':
     case 'plan.segment-appended':
     case 'presentation.chat-bubble-requested':
     case 'runtime.speech-bubble-dismissed':

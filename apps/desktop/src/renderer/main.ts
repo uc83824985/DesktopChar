@@ -11,8 +11,10 @@ import type {
   AvatarEvent,
   LipSyncProfile,
   LocalPerformanceSuggestion,
+  LocalPerformanceSuggestionV2,
   PerformanceInferenceCapabilities,
   PerformancePlanningRequest,
+  PerformancePlanningRequestV2,
   RuntimeEffect,
   SpeechBubbleMode,
 } from '../../../../packages/contracts/src/index.ts';
@@ -29,9 +31,11 @@ import {
   DEFAULT_CHARACTER_PROFILE_URL,
   DEFAULT_TTS_CONFIG,
   loadCharacterConfig,
+  validateCharacterExpressionResources,
 } from '../../../../packages/config/src/index.ts';
 import {
   activateRepeatableExpression,
+  AssetPreviewIsolationController,
   AsyncPixelCoveragePicker,
   createLive2dAssetPreviewCatalog,
   HoldDragController,
@@ -47,13 +51,22 @@ import type {
   PixelCoverageResult,
 } from '../../../../packages/live2d-renderer/src/index.ts';
 import {
+  AdaptedPerformanceInferenceV2,
+  ExpressionCatalogPlanningAdapter,
   FallbackPerformanceInference,
+  FallbackPerformanceInferenceV2,
   NoopPerformanceInference,
   OpenAiCompatiblePerformanceAdapter,
+  OpenAiCompatiblePerformanceTransport,
   PerformanceRuntimeEffectHandler,
+  PerformanceRuntimeEffectHandlerV2,
+  RuleBasedExpressionCatalogInference,
   RuleBasedPerformanceInference,
 } from '../../../../packages/performance-inference/src/index.ts';
-import type { PerformanceInferencePort } from '../../../../packages/performance-inference/src/index.ts';
+import type {
+  PerformanceInferencePort,
+  PerformanceInferencePortV2,
+} from '../../../../packages/performance-inference/src/index.ts';
 import {
   DomContextMenuHost,
   DomInteractionPanelHost,
@@ -271,6 +284,101 @@ class ReloadablePerformanceInference implements PerformanceInferencePort {
   }
 }
 
+class ReloadableExpressionCatalogInference implements PerformanceInferencePortV2 {
+  private current: PerformanceInferencePortV2 = new RuleBasedExpressionCatalogInference();
+  private signature = '';
+  private modelEnabled = false;
+  private provider = 'deterministic-catalog-rules';
+
+  configure(config: DesktopPerformanceInferenceConfig): boolean {
+    const signature = JSON.stringify(config);
+    if (signature === this.signature) return false;
+    this.signature = signature;
+    this.modelEnabled = config.enabled && config.operational;
+    this.provider = this.modelEnabled ? config.provider : 'deterministic-catalog-rules';
+    if (!this.modelEnabled) {
+      this.current = new RuleBasedExpressionCatalogInference();
+      return true;
+    }
+    const primary = new AdaptedPerformanceInferenceV2(
+      new OpenAiCompatiblePerformanceTransport({
+        provider: config.provider,
+        baseUrl: config.baseUrl,
+        ...(config.model ? { model: config.model } : {}),
+        timeoutMs: config.timeoutMs,
+      }),
+      new ExpressionCatalogPlanningAdapter({
+        maxOutputTokens: config.maxOutputTokens,
+        temperature: config.temperature,
+      }),
+    );
+    this.current = config.fallbackToRules
+      ? new FallbackPerformanceInferenceV2(
+          primary,
+          new RuleBasedExpressionCatalogInference(),
+          {
+            onFallback: (error, request) => writePerformanceLog('request.v2-fallback', 'warn', {
+              requestId: request.requestId,
+              segmentId: request.segmentId,
+              catalogRevision: request.catalogRevision,
+              provider: config.provider,
+              error: performanceErrorDetails(error),
+            }),
+          },
+        )
+      : primary;
+    return true;
+  }
+
+  describe(): PerformanceInferenceCapabilities {
+    return this.current.describe();
+  }
+
+  plan(
+    request: PerformancePlanningRequestV2,
+    signal: AbortSignal,
+  ): Promise<LocalPerformanceSuggestionV2> {
+    const startedAt = performance.now();
+    writePerformanceLog('request.v2-started', 'info', {
+      requestId: request.requestId,
+      planId: request.planId,
+      segmentId: request.segmentId,
+      catalogRevision: request.catalogRevision,
+      provider: this.provider,
+      modelEnabled: this.modelEnabled,
+      textCharacters: [...request.text].length,
+      expressionKeys: request.expressions.map(expression => expression.expressionKey),
+      allowedActions: request.actions.map(action => action.actionId),
+    });
+    return this.current.plan(request, signal).then(suggestion => {
+      writePerformanceLog('request.v2-completed', 'info', {
+        requestId: request.requestId,
+        segmentId: request.segmentId,
+        durationMs: Math.round(performance.now() - startedAt),
+        source: suggestion.source,
+        provider: suggestion.provider,
+        affect: suggestion.affect ?? null,
+        expressionCandidates: suggestion.expressionCandidates,
+        actions: suggestion.actions,
+      });
+      return suggestion;
+    }).catch(error => {
+      writePerformanceLog(
+        signal.aborted ? 'request.v2-cancelled' : 'request.v2-failed',
+        signal.aborted ? 'info' : 'error',
+        {
+          requestId: request.requestId,
+          segmentId: request.segmentId,
+          durationMs: Math.round(performance.now() - startedAt),
+          provider: this.provider,
+          error: performanceErrorDetails(error),
+        },
+      );
+      throw error;
+    });
+  }
+}
+
 type PerformanceLogLevel = 'info' | 'warn' | 'error';
 
 function writePerformanceLog(
@@ -300,6 +408,8 @@ function performanceErrorDetails(error: unknown): Record<string, unknown> {
 
 let model: Live2DModel<Cubism4InternalModel> | undefined;
 let assetPreviewCatalog: Live2dAssetPreviewCatalog = { expressions: [], motions: [] };
+let assetPreviewIsolation: AssetPreviewIsolationController | undefined;
+let restoreGazeAfterAssetPreviewIsolation = false;
 let assetPreviewMotionTimer: ReturnType<typeof setTimeout> | undefined;
 let assetPreviewMotionToken = 0;
 const assetPreviewMotionDurations = new Map<string, Promise<number>>();
@@ -317,6 +427,7 @@ let mcpServicesState: McpServicesState | undefined;
 let ttsConfigSignature = '';
 const reloadableTtsAdapter = new ReloadableTtsAdapter();
 const reloadablePerformanceInference = new ReloadablePerformanceInference();
+const reloadableExpressionCatalogInference = new ReloadableExpressionCatalogInference();
 let performanceInferenceConfig: DesktopPerformanceInferenceConfig | undefined;
 let currentLipSyncProfile: LipSyncProfile = { ...DEFAULT_LIP_SYNC_PROFILE };
 let desktopBounds: { x: number; y: number; width: number; height: number } | undefined;
@@ -423,6 +534,7 @@ const runtimeFrame = new RuntimeParameterFrame({
 });
 let ttsEffects: TtsRuntimeEffectHandler | undefined;
 let performanceEffects: PerformanceRuntimeEffectHandler | undefined;
+let performanceV2Effects: PerformanceRuntimeEffectHandlerV2 | undefined;
 let audioPlayer: WebAudioPcmStreamPlayer | undefined;
 const speechBubbleDismissTimers = new Map<number, ReturnType<typeof setTimeout>>();
 document.body.dataset.toneAcceptance = 'idle';
@@ -456,6 +568,7 @@ try {
   const tts = createTtsComposition(shellState?.tts);
   performanceInferenceConfig = shellState?.performanceInference ?? browserPerformanceInferenceConfig();
   reloadablePerformanceInference.configure(performanceInferenceConfig);
+  reloadableExpressionCatalogInference.configure(performanceInferenceConfig);
   mcpServicesState = shellState?.mcpServices;
   const ttsOperational = desktopShell ? isOperationalMcpService(mcpServicesState?.tts) : true;
   reloadableTtsAdapter.configure(tts.adapter, shellState?.tts ?? browserTtsConfig(), ttsOperational);
@@ -466,6 +579,9 @@ try {
   if (!knownToneAvailable) tone.title = '当前 TTS MCP 未声明 known-tone-v1 测试能力';
   ttsEffects = new TtsRuntimeEffectHandler(reloadableTtsAdapter);
   performanceEffects = new PerformanceRuntimeEffectHandler(reloadablePerformanceInference);
+  performanceV2Effects = new PerformanceRuntimeEffectHandlerV2(
+    reloadableExpressionCatalogInference,
+  );
   audioPlayer = createRuntimeAudioPlayer(tts.openStream);
   audioPlayer.subscribe(handleTonePlaybackEvent);
   document.body.dataset.ttsMode = shellState?.tts.lifecycle ?? 'external';
@@ -477,6 +593,14 @@ try {
   assetPreviewCatalog = createLive2dAssetPreviewCatalog(
     model.internalModel.motionManager.settings.json,
   );
+  if (characterConfig.expressionCatalog) {
+    validateCharacterExpressionResources(
+      characterConfig.expressionCatalog,
+      assetPreviewCatalog.expressions.map(expression => expression.id),
+    );
+  }
+  assetPreviewIsolation = new AssetPreviewIsolationController(model.internalModel.motionManager);
+  document.body.dataset.assetPreviewIsolation = 'unlocked';
   for (const resource of assetPreviewCatalog.motions) {
     void motionPreviewDuration(resource);
   }
@@ -484,6 +608,7 @@ try {
   document.body.dataset.assetPreviewMotions = assetPreviewCatalog.motions.length.toString();
   cubismUpdatePipeline = installCubism4UpdatePipeline(model.internalModel);
   document.body.dataset.live2dUpdatePipeline = 'ordered-v1';
+  document.body.dataset.assetPreviewBreath = 'active';
   document.body.dataset.live2dUpdaterOrder = cubismUpdatePipeline.scheduler.list()
     .map(updater => `${updater.id}@${updater.executionOrder}`)
     .join(',');
@@ -512,6 +637,9 @@ try {
       })),
     },
     emotionBindings: characterConfig.emotionBindings,
+    ...(characterConfig.expressionCatalog
+      ? { expressionCatalog: characterConfig.expressionCatalog }
+      : {}),
     gazeProfile: characterConfig.gazeProfile,
     lipSyncProfile: characterConfig.lipSyncProfile,
   });
@@ -602,11 +730,14 @@ try {
       gazeFrameDriverAttached = false;
     }
     performanceEffects?.cancelAll();
+    performanceV2Effects?.cancelAll();
     cubismUpdatePipeline?.restore();
     cubismUpdatePipeline = undefined;
     contextMenuHost.dispose();
     interactionPanelHost.dispose();
     stopAssetPreviewMotion('disposed');
+    assetPreviewIsolation?.dispose();
+    assetPreviewIsolation = undefined;
     for (const timer of speechBubbleDismissTimers.values()) clearTimeout(timer);
     speechBubbleDismissTimers.clear();
   }, { once: true });
@@ -625,6 +756,13 @@ catch (error) {
       phase: 'hidden' as const, presentationId: 0, segmentId: null, displayText: '', positionMs: 0,
     },
     emotion: { current: 'neutral' as const, intensity: 0 },
+    expression: {
+      currentKey: null,
+      intensity: 0,
+      catalogRevision: null,
+      startedAtMs: null,
+      holdUntilMs: null,
+    },
     gesture: { actionId: null, action: null, queueLength: 0 },
     gaze: { x: 0, y: 0, active: false },
     interrupted: false,
@@ -671,6 +809,7 @@ function submitDemo(withAction: boolean): void {
 }
 
 function execute(effect: RuntimeEffect, dispatch: (event: AvatarEvent) => void): void {
+  if (performanceV2Effects?.handle(effect, dispatch)) return;
   if (performanceEffects?.handle(effect, dispatch)) return;
   if (ttsEffects?.handle(effect, dispatch)) return;
   if (effect.type === 'speech-bubble.schedule-dismiss') {
@@ -739,6 +878,12 @@ function execute(effect: RuntimeEffect, dispatch: (event: AvatarEvent) => void):
     }
   }
   else if (effect.type === 'renderer.set-expression' && model) {
+    if (assetPreviewIsolation?.locked) {
+      expressionRequestToken++;
+      assetPreviewIsolation.resetBaseline();
+      document.body.dataset.live2dExpression = 'debug-neutral';
+      return;
+    }
     stopAssetPreviewMotion('runtime-expression');
     const activeModel = model;
     const requestToken = ++expressionRequestToken;
@@ -747,6 +892,7 @@ function execute(effect: RuntimeEffect, dispatch: (event: AvatarEvent) => void):
       activeModel.internalModel.motionManager.expressionManager?.resetExpression();
       document.body.dataset.live2dExpression = 'neutral';
       writePerformanceLog('expression.reset', 'info', {
+        expressionKey: effect.command.expressionKey,
         emotion: effect.command.emotion,
         generation: effect.generation,
       });
@@ -759,10 +905,14 @@ function execute(effect: RuntimeEffect, dispatch: (event: AvatarEvent) => void):
       id => activeModel.expression(id),
       expressionId,
     ).then(activation => {
-      if (requestToken !== expressionRequestToken) return;
+      if (requestToken !== expressionRequestToken) {
+        if (assetPreviewIsolation?.locked) assetPreviewIsolation.resetBaseline();
+        return;
+      }
       if (!activation.applied) throw new Error(`Live2D expression ${expressionId} did not start`);
       document.body.dataset.live2dExpression = expressionId;
       writePerformanceLog('expression.applied', 'info', {
+        expressionKey: effect.command.expressionKey,
         emotion: effect.command.emotion,
         expressionId,
         activation: activation.mode,
@@ -783,6 +933,17 @@ function execute(effect: RuntimeEffect, dispatch: (event: AvatarEvent) => void):
     });
   }
   else if (effect.type === 'renderer.play-motion' && model) {
+    if (assetPreviewIsolation?.locked) {
+      stopCurrentMotion('replaced');
+      assetPreviewIsolation.resetBaseline();
+      document.body.dataset.motionState = 'debug-suppressed';
+      dispatch({
+        type: 'renderer.motion-completed',
+        generation: effect.generation,
+        actionId: effect.command.actionId,
+      });
+      return;
+    }
     stopAssetPreviewMotion('runtime-motion');
     const activeModel = model;
     stopCurrentMotion('replaced');
@@ -1157,10 +1318,42 @@ function openBrowserInteractionPanel(event: MouseEvent): void {
   openAvatarInteractionPanel(hitArea, { x: event.clientX, y: event.clientY });
 }
 
+function setAssetPreviewIsolationLocked(locked: boolean): void {
+  if (!assetPreviewIsolation || locked === assetPreviewIsolation.locked) return;
+  const snapshot = runtime?.getSnapshot();
+  if (snapshot?.state !== 'idle') return;
+
+  stopCurrentMotion('replaced');
+  stopAssetPreviewMotion('baseline-changed');
+  expressionRequestToken++;
+  if (locked) restoreGazeAfterAssetPreviewIsolation = snapshot?.gaze.active ?? false;
+  assetPreviewIsolation.setLocked(locked);
+  cubismUpdatePipeline?.scheduler.setEnabled('cubism.breath', !locked);
+  document.body.dataset.assetPreviewIsolation = locked ? 'locked' : 'unlocked';
+  document.body.dataset.assetPreviewBreath = locked ? 'suppressed' : 'active';
+  document.body.dataset.assetPreviewKind = 'baseline';
+  document.body.dataset.assetPreviewResource = 'neutral';
+  document.body.dataset.assetPreviewState = locked ? 'locked' : 'unlocked';
+  document.body.dataset.live2dExpression = 'neutral';
+  document.body.dataset.motionState = locked ? 'debug-suppressed' : 'idle-enabled';
+
+  if (locked && restoreGazeAfterAssetPreviewIsolation) {
+    runtime?.dispatch({ type: 'user.gaze-follow-disabled' });
+  }
+  else if (!locked && restoreGazeAfterAssetPreviewIsolation) {
+    restoreGazeAfterAssetPreviewIsolation = false;
+    runtime?.dispatch({ type: 'user.gaze-follow-enabled' });
+  }
+  if (!locked) restoreGazeAfterAssetPreviewIsolation = false;
+  interactionPanelHost.refresh();
+  contextMenuHost.refresh();
+}
+
 function previewExpressionResource(expressionId: string | null): void {
   if (!model || runtime?.getSnapshot().state !== 'idle') return;
   const activeModel = model;
   stopAssetPreviewMotion('expression-replaced-motion');
+  assetPreviewIsolation?.prepareExpressionPreview();
   const requestToken = ++expressionRequestToken;
   document.body.dataset.assetPreviewKind = 'expression';
   document.body.dataset.assetPreviewResource = expressionId ?? 'neutral';
@@ -1176,7 +1369,10 @@ function previewExpressionResource(expressionId: string | null): void {
     id => activeModel.expression(id),
     expressionId,
   ).then(activation => {
-    if (requestToken !== expressionRequestToken) return;
+    if (requestToken !== expressionRequestToken) {
+      if (assetPreviewIsolation?.locked) assetPreviewIsolation.resetBaseline();
+      return;
+    }
     if (!activation.applied) throw new Error(`Live2D expression ${expressionId} did not start`);
     document.body.dataset.assetPreviewState = 'applied';
   }).catch(error => {
@@ -1191,6 +1387,7 @@ function previewMotionResource(resource: Live2dMotionPreviewResource): void {
   const activeModel = model;
   stopCurrentMotion('replaced');
   stopAssetPreviewMotion('replaced');
+  assetPreviewIsolation?.prepareMotionPreview();
   const token = ++assetPreviewMotionToken;
   const duration = motionPreviewDuration(resource);
   document.body.dataset.assetPreviewKind = 'motion';
@@ -1206,12 +1403,14 @@ function previewMotionResource(resource: Live2dMotionPreviewResource): void {
     const remainingMs = Math.max(0, durationMs - (performance.now() - startedAt));
     assetPreviewMotionTimer = setTimeout(() => {
       if (token !== assetPreviewMotionToken) return;
-      activeModel.internalModel.motionManager.stopAllMotions();
+      if (assetPreviewIsolation?.locked) assetPreviewIsolation.finishMotionPreview();
+      else activeModel.internalModel.motionManager.stopAllMotions();
       assetPreviewMotionTimer = undefined;
       document.body.dataset.assetPreviewState = 'completed';
     }, remainingMs);
   }).catch(error => {
     if (token !== assetPreviewMotionToken) return;
+    assetPreviewIsolation?.finishMotionPreview();
     document.body.dataset.assetPreviewState = 'failed';
     console.error('[asset-preview] motion failed', {
       group: resource.group,
@@ -1262,6 +1461,22 @@ function assetFileStem(file: string): string {
 }
 
 function registerDevelopmentUi(): void {
+  interactionUi.register({
+    id: 'avatar.asset-preview-isolation',
+    target: 'avatar',
+    order: 0,
+    build: () => ({
+      label: '资源对比',
+      items: [{
+        type: 'checkbox',
+        id: 'asset-preview-isolation',
+        label: '基准姿态锁定',
+        checked: assetPreviewIsolation?.locked ?? false,
+        enabled: runtime?.getSnapshot().state === 'idle',
+        invoke: locked => setAssetPreviewIsolationLocked(locked),
+      }],
+    }),
+  });
   interactionUi.register({
     id: 'avatar.expression-resources',
     target: 'avatar',
@@ -1319,7 +1534,8 @@ function registerDevelopmentUi(): void {
           {
             type: 'checkbox', id: 'gaze-follow', label: '眼部跟随',
             checked: snapshot?.gaze.active ?? false,
-            enabled: snapshot?.capabilities?.supportsGaze ?? false,
+            enabled: (snapshot?.capabilities?.supportsGaze ?? false)
+              && !(assetPreviewIsolation?.locked ?? false),
             invoke: enabled => runtime?.dispatch({
               type: enabled ? 'user.gaze-follow-enabled' : 'user.gaze-follow-disabled',
             }),
@@ -1723,7 +1939,10 @@ function initializeDesktopInteraction(initialState: Awaited<ReturnType<NonNullab
 
 function applyPerformanceInferenceConfig(config: DesktopPerformanceInferenceConfig): void {
   performanceInferenceConfig = structuredClone(config);
-  if (reloadablePerformanceInference.configure(config)) performanceEffects?.cancelAll();
+  const v1Changed = reloadablePerformanceInference.configure(config);
+  const v2Changed = reloadableExpressionCatalogInference.configure(config);
+  if (v1Changed) performanceEffects?.cancelAll();
+  if (v2Changed) performanceV2Effects?.cancelAll();
   document.body.dataset.performanceInference = config.operational ? 'enabled' : 'disabled';
   document.body.dataset.performanceInferenceDesired = config.enabled ? 'enabled' : 'disabled';
   document.body.dataset.performanceInferencePhase = config.phase;

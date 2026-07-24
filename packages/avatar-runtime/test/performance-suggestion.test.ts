@@ -96,6 +96,7 @@ test('late inference updates the active timeline and does not wait for another p
 
   assert.equal(runtime.getSnapshot().emotion.current, 'happy');
   assert.deepEqual(effects.expressions.at(-1), {
+    expressionKey: 'happy',
     emotion: 'happy',
     expressionId: 'exp_02',
     intensity: 0.7,
@@ -123,6 +124,7 @@ test('character emotion binding resets its Live2D expression when the plan compl
   assert.equal(effects.expressions.at(-1)?.expressionId, 'exp_02');
   effects.complete();
   assert.deepEqual(effects.expressions.at(-1), {
+    expressionKey: 'neutral',
     emotion: 'neutral',
     expressionId: null,
     intensity: 0,

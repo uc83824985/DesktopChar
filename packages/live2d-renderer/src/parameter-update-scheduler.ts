@@ -23,6 +23,7 @@ export interface ParameterUpdaterDescriptor {
 interface RegisteredUpdater<Context> {
   updater: ParameterUpdater<Context>;
   sequence: number;
+  enabled: boolean;
 }
 
 /**
@@ -40,7 +41,7 @@ export class ParameterUpdateScheduler<Context> {
     if (this.entries.has(updater.id)) {
       throw new Error(`Parameter updater "${updater.id}" is already registered`);
     }
-    this.entries.set(updater.id, { updater, sequence: this.nextSequence++ });
+    this.entries.set(updater.id, { updater, sequence: this.nextSequence++, enabled: true });
     this.dirty = true;
     let registered = true;
     return () => {
@@ -65,10 +66,23 @@ export class ParameterUpdateScheduler<Context> {
     this.dirty = true;
   }
 
+  setEnabled(id: string, enabled: boolean): void {
+    const entry = this.entries.get(id);
+    if (!entry) throw new Error(`Parameter updater "${id}" is not registered`);
+    entry.enabled = enabled;
+  }
+
+  isEnabled(id: string): boolean {
+    const entry = this.entries.get(id);
+    if (!entry) throw new Error(`Parameter updater "${id}" is not registered`);
+    return entry.enabled;
+  }
+
   run(context: Context): void {
     this.sortIfNeeded();
     // Mutations requested by an updater take effect on the next frame.
-    for (const entry of [...this.ordered]) entry.updater.update(context);
+    const frame = this.ordered.filter(entry => entry.enabled);
+    for (const entry of frame) entry.updater.update(context);
   }
 
   list(): ParameterUpdaterDescriptor[] {

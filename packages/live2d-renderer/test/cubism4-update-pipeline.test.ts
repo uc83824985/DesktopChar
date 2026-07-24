@@ -48,6 +48,21 @@ test('keeps motion-authored eye parameters by skipping automatic blink', () => {
   assert.ok(calls.indexOf('expression') < calls.indexOf('event:beforeModelUpdate'));
 });
 
+test('can pause natural breath while preserving automatic eye blink', () => {
+  const { target, calls } = fakeTarget(false);
+  const handle = installCubism4UpdatePipeline(target);
+  handle.scheduler.setEnabled('cubism.breath', false);
+
+  target.update(16, 1_000);
+
+  assert.equal(calls.includes('breath'), false);
+  assert.equal(calls.includes('eye-blink'), true);
+  handle.scheduler.setEnabled('cubism.breath', true);
+  calls.length = 0;
+  target.update(16, 1_016);
+  assert.equal(calls.includes('breath'), true);
+});
+
 test('installation is idempotent and restore returns the original instance method', () => {
   const { target, calls, destroy } = fakeTarget(false);
   const originalUpdate = target.update;

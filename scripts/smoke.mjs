@@ -27,7 +27,12 @@ try {
     `http://127.0.0.1:4173/?ttsMcpUrl=${encodeURIComponent(ttsAddress.mcpUrl)}&ttsTestFixtures=known-tone-v1`,
     { waitUntil: 'networkidle' },
   );
-  await page.locator('body[data-ready="true"][data-live2d-update-pipeline="ordered-v1"]').waitFor({ timeout: 20_000 });
+  await page.locator(
+    'body[data-ready="true"]'
+      + '[data-live2d-update-pipeline="ordered-v1"]'
+      + '[data-asset-preview-isolation="unlocked"]'
+      + '[data-asset-preview-breath="active"]',
+  ).waitFor({ timeout: 20_000 });
   await page.locator('body[data-gaze-head-response-ms="120"][data-gaze-eye-response-ms="45"]').waitFor({ timeout: 1_000 });
   await page.locator('body[data-tts-health="ready"]').waitFor({ timeout: 5_000 });
   await page.getByRole('button', { name: '口型同步验收' }).click();
@@ -56,15 +61,15 @@ try {
   await page.locator('body[data-runtime-state="speaking"]').waitFor({ timeout: 2_000 });
   await page.locator('body[data-live2d-expression="exp_02"]').waitFor({ timeout: 2_000 });
   await page.locator('body[data-runtime-state="idle"]').waitFor({ timeout: 3_000 });
-  await page.locator('body[data-live2d-expression="neutral"]').waitFor({ timeout: 1_000 });
+  await page.locator('body[data-live2d-expression="exp_01"]').waitFor({ timeout: 1_000 });
 
-  // resetExpression() keeps pixi-live2d-display's currentExpression pointer.
-  // Repeating the same bound emotion must restore it instead of being rejected.
+  // The dynamic character catalog restores its authored neutral expression.
+  // Repeating the same bound emotion must still be accepted.
   await page.getByRole('button', { name: '本地语音测试' }).click();
   await page.locator('body[data-runtime-state="speaking"]').waitFor({ timeout: 2_000 });
   await page.locator('body[data-live2d-expression="exp_02"]').waitFor({ timeout: 2_000 });
   await page.locator('body[data-runtime-state="idle"]').waitFor({ timeout: 3_000 });
-  await page.locator('body[data-live2d-expression="neutral"]').waitFor({ timeout: 1_000 });
+  await page.locator('body[data-live2d-expression="exp_01"]').waitFor({ timeout: 1_000 });
 
   await page.getByRole('button', { name: '播放动作' }).click();
   await page.locator('body[data-motion-state="playing"]').waitFor({ timeout: 3_000 });
@@ -112,6 +117,25 @@ try {
   if (!await interactionPanel.isVisible() || hoveredPanelPhase !== 'visible') {
     throw new Error(`Interaction panel disappeared while the pointer remained inside (${hoveredPanelPhase})`);
   }
+  const isolationToggle = page.locator('[data-item-id="asset-preview-isolation"]');
+  await isolationToggle.click();
+  await page.locator(
+    'body[data-asset-preview-isolation="locked"]'
+      + '[data-asset-preview-breath="suppressed"]'
+      + '[data-gaze-follow="disabled"]'
+      + '[data-motion-state="debug-suppressed"]',
+  ).waitFor({ timeout: 2_000 });
+  if (await isolationToggle.getAttribute('aria-pressed') !== 'true') {
+    throw new Error('Asset preview baseline lock did not refresh its checked state');
+  }
+  await page.getByRole('button', { name: '播放动作' }).evaluate(button => button.click());
+  await page.locator('body[data-runtime-state="speaking"]').waitFor({ timeout: 2_000 });
+  await page.locator(
+    'body[data-runtime-state="idle"]'
+      + '[data-asset-preview-isolation="locked"]'
+      + '[data-live2d-expression="debug-neutral"]'
+      + '[data-motion-state="debug-suppressed"]',
+  ).waitFor({ timeout: 12_000 });
   await page.locator('[data-item-id="expression-exp_02"]').click({ timeout: 2_000 });
   await page.locator(
     'body[data-asset-preview-kind="expression"]'
@@ -130,6 +154,15 @@ try {
   if (!await interactionPanel.isVisible()) {
     throw new Error('Motion preview dismissed the interaction panel');
   }
+  await page.locator(
+    'body[data-asset-preview-isolation="locked"][data-asset-preview-state="completed"]',
+  ).waitFor({ timeout: 12_000 });
+  await isolationToggle.click();
+  await page.locator(
+    'body[data-asset-preview-isolation="unlocked"]'
+      + '[data-asset-preview-breath="active"]'
+      + '[data-gaze-follow="enabled"]',
+  ).waitFor({ timeout: 2_000 });
   if (process.env.DESKTOP_CHAR_INTERACTION_PANEL_SCREENSHOT) {
     await page.screenshot({ path: process.env.DESKTOP_CHAR_INTERACTION_PANEL_SCREENSHOT });
   }

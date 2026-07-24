@@ -49,6 +49,16 @@ export class DefaultAvatarPlanner implements AvatarPlanner {
             intensity: Math.max(0, Math.min(1, segment.emotion.intensity ?? policy.defaultEmotionIntensity)),
           }
         : undefined;
+      const expression = segment.expression && segment.expression.expressionKey.trim()
+        ? {
+            ...segment.expression,
+            expressionKey: segment.expression.expressionKey.trim(),
+            intensity: Math.max(
+              0,
+              Math.min(1, segment.expression.intensity ?? policy.defaultEmotionIntensity),
+            ),
+          }
+        : undefined;
       const actions = segment.actions
         ?.filter(cue => capabilities.actions.includes(cue.action))
         .slice(0, policy.maxActionsPerSegment);
@@ -61,6 +71,7 @@ export class DefaultAvatarPlanner implements AvatarPlanner {
         speechText: segment.speechText,
       };
       if (emotion) normalized.emotion = emotion;
+      if (expression) normalized.expression = expression;
       if (actions?.length) normalized.actions = actions;
       if (segment.bubble) normalized.bubble = structuredClone(segment.bubble);
       return normalized;

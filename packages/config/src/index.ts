@@ -2,8 +2,11 @@ import {
   DEFAULT_GAZE_SMOOTHING_PROFILE,
   DEFAULT_LIP_SYNC_PROFILE,
   type AvatarAction,
+  type AvatarState,
+  type CharacterExpressionCatalog,
   type Emotion,
   type EmotionBindings,
+  type ExpressionDescriptor,
   type GazeProfile,
   type LipSyncProfile,
 } from '../../contracts/src/index.ts';
@@ -15,6 +18,7 @@ export interface CharacterConfig {
   allowedEmotions: Emotion[];
   allowedActions: AvatarAction[];
   emotionBindings: EmotionBindings;
+  expressionCatalog?: CharacterExpressionCatalog;
   expressionCooldownMs: number;
   idleReturnDelayMs: number;
   gazeProfile: GazeProfile;
@@ -25,6 +29,8 @@ export const DEFAULT_CHARACTER_PROFILE_URL = 'models/Mao/DesktopChar.character.j
 
 const EMOTIONS = new Set<Emotion>(['neutral', 'happy', 'sad', 'angry', 'surprised', 'thinking']);
 const ACTIONS = new Set<AvatarAction>(['nod', 'shake', 'tap', 'greet']);
+const AVATAR_STATES = new Set<AvatarState>(['idle', 'listening', 'thinking', 'speaking', 'presenting']);
+const AFFECT_DIMENSIONS = new Set(['valence', 'arousal', 'approval', 'engagement', 'certainty']);
 
 export async function loadCharacterConfig(
   profileUrl = DEFAULT_CHARACTER_PROFILE_URL,
@@ -39,7 +45,8 @@ export function parseCharacterConfig(value: unknown, profileUrl = DEFAULT_CHARAC
   const profile = record(value, 'Character profile');
   assertKnownKeys(profile, [
     '$schema', 'version', 'id', 'model', 'defaultEmotion', 'allowedEmotions', 'allowedActions',
-    'emotionBindings', 'expressionCooldownMs', 'idleReturnDelayMs', 'gazeProfile', 'lipSyncProfile',
+    'emotionBindings', 'expressionCatalog', 'expressionCooldownMs', 'idleReturnDelayMs', 'gazeProfile',
+    'lipSyncProfile',
   ], 'Character profile');
   if (profile.$schema !== undefined) nonEmptyText(profile.$schema, 'Character profile $schema');
   if ((profile.version ?? 1) !== 1) throw new TypeError('Character profile version must be 1');
@@ -52,6 +59,7 @@ export function parseCharacterConfig(value: unknown, profileUrl = DEFAULT_CHARAC
   }
   const allowedActions = enumArray(profile.allowedActions, ACTIONS, 'Character profile allowedActions');
   const bindings = emotionBindings(profile.emotionBindings, allowedEmotions);
+  const catalog = expressionCatalog(profile.expressionCatalog);
   return {
     id,
     modelJsonUrl: resolveProfileAsset(profileUrl, model),
@@ -59,11 +67,135 @@ export function parseCharacterConfig(value: unknown, profileUrl = DEFAULT_CHARAC
     allowedEmotions,
     allowedActions,
     emotionBindings: bindings,
+    ...(catalog ? { expressionCatalog: catalog } : {}),
     expressionCooldownMs: nonNegativeNumber(profile.expressionCooldownMs, 'Character profile expressionCooldownMs'),
     idleReturnDelayMs: nonNegativeNumber(profile.idleReturnDelayMs, 'Character profile idleReturnDelayMs'),
     gazeProfile: gazeProfile(profile.gazeProfile),
     lipSyncProfile: lipSyncProfile(profile.lipSyncProfile),
   };
+}
+
+export function validateCharacterExpressionResources(
+  catalog: CharacterExpressionCatalog,
+  availableExpressionIds: Iterable<string>,
+): void {
+  const available = new Set(availableExpressionIds);
+  const boundResources = new Set<string>();
+  for (const descriptor of catalog.descriptors) {
+    const binding = catalog.bindings[descriptor.expressionKey];
+    if (!binding) {
+      throw new TypeError(`Expression catalog has no binding for ${descriptor.expressionKey}`);
+    }
+    if (binding.expression === null) continue;
+    if (!available.has(binding.expression)) {
+      throw new TypeError(
+        `Expression catalog binding ${descriptor.expressionKey} references unavailable resource ${binding.expression}`,
+      );
+    }
+    if (boundResources.has(binding.expression)) {
+      throw new TypeError(`Expression resource is bound more than once: ${binding.expression}`);
+    }
+    boundResources.add(binding.expression);
+  }
+}
+
+function expressionCatalog(value: unknown): CharacterExpressionCatalog | undefined {
+  if (value === undefined) return undefined;
+  const catalog = record(value, 'Character profile expressionCatalog');
+  assertKnownKeys(
+    catalog,
+    ['revision', 'defaultExpressionKey', 'descriptors', 'bindings'],
+    'Character profile expressionCatalog',
+  );
+  const revision = nonNegativeInteger(catalog.revision, 'Character profile expressionCatalog.revision');
+  const defaultExpressionKey = expressionKey(
+    catalog.defaultExpressionKey,
+    'Character profile expressionCatalog.defaultExpressionKey',
+  );
+  if (!Array.isArray(catalog.descriptors) || !catalog.descriptors.length) {
+    throw new TypeError('Character profile expressionCatalog.descriptors must be a non-empty array');
+  }
+  const keys = new Set<string>();
+  const descriptors = catalog.descriptors.map((item, index): ExpressionDescriptor => {
+    const label = `Character profile expressionCatalog.descriptors[${index}]`;
+    const descriptor = record(item, label);
+    assertKnownKeys(descriptor, [
+      'expressionKey', 'label', 'semanticTags', 'prototypeTexts', 'affectPrototype',
+      'baseWeight', 'cooldownMs', 'holdMs', 'compatibleAvatarStates',
+    ], label);
+    const key = expressionKey(descriptor.expressionKey, `${label}.expressionKey`);
+    if (keys.has(key)) throw new TypeError(`${label}.expressionKey must be unique`);
+    keys.add(key);
+    const hold = record(descriptor.holdMs, `${label}.holdMs`);
+    assertKnownKeys(hold, ['minMs', 'maxMs'], `${label}.holdMs`);
+    const minMs = nonNegativeNumber(hold.minMs, `${label}.holdMs.minMs`);
+    const maxMs = nonNegativeNumber(hold.maxMs, `${label}.holdMs.maxMs`);
+    if (maxMs < minMs) throw new TypeError(`${label}.holdMs.maxMs must be at least minMs`);
+    const affect = affectPrototype(descriptor.affectPrototype, `${label}.affectPrototype`);
+    return {
+      expressionKey: key,
+      label: nonEmptyText(descriptor.label, `${label}.label`),
+      semanticTags: uniqueTextArray(descriptor.semanticTags, `${label}.semanticTags`),
+      prototypeTexts: uniqueTextArray(descriptor.prototypeTexts, `${label}.prototypeTexts`),
+      ...(affect ? { affectPrototype: affect } : {}),
+      baseWeight: positiveNumber(descriptor.baseWeight, `${label}.baseWeight`),
+      cooldownMs: nonNegativeNumber(descriptor.cooldownMs, `${label}.cooldownMs`),
+      holdMs: { minMs, maxMs },
+      compatibleAvatarStates: enumArray(
+        descriptor.compatibleAvatarStates,
+        AVATAR_STATES,
+        `${label}.compatibleAvatarStates`,
+      ),
+    };
+  });
+  if (!keys.has(defaultExpressionKey)) {
+    throw new TypeError('Character profile expressionCatalog.defaultExpressionKey must reference a descriptor');
+  }
+
+  const configuredBindings = record(
+    catalog.bindings,
+    'Character profile expressionCatalog.bindings',
+  );
+  const bindingKeys = Object.keys(configuredBindings);
+  const unknownBindings = bindingKeys.filter(key => !keys.has(key));
+  const missingBindings = [...keys].filter(key => !(key in configuredBindings));
+  if (unknownBindings.length || missingBindings.length) {
+    throw new TypeError(
+      'Character profile expressionCatalog.bindings must exactly match descriptor keys'
+      + `${unknownBindings.length ? `; unknown: ${unknownBindings.join(', ')}` : ''}`
+      + `${missingBindings.length ? `; missing: ${missingBindings.join(', ')}` : ''}`,
+    );
+  }
+  const bindings = Object.fromEntries(bindingKeys.map(key => {
+    const label = `Character profile expressionCatalog.bindings.${key}`;
+    const binding = record(configuredBindings[key], label);
+    assertKnownKeys(binding, ['expression'], label);
+    const expression = binding.expression === null
+      ? null
+      : nonEmptyText(binding.expression, `${label}.expression`);
+    return [key, { expression }];
+  }));
+  return { revision, defaultExpressionKey, descriptors, bindings };
+}
+
+function affectPrototype(
+  value: unknown,
+  label: string,
+): ExpressionDescriptor['affectPrototype'] | undefined {
+  if (value === undefined) return undefined;
+  const prototype = record(value, label);
+  assertKnownKeys(prototype, [...AFFECT_DIMENSIONS], label);
+  if (!Object.keys(prototype).length) throw new TypeError(`${label} must not be empty`);
+  const result: NonNullable<ExpressionDescriptor['affectPrototype']> = {};
+  for (const [key, dimension] of Object.entries(prototype)) {
+    const minimum = key === 'valence' || key === 'approval' ? -1 : 0;
+    const number = finiteNumber(dimension, `${label}.${key}`);
+    if (number < minimum || number > 1) {
+      throw new TypeError(`${label}.${key} must be from ${minimum} to 1`);
+    }
+    result[key as keyof typeof result] = number;
+  }
+  return result;
 }
 
 function emotionBindings(value: unknown, allowedEmotions: Emotion[]): EmotionBindings {
@@ -163,6 +295,21 @@ function enumValue<T extends string>(value: unknown, allowed: ReadonlySet<T>, la
   return value as T;
 }
 
+function uniqueTextArray(value: unknown, label: string): string[] {
+  if (!Array.isArray(value) || !value.length) throw new TypeError(`${label} must be a non-empty array`);
+  const result = value.map((item, index) => nonEmptyText(item, `${label}[${index}]`));
+  if (new Set(result).size !== result.length) throw new TypeError(`${label} must not contain duplicates`);
+  return result;
+}
+
+function expressionKey(value: unknown, label: string): string {
+  const key = nonEmptyText(value, label);
+  if (!/^[a-z0-9](?:[a-z0-9._-]*[a-z0-9])?$/u.test(key)) {
+    throw new TypeError(`${label} must be a stable lowercase logical ID`);
+  }
+  return key;
+}
+
 function record(value: unknown, label: string): Record<string, unknown> {
   if (!value || typeof value !== 'object' || Array.isArray(value)) throw new TypeError(`${label} must be an object`);
   return value as Record<string, unknown>;
@@ -187,6 +334,12 @@ function positiveNumber(value: unknown, label: string): number {
 function nonNegativeNumber(value: unknown, label: string): number {
   const result = finiteNumber(value, label);
   if (result < 0) throw new TypeError(`${label} must be non-negative`);
+  return result;
+}
+
+function nonNegativeInteger(value: unknown, label: string): number {
+  const result = nonNegativeNumber(value, label);
+  if (!Number.isInteger(result)) throw new TypeError(`${label} must be an integer`);
   return result;
 }
 

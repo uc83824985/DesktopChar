@@ -41,7 +41,13 @@ try {
     if (message.type() === 'error' && !message.text().includes('404')) errors.push(message.text());
   });
   page.on('pageerror', error => errors.push(error.stack ?? error.message));
-  await page.locator('body[data-ready="true"][data-shell="floating"][data-live2d-update-pipeline="ordered-v1"]').waitFor({ timeout: 20_000 });
+  await page.locator(
+    'body[data-ready="true"]'
+      + '[data-shell="floating"]'
+      + '[data-live2d-update-pipeline="ordered-v1"]'
+      + '[data-asset-preview-isolation="unlocked"]'
+      + '[data-asset-preview-breath="active"]',
+  ).waitFor({ timeout: 20_000 });
   await page.locator('body[data-gaze-head-response-ms="120"][data-gaze-eye-response-ms="45"]').waitFor({ timeout: 2_000 });
   await page.locator('body[data-desktop-shell="ready"]').waitFor({ timeout: 2_000 });
   await page.locator('body[data-gaze-follow="enabled"]').waitFor({ timeout: 2_000 });
@@ -107,7 +113,7 @@ try {
     throw new Error(`Speech bubble presenter did not render Runtime text: ${JSON.stringify(bubble)}`);
   }
   await page.locator('body[data-runtime-state="idle"][data-speech-bubble="complete"]').waitFor({ timeout: 2_000 });
-  await page.locator('body[data-live2d-expression="neutral"]').waitFor({ timeout: 1_000 });
+  await page.locator('body[data-live2d-expression="exp_01"]').waitFor({ timeout: 1_000 });
   await page.locator('body[data-speech-bubble="hidden"]').waitFor({ timeout: 1_500 });
 
   await page.locator('#avatar').focus();
@@ -183,10 +189,10 @@ try {
   finally {
     await performanceClient.close();
   }
-  if (!performanceLogs.some(entry => entry.includes('"event":"request.started"'))
+  if (!performanceLogs.some(entry => entry.includes('"event":"request.v2-started"'))
     || !performanceLogs.some(entry => (
-      entry.includes('"event":"request.completed"')
-      || entry.includes('"event":"request.cancelled"')
+      entry.includes('"event":"request.v2-completed"')
+      || entry.includes('"event":"request.v2-cancelled"')
     ))) {
     throw new Error(`Performance inference request lifecycle was not logged: ${JSON.stringify(performanceLogs)}`);
   }
