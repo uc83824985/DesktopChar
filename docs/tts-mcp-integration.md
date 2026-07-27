@@ -95,7 +95,7 @@ DesktopChar 拥有一个配置明确的入口子进程。启动流程为：
 
 ```json
 {
-  "$schema": "./apps/desktop/public/schemas/desktop-char.tts-mcp-profile.schema.json",
+  "$schema": "../apps/desktop/public/schemas/desktop-char.tts-mcp-profile.schema.json",
   "version": 1,
   "lifecycle": {
     "type": "managed",
@@ -125,6 +125,9 @@ DesktopChar 拥有一个配置明确的入口子进程。启动流程为：
 ```
 
 切换时只需修改 `ttsMcp.profile`，例如从 `local` 改为 `qwen`，然后在前台执行“重新加载配置”。
+仓库内 `qwen.json` 是不包含设备路径的 external Profile。需要 DesktopChar 托管本机 Qwen
+进程时，复制为 `qwen.local.json`，补充本机 `lifecycle.start`，并选择 Profile
+`qwen.local`；`*.local.json` 默认不进入 Git。
 
 字段语义：
 
@@ -359,7 +362,7 @@ Provider 应避免：
 - `local-tts-mcp/server.mjs`：前台进程入口与信号处理；
 - `local-tts-mcp/service.mjs`：MCP、任务映射、音频 endpoint 和三个工具；
 - `local-tts-mcp/service.test.mjs`：官方 MCP Client、真实 HTTP 流、取消和能力测试；
-- `tts-mcp-profile/contract.mjs`：DesktopChar 侧 Profile 校验器。
+- `packages/tts-mcp-contract/src/index.mjs`：DesktopChar 与参考 Provider 共用的 MCP 语义契约校验器。
 
 Local TTS 默认由 DesktopChar 以 `managed` 启动，也可以执行 `npm run tts:local-mcp` 后改用 `external` 验证所有权边界。
 

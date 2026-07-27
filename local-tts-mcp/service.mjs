@@ -9,7 +9,7 @@ import {
   TTS_MCP_PROFILE,
   TTS_MCP_PROFILE_VERSION,
   TTS_MCP_TOOLS,
-} from '../tts-mcp-profile/contract.mjs';
+} from '../packages/tts-mcp-contract/src/index.mjs';
 import { createJrpgBlipPcmStream, createJrpgBlipPlan, JRPG_BLIP_VOICE, JRPG_BLIP_VOICES } from './jrpg-blip.mjs';
 
 const STATUS_TOOL = TTS_MCP_TOOLS.status;

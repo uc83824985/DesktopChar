@@ -3,7 +3,7 @@ import test from 'node:test';
 import {
   parseTtsStatusResult,
   validateTtsMcpTools,
-} from '../../../tts-mcp-profile/contract.mjs';
+} from '../../../packages/tts-mcp-contract/src/index.mjs';
 
 test('DesktopChar TTS Profile requires status, open-stream and cancellation schemas', () => {
   const catalog = validateTtsMcpTools([

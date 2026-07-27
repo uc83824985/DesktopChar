@@ -177,6 +177,35 @@ test('checked-in desktop config example stays aligned with built-in defaults', a
   );
 });
 
+test('checked-in TTS profiles are portable and local profile names cannot traverse directories', async () => {
+  const profileDirectory = new URL('../../../tts-mcp-profiles/', import.meta.url);
+  const local = JSON.parse(await readFile(new URL('local.json', profileDirectory), 'utf8'));
+  const qwen = JSON.parse(await readFile(new URL('qwen.json', profileDirectory), 'utf8'));
+  assert.equal(local.$schema, '../apps/desktop/public/schemas/desktop-char.tts-mcp-profile.schema.json');
+  assert.equal(qwen.$schema, local.$schema);
+  assert.equal(qwen.lifecycle.type, 'external');
+  assert.equal('start' in qwen.lifecycle, false);
+  assert.doesNotMatch(
+    JSON.stringify([local, qwen]),
+    /(?:^|["\s])[A-Za-z]:[\\/]|\/Users\/|\/home\//u,
+  );
+  const normalized = normalizeMcpServicesConfig(
+    { ttsMcp: { profile: 'qwen' } },
+    {},
+    { ttsProfileName: 'qwen', ttsProfileConfig: qwen },
+  );
+  assert.equal(normalized.tts.profile, 'qwen');
+  assert.equal(normalized.tts.lifecycle.type, 'external');
+  assert.throws(
+    () => normalizeMcpServicesConfig(
+      { ttsMcp: { profile: '../qwen' } },
+      {},
+      { ttsProfileConfig: qwen },
+    ),
+    /safe lowercase profile name/,
+  );
+});
+
 test('desktop config loader falls back from a missing user config to example then built-in defaults', async t => {
   const directory = await mkdtemp(path.join(os.tmpdir(), 'desktop-char-config-fallback-'));
   const filePath = path.join(directory, 'desktop-char.config.json');

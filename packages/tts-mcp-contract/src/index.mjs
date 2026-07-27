@@ -1,3 +1,4 @@
+/** Shared semantic contract for DesktopChar-compatible streaming TTS MCP providers. */
 export const TTS_MCP_PROFILE = 'desktop-char.tts.streaming';
 export const TTS_MCP_PROFILE_VERSION = 1;
 

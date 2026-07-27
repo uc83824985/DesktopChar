@@ -6,7 +6,6 @@ dist/
 out/
 coverage/
 *.log
-/artifacts/motion-audit/
 
 # Developer scratch files
 /temp/*
@@ -17,6 +16,7 @@ coverage/
 .env.*
 !.env.example
 desktop-char.config.json
+/tts-mcp-profiles/*.local.json
 
 # Editors and operating systems
 .idea/

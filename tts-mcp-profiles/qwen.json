@@ -1,25 +1,9 @@
 {
-  "$schema": "./apps/desktop/public/schemas/desktop-char.tts-mcp-profile.schema.json",
+  "$schema": "../apps/desktop/public/schemas/desktop-char.tts-mcp-profile.schema.json",
   "version": 1,
   "lifecycle": {
-    "type": "managed",
-    "start": {
-      "executable": "C:\\Windows\\System32\\WindowsPowerShell\\v1.0\\powershell.exe",
-      "args": [
-        "-NoProfile",
-        "-ExecutionPolicy", "Bypass",
-        "-File", "G:\\Qwen3-TTS-GGUF\\Start-DesktopChar-TTS-MCP.ps1"
-      ],
-      "cwd": "G:\\Qwen3-TTS-GGUF",
-      "env": {
-        "PYTHONIOENCODING": "utf-8",
-        "PYTHONUTF8": "1"
-      }
-    },
-    "startupTimeoutMs": 180000,
-    "shutdownTimeoutMs": 15000,
-    "healthIntervalMs": 10000,
-    "restartOnFailure": true
+    "type": "external",
+    "healthIntervalMs": 10000
   },
   "connection": {
     "transport": "streamable-http",

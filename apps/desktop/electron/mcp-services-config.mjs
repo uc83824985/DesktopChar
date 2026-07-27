@@ -102,7 +102,9 @@ export function normalizeDesktopConfig(fileConfig = {}, env = {}, options = {}) 
   const performanceModel = optionalText(performanceInference.model, 'performanceInference.model');
   const tts = optionalRecord(fileConfig.ttsMcp, 'ttsMcp');
   assertKnownKeys(tts, ['autoStart', 'profile'], 'ttsMcp');
-  const selectedTtsProfileName = options.ttsProfileName ?? requestedTtsProfileName(tts);
+  const selectedTtsProfileName = ttsProfileName(
+    options.ttsProfileName ?? requestedTtsProfileName(tts),
+  );
   const selectedTtsProfile = normalizeSelectedTtsProfile(options.ttsProfileConfig ?? defaultLocalTtsProfile(), selectedTtsProfileName);
   const lifecycle = optionalRecord(selectedTtsProfile.lifecycle, 'ttsMcp.lifecycle');
   assertKnownKeys(lifecycle, ['type', 'start', 'startupTimeoutMs', 'shutdownTimeoutMs', 'healthIntervalMs', 'restartOnFailure'], 'ttsMcp.lifecycle');
@@ -388,7 +390,15 @@ function reconnectConfig(value, label) {
 
 function requestedTtsProfileName(tts) {
   if (Object.keys(tts).length === 0) return DEFAULT_TTS_PROFILE_NAME;
-  return text(tts.profile ?? DEFAULT_TTS_PROFILE_NAME, 'ttsMcp.profile');
+  return ttsProfileName(tts.profile ?? DEFAULT_TTS_PROFILE_NAME);
+}
+
+function ttsProfileName(value) {
+  const result = text(value, 'ttsMcp.profile');
+  if (!/^[a-z0-9](?:[a-z0-9._-]*[a-z0-9])?$/u.test(result)) {
+    throw new TypeError('ttsMcp.profile must be a safe lowercase profile name');
+  }
+  return result;
 }
 
 function normalizeSelectedTtsProfile(value, profileName) {
@@ -401,6 +411,7 @@ function normalizeSelectedTtsProfile(value, profileName) {
 }
 
 function ttsProfileCandidates(profileName, options = {}) {
+  profileName = ttsProfileName(profileName);
   const configFilePath = options.configFilePath ? path.resolve(options.configFilePath) : undefined;
   const exampleConfigFilePath = options.exampleConfigFilePath ? path.resolve(options.exampleConfigFilePath) : undefined;
   const cwd = path.resolve(options.cwd ?? process.cwd());

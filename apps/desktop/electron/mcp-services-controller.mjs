@@ -4,7 +4,7 @@ import {
   TTS_MCP_TOOLS,
   parseTtsStatusResult,
   validateTtsMcpTools,
-} from '../../../tts-mcp-profile/contract.mjs';
+} from '../../../packages/tts-mcp-contract/src/index.mjs';
 import { createCharacterMcpService, CHARACTER_MCP_TOOLS } from './character-mcp-service.mjs';
 import { startManagedProcess } from './managed-process.mjs';
 import {

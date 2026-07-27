@@ -82,7 +82,10 @@ Copy-Item desktop-char.config.example.json desktop-char.config.json
 }
 ```
 
-对应的 TTS Profile 文件放在 `tts-mcp-profiles/<name>.json`。例如 `tts-mcp-profiles/local.json` 可承载 Local TTS 的 managed 启动参数；把根配置里的 `ttsMcp.profile` 从 `local` 改成 `qwen`，即可切到 `tts-mcp-profiles/qwen.json`。
+对应的 TTS Profile 文件放在 `tts-mcp-profiles/<name>.json`。例如 `tts-mcp-profiles/local.json`
+承载仓库内 Local TTS 的 managed 启动参数；`tts-mcp-profiles/qwen.json` 是无设备路径的
+external Profile。需要托管本机 Qwen 进程时，复制为被 Git 忽略的 `qwen.local.json`，
+补充本机启动路径，并把 `ttsMcp.profile` 设为 `qwen.local`。
 
 `autoStart` 只决定本次应用启动后的初始期望状态。用户在右键菜单做出的启停选择属于当前进程的应用状态，普通配置重载不会被文件中的 `autoStart` 反向覆盖。
 

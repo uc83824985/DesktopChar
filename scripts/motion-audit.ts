@@ -306,7 +306,7 @@ function parseOptions(args: string[]): AuditOptions {
   }
   const timestamp = new Date().toISOString().replaceAll(':', '-').replace(/\.\d{3}Z$/u, 'Z');
   const output = values.get('--output')
-    ?? path.join('artifacts', 'motion-audit', `audit-${timestamp}`);
+    ?? path.join('temp', 'motion-audit', `audit-${timestamp}`);
   return {
     outputDirectory: path.resolve(root, output),
     intervalMs: integerOption(values, '--interval-ms', DEFAULT_INTERVAL_MS, 50, 10_000),

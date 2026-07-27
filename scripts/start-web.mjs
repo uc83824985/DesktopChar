@@ -3,7 +3,10 @@ import { createServer, preview } from 'vite';
 import { Client } from '@modelcontextprotocol/sdk/client/index.js';
 import { StreamableHTTPClientTransport } from '@modelcontextprotocol/sdk/client/streamableHttp.js';
 import { startManagedProcess } from '../apps/desktop/electron/managed-process.mjs';
-import { parseTtsStatusResult, validateTtsMcpTools } from '../tts-mcp-profile/contract.mjs';
+import {
+  parseTtsStatusResult,
+  validateTtsMcpTools,
+} from '../packages/tts-mcp-contract/src/index.mjs';
 
 const previewMode = process.argv.includes('--preview');
 const open = !process.argv.includes('--no-open');

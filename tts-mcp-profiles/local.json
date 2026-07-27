@@ -1,5 +1,5 @@
 {
-  "$schema": "./apps/desktop/public/schemas/desktop-char.tts-mcp-profile.schema.json",
+  "$schema": "../apps/desktop/public/schemas/desktop-char.tts-mcp-profile.schema.json",
   "version": 1,
   "lifecycle": {
     "type": "managed",

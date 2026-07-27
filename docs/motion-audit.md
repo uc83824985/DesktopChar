@@ -29,7 +29,7 @@ npm run motion:audit
 生成目录为：
 
 ```text
-artifacts/motion-audit/audit-<timestamp>/
+temp/motion-audit/audit-<timestamp>/
 ```
 
 该目录已加入 `.gitignore`，不会把大量审阅 PNG 误提交到仓库。
@@ -40,7 +40,7 @@ artifacts/motion-audit/audit-<timestamp>/
 npm run motion:audit -- --groups TapBody
 npm run motion:audit -- --motions TapBody:3,TapBody:4
 npm run motion:audit -- --interval-ms 500 --max-frames 80
-npm run motion:audit -- --output artifacts/motion-audit/mao-review
+npm run motion:audit -- --output temp/motion-audit/mao-review
 npm run motion:audit -- --headed
 ```
 
