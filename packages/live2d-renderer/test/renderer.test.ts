@@ -31,8 +31,14 @@ test('delegates motion, hit testing, resize, and unload lifecycle', async () => 
   const core = new FakeLive2DCore({ mao: descriptor });
   const renderer = new Live2DRenderer(core);
   await renderer.load({ id: 'mao', modelJsonUrl: '/mao.model3.json' });
-  assert.equal((await renderer.playMotion({ actionId: 'a', action: 'nod', priority: 1 })).completed, true);
-  assert.equal((await renderer.playMotion({ actionId: 'b', action: 'greet', priority: 1 })).completed, false);
+  assert.equal((await renderer.playMotion({
+    requestId: 'a',
+    actionId: 'nod',
+    binding: {
+      type: 'live2d-motion', group: 'TapBody', index: 0, mode: 'once', expectedDurationMs: 1000,
+    },
+    priority: 1,
+  })).completed, true);
   assert.deepEqual(renderer.hitTest(0, 0), ['Head']);
   renderer.resize(800, 600);
   assert.deepEqual(core.models.get('mao')!.size, { width: 800, height: 600 });

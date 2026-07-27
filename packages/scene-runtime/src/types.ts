@@ -123,10 +123,19 @@ export interface SceneRelation {
   state: SceneData;
 }
 
+export interface SceneActionContextDefinition {
+  tags: string[];
+  posture?: string;
+  allowedActionTags: string[];
+  blockedActionTags: string[];
+  triggerChanceMultipliers: Record<string, number>;
+}
+
 export interface SceneDefinition {
   id: string;
   actors: SceneActorDefinition[];
   relations: SceneRelation[];
+  actionContext?: SceneActionContextDefinition;
 }
 
 export interface SceneFragmentDefinition {
@@ -166,6 +175,7 @@ export interface SceneSnapshot {
   generation: number;
   revision: number;
   sceneId: string | null;
+  actionContext: SceneActionContextDefinition;
   actors: Readonly<Record<ActorId, SceneActorDefinition>>;
   relations: Readonly<Record<RelationId, SceneRelation>>;
   fragments: Readonly<Record<string, ActiveSceneFragment>>;

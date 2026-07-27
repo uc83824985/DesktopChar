@@ -40,3 +40,78 @@ test('timeline accepts late cues without replaying cues already emitted', () => 
   ]);
   assert.deepEqual(timeline.advance(500), []);
 });
+
+test('clause cue identity remains stable when parallel results arrive out of order', () => {
+  const base = {
+    id: 'parallel-clauses',
+    sequence: 0,
+    displayText: '第一句。第二句。',
+    speechText: '第一句。第二句。',
+  };
+  const second = {
+    expressionKey: 'second',
+    intensity: 0.5,
+    textAnchor: {
+      clauseIndex: 1,
+      clauseCount: 2,
+      startCharacter: 4,
+      endCharacter: 8,
+      totalCharacters: 8,
+    },
+  };
+  const timeline = new PerformanceTimeline(
+    { ...base, expressionCues: [second] },
+    { durationMs: 800 },
+  );
+  assert.deepEqual(timeline.advance(400).map(cue => cue.id), [
+    'parallel-clauses:expression:clause-1',
+  ]);
+
+  timeline.update({
+    ...base,
+    expressionCues: [{
+      expressionKey: 'first',
+      intensity: 0.5,
+      textAnchor: {
+        clauseIndex: 0,
+        clauseCount: 2,
+        startCharacter: 0,
+        endCharacter: 4,
+        totalCharacters: 8,
+      },
+    }, second],
+  });
+
+  assert.deepEqual(timeline.advance(400).map(cue => cue.id), [
+    'parallel-clauses:expression:clause-0',
+  ]);
+  assert.deepEqual(timeline.advance(800), []);
+});
+
+test('unknown-duration audio uses the TTS profile fallback rate instead of a Runtime constant', () => {
+  const segment = {
+    id: 'configured-rate',
+    sequence: 0,
+    displayText: '第一句。第二句。',
+    speechText: '第一句。第二句。',
+    expressionCues: [{
+      expressionKey: 'second',
+      intensity: 0.5,
+      textAnchor: {
+        clauseIndex: 1,
+        clauseCount: 2,
+        startCharacter: 4,
+        endCharacter: 8,
+        totalCharacters: 8,
+      },
+    }],
+  };
+  const slow = new PerformanceTimeline(segment, { fallbackCharactersPerSecond: 4 });
+  const fast = new PerformanceTimeline(segment, { fallbackCharactersPerSecond: 8 });
+
+  assert.deepEqual(slow.advance(999), []);
+  const slowCue = slow.advance(1_000).find(cue => cue.type === 'expression');
+  assert.equal(slowCue?.timingBasis, 'configured-rate');
+  assert.deepEqual(fast.advance(499), []);
+  assert.equal(fast.advance(500)[0]?.atMs, 500);
+});

@@ -32,10 +32,11 @@ export class Live2DRenderer implements Live2DRendererPort {
   }
 
   async playMotion(command: MotionCommand): Promise<MotionResult> {
-    const group = this.requireModel().descriptor.actions[command.action];
-    if (!group) return { actionId: command.actionId, completed: false };
-    await this.requireModel().playMotion(group);
-    return { actionId: command.actionId, completed: true };
+    if (command.binding.type !== 'live2d-motion') {
+      return { requestId: command.requestId, actionId: command.actionId, completed: false };
+    }
+    await this.requireModel().playMotion(command.binding.group, command.binding.index);
+    return { requestId: command.requestId, actionId: command.actionId, completed: true };
   }
 
   hitTest(x: number, y: number): string[] {

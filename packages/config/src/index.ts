@@ -1,8 +1,11 @@
 import {
   DEFAULT_GAZE_SMOOTHING_PROFILE,
   DEFAULT_LIP_SYNC_PROFILE,
+  type ActionDescriptor,
+  type ActionTriggerRule,
   type AvatarAction,
   type AvatarState,
+  type CharacterActionCatalog,
   type CharacterExpressionCatalog,
   type Emotion,
   type EmotionBindings,
@@ -17,6 +20,7 @@ export interface CharacterConfig {
   defaultEmotion: Emotion;
   allowedEmotions: Emotion[];
   allowedActions: AvatarAction[];
+  actionCatalog?: CharacterActionCatalog;
   emotionBindings: EmotionBindings;
   expressionCatalog?: CharacterExpressionCatalog;
   expressionCooldownMs: number;
@@ -31,6 +35,8 @@ const EMOTIONS = new Set<Emotion>(['neutral', 'happy', 'sad', 'angry', 'surprise
 const ACTIONS = new Set<AvatarAction>(['nod', 'shake', 'tap', 'greet']);
 const AVATAR_STATES = new Set<AvatarState>(['idle', 'listening', 'thinking', 'speaking', 'presenting']);
 const AFFECT_DIMENSIONS = new Set(['valence', 'arousal', 'approval', 'engagement', 'certainty']);
+const PERFORMANCE_ANCHORS = new Set(['segment-start', 'after-clause', 'segment-end'] as const);
+const ACTION_BUSY_POLICIES = new Set(['enqueue', 'replace', 'ignore-if-busy', 'interrupt-lower-priority'] as const);
 
 export async function loadCharacterConfig(
   profileUrl = DEFAULT_CHARACTER_PROFILE_URL,
@@ -45,7 +51,7 @@ export function parseCharacterConfig(value: unknown, profileUrl = DEFAULT_CHARAC
   const profile = record(value, 'Character profile');
   assertKnownKeys(profile, [
     '$schema', 'version', 'id', 'model', 'defaultEmotion', 'allowedEmotions', 'allowedActions',
-    'emotionBindings', 'expressionCatalog', 'expressionCooldownMs', 'idleReturnDelayMs', 'gazeProfile',
+    'emotionBindings', 'expressionCatalog', 'actionCatalog', 'expressionCooldownMs', 'idleReturnDelayMs', 'gazeProfile',
     'lipSyncProfile',
   ], 'Character profile');
   if (profile.$schema !== undefined) nonEmptyText(profile.$schema, 'Character profile $schema');
@@ -57,7 +63,16 @@ export function parseCharacterConfig(value: unknown, profileUrl = DEFAULT_CHARAC
   if (!allowedEmotions.includes(defaultEmotion)) {
     throw new TypeError('Character profile allowedEmotions must contain defaultEmotion');
   }
-  const allowedActions = enumArray(profile.allowedActions, ACTIONS, 'Character profile allowedActions');
+  const parsedActionCatalog = actionCatalog(profile.actionCatalog);
+  const allowedActions = parsedActionCatalog
+    ? logicalIdArray(profile.allowedActions, 'Character profile allowedActions')
+    : enumArray(profile.allowedActions, ACTIONS, 'Character profile allowedActions');
+  if (parsedActionCatalog) {
+    const catalogIds = parsedActionCatalog.descriptors.map(descriptor => descriptor.actionId);
+    if (!sameStringSet(allowedActions, catalogIds)) {
+      throw new TypeError('Character profile allowedActions must exactly match actionCatalog descriptors');
+    }
+  }
   const bindings = emotionBindings(profile.emotionBindings, allowedEmotions);
   const catalog = expressionCatalog(profile.expressionCatalog);
   return {
@@ -66,6 +81,7 @@ export function parseCharacterConfig(value: unknown, profileUrl = DEFAULT_CHARAC
     defaultEmotion,
     allowedEmotions,
     allowedActions,
+    ...(parsedActionCatalog ? { actionCatalog: parsedActionCatalog } : {}),
     emotionBindings: bindings,
     ...(catalog ? { expressionCatalog: catalog } : {}),
     expressionCooldownMs: nonNegativeNumber(profile.expressionCooldownMs, 'Character profile expressionCooldownMs'),
@@ -97,6 +113,129 @@ export function validateCharacterExpressionResources(
     }
     boundResources.add(binding.expression);
   }
+}
+
+export function validateCharacterActionResources(
+  catalog: CharacterActionCatalog,
+  availableMotions: Iterable<{ group: string; index: number }>,
+): void {
+  const available = new Set(
+    [...availableMotions].map(motion => `${motion.group}\u0000${motion.index}`),
+  );
+  const boundResources = new Set<string>();
+  for (const descriptor of catalog.descriptors) {
+    const binding = catalog.bindings[descriptor.actionId];
+    if (!binding) throw new TypeError(`Action catalog has no binding for ${descriptor.actionId}`);
+    const key = `${binding.group}\u0000${binding.index}`;
+    if (!available.has(key)) {
+      throw new TypeError(
+        `Action catalog binding ${descriptor.actionId} references unavailable motion ${binding.group}[${binding.index}]`,
+      );
+    }
+    if (boundResources.has(key)) throw new TypeError(`Motion resource is bound more than once: ${binding.group}[${binding.index}]`);
+    boundResources.add(key);
+  }
+}
+
+function actionCatalog(value: unknown): CharacterActionCatalog | undefined {
+  if (value === undefined) return undefined;
+  const catalog = record(value, 'Character profile actionCatalog');
+  assertKnownKeys(catalog, ['revision', 'descriptors', 'bindings'], 'Character profile actionCatalog');
+  const revision = nonNegativeInteger(catalog.revision, 'Character profile actionCatalog.revision');
+  if (!Array.isArray(catalog.descriptors) || !catalog.descriptors.length) {
+    throw new TypeError('Character profile actionCatalog.descriptors must be a non-empty array');
+  }
+  const keys = new Set<string>();
+  const descriptors = catalog.descriptors.map((item, index): ActionDescriptor => {
+    const label = `Character profile actionCatalog.descriptors[${index}]`;
+    const descriptor = record(item, label);
+    assertKnownKeys(descriptor, [
+      'actionId', 'label', 'semanticTags', 'prototypeTexts', 'allowedAnchors',
+      'compatibleAvatarStates', 'scene', 'speech', 'priority', 'cooldownMs',
+      'maxQueueAgeMs', 'busyPolicy', 'triggers',
+    ], label);
+    const actionId = expressionKey(descriptor.actionId, `${label}.actionId`);
+    if (keys.has(actionId)) throw new TypeError(`${label}.actionId must be unique`);
+    keys.add(actionId);
+    const scene = record(descriptor.scene, `${label}.scene`);
+    assertKnownKeys(scene, ['allTags', 'anyTags', 'noneTags', 'postures'], `${label}.scene`);
+    const allTags = optionalTextArray(scene.allTags, `${label}.scene.allTags`);
+    const anyTags = optionalTextArray(scene.anyTags, `${label}.scene.anyTags`);
+    const noneTags = optionalTextArray(scene.noneTags, `${label}.scene.noneTags`);
+    const postures = optionalTextArray(scene.postures, `${label}.scene.postures`);
+    if (!Array.isArray(descriptor.triggers) || !descriptor.triggers.length) {
+      throw new TypeError(`${label}.triggers must be a non-empty array`);
+    }
+    const ruleIds = new Set<string>();
+    const triggers = descriptor.triggers.map((item, ruleIndex): ActionTriggerRule => {
+      const ruleLabel = `${label}.triggers[${ruleIndex}]`;
+      const rule = record(item, ruleLabel);
+      assertKnownKeys(rule, ['ruleId', 'trigger', 'mode', 'chance', 'weight', 'priority'], ruleLabel);
+      const ruleId = expressionKey(rule.ruleId, `${ruleLabel}.ruleId`);
+      if (ruleIds.has(ruleId)) throw new TypeError(`${ruleLabel}.ruleId must be unique per action`);
+      ruleIds.add(ruleId);
+      const chance = finiteNumber(rule.chance, `${ruleLabel}.chance`);
+      if (chance < 0 || chance > 1) throw new TypeError(`${ruleLabel}.chance must be from 0 to 1`);
+      const result: ActionTriggerRule = {
+        ruleId,
+        trigger: nonEmptyText(rule.trigger, `${ruleLabel}.trigger`),
+        mode: enumValue(rule.mode, new Set(['required', 'optional'] as const), `${ruleLabel}.mode`),
+        chance,
+        weight: positiveNumber(rule.weight, `${ruleLabel}.weight`),
+      };
+      if (rule.priority !== undefined) result.priority = finiteNumber(rule.priority, `${ruleLabel}.priority`);
+      return result;
+    });
+    return {
+      actionId,
+      label: nonEmptyText(descriptor.label, `${label}.label`),
+      semanticTags: uniqueTextArray(descriptor.semanticTags, `${label}.semanticTags`),
+      prototypeTexts: uniqueTextArray(descriptor.prototypeTexts, `${label}.prototypeTexts`),
+      allowedAnchors: enumArray(descriptor.allowedAnchors, PERFORMANCE_ANCHORS, `${label}.allowedAnchors`),
+      compatibleAvatarStates: enumArray(
+        descriptor.compatibleAvatarStates,
+        AVATAR_STATES,
+        `${label}.compatibleAvatarStates`,
+      ),
+      scene: {
+        ...(allTags ? { allTags } : {}),
+        ...(anyTags ? { anyTags } : {}),
+        ...(noneTags ? { noneTags } : {}),
+        ...(postures ? { postures } : {}),
+      },
+      speech: enumValue(descriptor.speech, new Set(['allow', 'deny'] as const), `${label}.speech`),
+      priority: finiteNumber(descriptor.priority, `${label}.priority`),
+      cooldownMs: nonNegativeNumber(descriptor.cooldownMs, `${label}.cooldownMs`),
+      maxQueueAgeMs: nonNegativeNumber(descriptor.maxQueueAgeMs, `${label}.maxQueueAgeMs`),
+      busyPolicy: enumValue(descriptor.busyPolicy, ACTION_BUSY_POLICIES, `${label}.busyPolicy`),
+      triggers,
+    };
+  });
+  const configuredBindings = record(catalog.bindings, 'Character profile actionCatalog.bindings');
+  const bindingKeys = Object.keys(configuredBindings);
+  const unknownBindings = bindingKeys.filter(key => !keys.has(key));
+  const missingBindings = [...keys].filter(key => !(key in configuredBindings));
+  if (unknownBindings.length || missingBindings.length) {
+    throw new TypeError(
+      'Character profile actionCatalog.bindings must exactly match descriptor keys'
+      + `${unknownBindings.length ? `; unknown: ${unknownBindings.join(', ')}` : ''}`
+      + `${missingBindings.length ? `; missing: ${missingBindings.join(', ')}` : ''}`,
+    );
+  }
+  const bindings = Object.fromEntries(bindingKeys.map(actionId => {
+    const label = `Character profile actionCatalog.bindings.${actionId}`;
+    const binding = record(configuredBindings[actionId], label);
+    assertKnownKeys(binding, ['type', 'group', 'index', 'mode', 'expectedDurationMs'], label);
+    if (binding.type !== 'live2d-motion') throw new TypeError(`${label}.type is unsupported`);
+    return [actionId, {
+      type: 'live2d-motion' as const,
+      group: nonEmptyText(binding.group, `${label}.group`),
+      index: nonNegativeInteger(binding.index, `${label}.index`),
+      mode: enumValue(binding.mode, new Set(['once', 'loop'] as const), `${label}.mode`),
+      expectedDurationMs: positiveNumber(binding.expectedDurationMs, `${label}.expectedDurationMs`),
+    }];
+  }));
+  return { revision, descriptors, bindings };
 }
 
 function expressionCatalog(value: unknown): CharacterExpressionCatalog | undefined {
@@ -302,6 +441,25 @@ function uniqueTextArray(value: unknown, label: string): string[] {
   return result;
 }
 
+function optionalTextArray(value: unknown, label: string): string[] | undefined {
+  if (value === undefined) return undefined;
+  if (!Array.isArray(value)) throw new TypeError(`${label} must be an array`);
+  const result = value.map((item, index) => nonEmptyText(item, `${label}[${index}]`));
+  if (new Set(result).size !== result.length) throw new TypeError(`${label} must not contain duplicates`);
+  return result;
+}
+
+function logicalIdArray(value: unknown, label: string): string[] {
+  if (!Array.isArray(value) || value.length === 0) throw new TypeError(`${label} must be a non-empty array`);
+  const result = value.map((item, index) => expressionKey(item, `${label}[${index}]`));
+  if (new Set(result).size !== result.length) throw new TypeError(`${label} must not contain duplicates`);
+  return result;
+}
+
+function sameStringSet(left: readonly string[], right: readonly string[]): boolean {
+  return left.length === right.length && left.every(value => right.includes(value));
+}
+
 function expressionKey(value: unknown, label: string): string {
   const key = nonEmptyText(value, label);
   if (!/^[a-z0-9](?:[a-z0-9._-]*[a-z0-9])?$/u.test(key)) {
@@ -355,6 +513,9 @@ function assertKnownKeys(value: Record<string, unknown>, allowed: string[], labe
 
 export interface TtsConfig {
   lifecycle: 'external' | 'managed';
+  timing: {
+    fallbackCharactersPerSecond: number;
+  };
   mcp: {
     timeoutMs: number;
     voice?: string;
@@ -365,6 +526,7 @@ export interface TtsConfig {
 
 export const DEFAULT_TTS_CONFIG: TtsConfig = {
   lifecycle: 'external',
+  timing: { fallbackCharactersPerSecond: 5.56 },
   mcp: { timeoutMs: 30_000, format: 'pcm_s16le' },
 };
 
@@ -378,7 +540,17 @@ export function loadTtsConfig(values: Record<string, string | undefined>): TtsCo
   };
   if (values.DESKTOP_CHAR_TTS_VOICE) mcp.voice = values.DESKTOP_CHAR_TTS_VOICE;
   if (values.DESKTOP_CHAR_TTS_RATE !== undefined) mcp.rate = speechRate(values.DESKTOP_CHAR_TTS_RATE, 'DESKTOP_CHAR_TTS_RATE');
-  return { lifecycle, mcp };
+  return {
+    lifecycle,
+    timing: {
+      fallbackCharactersPerSecond: environmentNumber(
+        values.DESKTOP_CHAR_TTS_FALLBACK_CHARACTERS_PER_SECOND,
+        DEFAULT_TTS_CONFIG.timing.fallbackCharactersPerSecond,
+        'DESKTOP_CHAR_TTS_FALLBACK_CHARACTERS_PER_SECOND',
+      ),
+    },
+    mcp,
+  };
 }
 
 function environmentNumber(value: string | undefined, fallback: number, name: string, allowZero = false): number {

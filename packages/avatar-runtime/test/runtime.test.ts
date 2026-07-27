@@ -1,6 +1,11 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
-import type { AvatarEvent, PerformancePlan, RuntimeEffect } from '../../contracts/src/index.ts';
+import type {
+  AvatarEvent,
+  CharacterActionCatalog,
+  PerformancePlan,
+  RuntimeEffect,
+} from '../../contracts/src/index.ts';
 import { ParameterMixer } from '../src/mixer.ts';
 import { DefaultAvatarPlanner } from '../src/planner.ts';
 import { AvatarRuntime } from '../src/runtime.ts';
@@ -158,11 +163,100 @@ test('playback clock drives timeline, motion, and amplitude mouth frames', () =>
   assert.deepEqual(effects.motions, []);
   effects.progress(200);
   assert.deepEqual(effects.motions, ['nod-0']);
-  assert.equal(runtime.getSnapshot().gesture.action, 'nod');
+  assert.equal(runtime.getSnapshot().gesture.actionId, 'nod');
   const openingValue = effects.frames.at(-1)?.ParamMouthOpenY ?? 0;
   assert.ok(openingValue > 0.1 && openingValue < 0.8);
   effects.progress(230);
   assert.ok((effects.frames.at(-1)?.ParamMouthOpenY ?? 0) > openingValue);
+});
+
+test('timeline action intents resolve character-owned bindings before reaching Renderer', () => {
+  const effects = new ControlledEffects();
+  const actionCatalog: CharacterActionCatalog = {
+    revision: 1,
+    descriptors: [{
+      actionId: 'reviewed-wave',
+      label: 'Reviewed wave',
+      semanticTags: ['greeting'],
+      prototypeTexts: ['Hello'],
+      allowedAnchors: ['segment-start'],
+      compatibleAvatarStates: ['thinking', 'speaking'],
+      scene: { anyTags: ['desktop'], postures: ['standing'] },
+      speech: 'allow',
+      priority: 20,
+      cooldownMs: 0,
+      maxQueueAgeMs: 5000,
+      busyPolicy: 'enqueue',
+      triggers: [{
+        ruleId: 'performance',
+        trigger: 'performance.action',
+        mode: 'required',
+        chance: 1,
+        weight: 1,
+      }],
+    }],
+    bindings: {
+      'reviewed-wave': {
+        type: 'live2d-motion',
+        group: 'TapBody',
+        index: 4,
+        mode: 'once',
+        expectedDurationMs: 9367,
+      },
+    },
+  };
+  const runtime = new AvatarRuntime({
+    planner: new DefaultAvatarPlanner(),
+    mixer: new ParameterMixer({ ranges: {} }),
+    effects,
+    actionCatalog,
+    sceneActionContext: {
+      generation: 1,
+      revision: 0,
+      sceneId: 'desktop',
+      tags: ['desktop'],
+      posture: 'standing',
+      allowedActionTags: [],
+      blockedActionTags: [],
+      triggerChanceMultipliers: {},
+    },
+  });
+  runtime.dispatch({
+    type: 'renderer.ready',
+    capabilities: { ...capabilities, actions: ['reviewed-wave'] },
+  });
+  runtime.dispatch({
+    type: 'plan.submitted',
+    plan: {
+      id: 'bound-action',
+      segments: [{
+        id: 'bound-segment',
+        sequence: 0,
+        displayText: 'hello',
+        speechText: 'hello',
+        actions: [{ id: 'request-1', action: 'reviewed-wave', atMs: 0 }],
+      }],
+    },
+  });
+  effects.resolveTts(0);
+
+  assert.deepEqual(effects.motionCommands, [{
+    requestId: 'request-1',
+    actionId: 'reviewed-wave',
+    binding: {
+      type: 'live2d-motion',
+      group: 'TapBody',
+      index: 4,
+      mode: 'once',
+      expectedDurationMs: 9367,
+    },
+    priority: 20,
+  }]);
+  assert.deepEqual(runtime.getSnapshot().gesture, {
+    requestId: 'request-1',
+    actionId: 'reviewed-wave',
+    queueLength: 0,
+  });
 });
 
 test('stream playback levels drive mouth frames while buffering remains a player fact', () => {
@@ -400,6 +494,93 @@ test('plan completion returns expression state to neutral', () => {
   effects.complete();
   assert.equal(runtime.getSnapshot().state, 'idle');
   assert.equal(runtime.getSnapshot().emotion.current, 'neutral');
+});
+
+test('plan completion applies the scene chance boost and can start a post-conversation action', () => {
+  const effects = new ControlledEffects();
+  const actionCatalog: CharacterActionCatalog = {
+    revision: 1,
+    descriptors: [{
+      actionId: 'post-chat-wave',
+      label: 'Post-chat wave',
+      semanticTags: ['ambient'],
+      prototypeTexts: ['A relaxed response after talking'],
+      allowedAnchors: ['segment-start'],
+      compatibleAvatarStates: ['idle'],
+      scene: { anyTags: ['desktop'] },
+      speech: 'deny',
+      priority: 10,
+      cooldownMs: 0,
+      maxQueueAgeMs: 5_000,
+      busyPolicy: 'enqueue',
+      triggers: [{
+        ruleId: 'conversation',
+        trigger: 'conversation.completed',
+        mode: 'optional',
+        chance: 0.18,
+        weight: 1,
+      }],
+    }],
+    bindings: {
+      'post-chat-wave': {
+        type: 'live2d-motion',
+        group: 'TapBody',
+        index: 2,
+        mode: 'once',
+        expectedDurationMs: 1_000,
+      },
+    },
+  };
+  const randomValues = [0, 0.4];
+  const runtime = new AvatarRuntime({
+    planner: new DefaultAvatarPlanner(),
+    mixer: new ParameterMixer({ ranges: {} }),
+    effects,
+    actionCatalog,
+    sceneActionContext: {
+      generation: 1,
+      revision: 0,
+      sceneId: 'desktop',
+      tags: ['desktop'],
+      posture: 'standing',
+      allowedActionTags: [],
+      blockedActionTags: [],
+      triggerChanceMultipliers: { 'conversation.completed': 3 },
+    },
+    actionRandom: () => randomValues.shift() ?? 0,
+    clock: () => 2_000,
+  });
+  runtime.dispatch({
+    type: 'renderer.ready',
+    capabilities: { ...capabilities, actions: ['post-chat-wave'] },
+  });
+  runtime.dispatch({
+    type: 'plan.submitted',
+    plan: {
+      id: 'post-chat-plan',
+      segments: [{
+        id: 'post-chat-segment',
+        sequence: 0,
+        displayText: '刚才聊得很开心。',
+        speechText: '刚才聊得很开心。',
+      }],
+    },
+  });
+  effects.resolveTts(0);
+  assert.equal(effects.motionCommands.length, 0);
+
+  effects.complete();
+
+  assert.equal(runtime.getSnapshot().state, 'idle');
+  assert.equal(runtime.getSnapshot().gesture.actionId, 'post-chat-wave');
+  assert.equal(effects.motionCommands.at(-1)?.actionId, 'post-chat-wave');
+  assert.deepEqual(effects.motionCommands.at(-1)?.binding, {
+    type: 'live2d-motion',
+    group: 'TapBody',
+    index: 2,
+    mode: 'once',
+    expectedDurationMs: 1_000,
+  });
 });
 
 test('an active plan cannot be replaced without an explicit interrupt', () => {

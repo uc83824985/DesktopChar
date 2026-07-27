@@ -9,7 +9,8 @@ export type Emotion =
   | 'surprised'
   | 'thinking';
 
-export type AvatarAction = 'nod' | 'shake' | 'tap' | 'greet';
+/** Character-scoped logical action identifier. Renderer resource names never cross this boundary. */
+export type AvatarAction = string;
 export type SemanticBeat = 'start' | 'middle' | 'end';
 export type ActionPolicy =
   | 'enqueue'
@@ -26,8 +27,27 @@ export interface EmotionCue {
 export interface ExpressionCue {
   expressionKey: ExpressionKey;
   intensity: number;
+  /** Exact source-text evidence chosen by performance inference, when available. */
+  triggerText?: string;
+  /**
+   * Exact playback offset when a timing-capable TTS or aligner is available.
+   * This takes precedence over textAnchor.
+   */
   atMs?: number;
   holdMs?: number;
+  /**
+   * Semantic fallback anchor used when speech timing metadata is unavailable.
+   * Character offsets are Unicode code-point offsets in PerformanceSegment.speechText.
+   */
+  textAnchor?: PerformanceTextAnchor;
+}
+
+export interface PerformanceTextAnchor {
+  clauseIndex: number;
+  clauseCount: number;
+  startCharacter: number;
+  endCharacter: number;
+  totalCharacters: number;
 }
 
 /** Character-owned mapping from a semantic Runtime emotion to a renderer resource. */
@@ -87,6 +107,90 @@ export interface CharacterExpressionCatalog {
   defaultExpressionKey: ExpressionKey;
   descriptors: ExpressionDescriptor[];
   bindings: Record<ExpressionKey, ExpressionBinding>;
+}
+
+export type ActionTriggerMode = 'required' | 'optional';
+export type ActionSpeechPolicy = 'allow' | 'deny';
+export type ActionBusyPolicy = ActionPolicy;
+
+export interface ActionSceneApplicability {
+  allTags?: string[];
+  anyTags?: string[];
+  noneTags?: string[];
+  postures?: string[];
+}
+
+export interface ActionTriggerRule {
+  ruleId: string;
+  trigger: string;
+  mode: ActionTriggerMode;
+  chance: number;
+  weight: number;
+  priority?: number;
+}
+
+/** Asset-free action description that may be exposed to inference Providers. */
+export interface ActionDescriptor {
+  actionId: AvatarAction;
+  label: string;
+  semanticTags: string[];
+  prototypeTexts: string[];
+  allowedAnchors: PerformanceAnchor[];
+  compatibleAvatarStates: AvatarState[];
+  scene: ActionSceneApplicability;
+  speech: ActionSpeechPolicy;
+  priority: number;
+  cooldownMs: number;
+  maxQueueAgeMs: number;
+  busyPolicy: ActionBusyPolicy;
+  triggers: ActionTriggerRule[];
+}
+
+/** Character-owned Renderer binding. This must never be sent to inference Providers. */
+export interface Live2dMotionBinding {
+  type: 'live2d-motion';
+  group: string;
+  index: number;
+  mode: 'once' | 'loop';
+  expectedDurationMs: number;
+}
+
+export type ActionBinding = Live2dMotionBinding;
+
+export interface CharacterActionCatalog {
+  revision: number;
+  descriptors: ActionDescriptor[];
+  bindings: Record<AvatarAction, ActionBinding>;
+}
+
+/**
+ * Read-only scene facts consumed by ActionRuntime. SceneRuntime owns the source
+ * scene graph; AvatarRuntime only stores this versioned projection.
+ */
+export interface SceneActionContext {
+  generation: number;
+  revision: number;
+  sceneId: string | null;
+  tags: string[];
+  posture?: string;
+  allowedActionTags: string[];
+  blockedActionTags: string[];
+  triggerChanceMultipliers: Record<string, number>;
+}
+
+export type ActionIntentSource = 'performance' | 'scene' | 'interaction' | 'agent' | 'user' | 'debug';
+
+export interface ActionIntent {
+  requestId: string;
+  source: ActionIntentSource;
+  trigger: string;
+  mode: ActionTriggerMode;
+  occurredAtMs: number;
+  selectionRandomValue: number;
+  chanceRandomValue: number;
+  requestedActionId?: AvatarAction;
+  semanticTags?: string[];
+  priority?: number;
 }
 
 export interface ExpressionCandidate {
@@ -151,6 +255,7 @@ export interface PerformanceSegment {
   speechText: string;
   emotion?: EmotionCue;
   expression?: ExpressionCue;
+  expressionCues?: ExpressionCue[];
   actions?: ActionCue[];
   bubble?: SpeechBubbleConfig;
 }
@@ -242,6 +347,7 @@ export interface PerformancePlanningRequestV2 {
   catalogRevision: number;
   defaultExpressionKey: ExpressionKey;
   text: string;
+  textAnchor: PerformanceTextAnchor;
   persona: PersonaPerformanceProjection;
   scene: ScenePerformanceProjection;
   avatar: AvatarPerformanceProjectionV2;
@@ -255,6 +361,11 @@ export interface LocalPerformanceSuggestionV2 {
   segmentId: string;
   segmentRevision: number;
   catalogRevision: number;
+  textAnchor: PerformanceTextAnchor;
+  /** Exact substring selected as the semantic evidence for the expression. */
+  expressionTrigger: string;
+  /** Full-segment code-point range derived and validated from expressionTrigger. */
+  expressionTextAnchor: PerformanceTextAnchor;
   source: 'model' | 'rules';
   provider: string;
   affect?: AffectVector;
@@ -288,6 +399,11 @@ interface AudioSourceBase {
   uri: string;
   mimeType: string;
   durationMs?: number;
+  /**
+   * Provider/profile-owned fallback used only when duration and exact text
+   * timing are both unavailable.
+   */
+  fallbackCharactersPerSecond?: number;
   visemes?: VisemeTiming[];
   amplitude?: AmplitudeSample[];
   textCues?: SpeechBubbleCue[];
@@ -330,8 +446,8 @@ export interface EmotionState {
 }
 
 export interface GestureState {
-  actionId: string | null;
-  action: AvatarAction | null;
+  requestId: string | null;
+  actionId: AvatarAction | null;
   queueLength: number;
 }
 
@@ -460,6 +576,7 @@ export type PerformanceInferenceV2Event =
       type: 'performance.suggestion-v2-ready';
       generation: number;
       planId: string;
+      provisional?: boolean;
       suggestion: LocalPerformanceSuggestionV2;
     }
   | {
@@ -489,9 +606,15 @@ export type PlaybackEvent =
 export type RendererEvent =
   | { type: 'renderer.ready'; capabilities: AvatarCapabilities }
   | { type: 'renderer.frame-tick'; deltaMs: number }
-  | { type: 'renderer.motion-completed'; generation: number; actionId: string }
-  | { type: 'renderer.motion-failed'; generation: number; actionId: string; error: RuntimeError }
+  | { type: 'renderer.motion-started'; generation: number; requestId: string; actionId: AvatarAction }
+  | { type: 'renderer.motion-completed'; generation: number; requestId: string; actionId: AvatarAction }
+  | { type: 'renderer.motion-interrupted'; generation: number; requestId: string; actionId: AvatarAction }
+  | { type: 'renderer.motion-failed'; generation: number; requestId: string; actionId: AvatarAction; error: RuntimeError }
   | { type: 'renderer.failed'; error: RuntimeError };
+
+export type ActionRuntimeEvent =
+  | { type: 'scene.action-context-updated'; context: SceneActionContext }
+  | { type: 'action.requested'; intent: ActionIntent };
 
 export type RuntimeInternalEvent =
   | { type: 'runtime.segment-selected'; generation: number; segmentId: string; sequence: number }
@@ -519,6 +642,7 @@ export type AvatarEvent =
   | PerformanceInferenceV2Event
   | PlaybackEvent
   | RendererEvent
+  | ActionRuntimeEvent
   | RuntimeInternalEvent;
 
 export type ParameterBlendMode = 'add' | 'multiply' | 'overwrite' | 'lerp';
@@ -532,13 +656,15 @@ export interface ParameterValue {
 export type ParameterFrame = Record<string, number>;
 
 export interface MotionCommand {
-  actionId: string;
-  action: AvatarAction;
+  requestId: string;
+  actionId: AvatarAction;
+  binding: ActionBinding;
   priority: number;
 }
 
 export interface MotionResult {
-  actionId: string;
+  requestId: string;
+  actionId: AvatarAction;
   completed: boolean;
 }
 
@@ -564,7 +690,8 @@ export type RuntimeEffect =
   | { type: 'speech-bubble.cancel-dismiss'; generation: number; presentationId: number }
   | { type: 'renderer.apply-frame'; frame: ParameterFrame }
   | { type: 'renderer.set-expression'; generation: number; command: ExpressionCommand }
-  | { type: 'renderer.play-motion'; generation: number; command: MotionCommand };
+  | { type: 'renderer.play-motion'; generation: number; command: MotionCommand }
+  | { type: 'renderer.stop-motion'; generation: number; requestId: string; actionId: AvatarAction };
 
 export interface RuntimeTransition {
   snapshot: AvatarSnapshot;

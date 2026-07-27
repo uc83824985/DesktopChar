@@ -76,12 +76,21 @@ export function applyPerformanceSuggestionV2(
     && validUnit(resolved.intensity)
     && confidence >= policy.minPerformanceConfidence
   ) {
-    result.expression = {
+    const cue = {
       expressionKey: resolved.expressionKey,
       intensity: clampUnit(resolved.intensity),
       holdMs: resolved.holdMs,
-      atMs: 0,
+      triggerText: suggestion.expressionTrigger,
+      textAnchor: structuredClone(suggestion.expressionTextAnchor),
     };
+    result.expressionCues = [
+      ...(result.expressionCues ?? []).filter(existing => (
+        existing.textAnchor?.clauseIndex !== suggestion.textAnchor.clauseIndex
+      )),
+      cue,
+    ].sort((left, right) => (
+      (left.textAnchor?.startCharacter ?? 0) - (right.textAnchor?.startCharacter ?? 0)
+    ));
   }
   if (slots.actions && !result.actions?.length) {
     const actions = suggestion.actions

@@ -109,6 +109,9 @@ test('Runtime rejects explicit unknown keys and stale catalog revisions', () => 
       segmentId: 'stale-segment',
       segmentRevision: pending.effect.request.segmentRevision,
       catalogRevision: 6,
+      textAnchor: structuredClone(pending.effect.request.textAnchor),
+      expressionTrigger: pending.effect.request.text,
+      expressionTextAnchor: structuredClone(pending.effect.request.textAnchor),
       source: 'model',
       provider: 'stale-test',
       expressionCandidates: [{
@@ -124,13 +127,125 @@ test('Runtime rejects explicit unknown keys and stale catalog revisions', () => 
   assert.equal(runtime.getSnapshot().expression.currentKey, 'neutral');
 });
 
-function createRuntime(effects: ControlledEffects): AvatarRuntime {
+test('Runtime analyzes natural clauses independently and binds text anchors to playback duration', () => {
+  const effects = new ControlledEffects();
+  const logs: Array<{ event: string; data: Record<string, unknown> }> = [];
+  const runtime = createRuntime(effects, logs);
+  runtime.dispatch({
+    type: 'plan.submitted',
+    plan: {
+      id: 'multi-clause-plan',
+      segments: [{
+        id: 'multi-clause-segment',
+        sequence: 0,
+        displayText: '太好了！不过还要再确认一下。',
+        speechText: '太好了！不过还要再确认一下。',
+      }],
+    },
+  });
+
+  assert.equal(effects.pendingPerformanceV2.size, 2);
+  const first = effects.pendingPerformanceV2.get('multi-clause-segment:clause-0');
+  const second = effects.pendingPerformanceV2.get('multi-clause-segment:clause-1');
+  assert.equal(first?.effect.request.text, '太好了！');
+  assert.equal(second?.effect.request.text, '不过还要再确认一下。');
+  assert.equal(second?.effect.request.actions.length, 0);
+
+  effects.resolvePerformanceV2('multi-clause-segment:clause-1', {
+    expressionTrigger: '确认',
+    expressionTextAnchor: {
+      ...second!.effect.request.textAnchor,
+      startCharacter: second!.effect.request.textAnchor.startCharacter + 5,
+      endCharacter: second!.effect.request.textAnchor.startCharacter + 7,
+    },
+    expressionCandidates: [{
+      expressionKey: 'neutral',
+      confidence: 0.99,
+      intensity: 0.2,
+    }],
+  });
+  effects.resolvePerformanceV2('multi-clause-segment:clause-0', {
+    expressionTrigger: '太好',
+    expressionTextAnchor: {
+      ...first!.effect.request.textAnchor,
+      endCharacter: first!.effect.request.textAnchor.startCharacter + 2,
+    },
+    expressionCandidates: [{
+      expressionKey: 'smile',
+      confidence: 0.99,
+      intensity: 0.8,
+    }],
+  });
+  effects.resolveTts(0, {
+    delivery: 'artifact',
+    requestId: 'multi-clause-audio',
+    uri: 'memory://multi-clause',
+    mimeType: 'audio/wav',
+    durationMs: 4_000,
+    fallbackCharactersPerSecond: 4.31,
+  });
+
+  assert.equal(effects.expressions.at(-1)?.expressionKey, 'smile');
+  const secondStartMs = Math.round(
+    (second!.effect.request.textAnchor.startCharacter + 5)
+    / second!.effect.request.textAnchor.totalCharacters
+    * 4_000,
+  );
+  const secondClauseStartMs = Math.round(
+    second!.effect.request.textAnchor.startCharacter
+    / second!.effect.request.textAnchor.totalCharacters
+    * 4_000,
+  );
+  effects.progress(secondClauseStartMs);
+  assert.equal(effects.expressions.at(-1)?.expressionKey, 'smile');
+  effects.progress(secondStartMs - 1);
+  assert.equal(effects.expressions.at(-1)?.expressionKey, 'smile');
+  effects.progress(secondStartMs);
+  assert.equal(effects.expressions.at(-1)?.expressionKey, 'neutral');
+  assert.equal(logs.filter(log => log.event === 'expression.clause-requested').length, 2);
+  assert.deepEqual(
+    logs.find(log => log.event === 'expression.timeline-started')?.data,
+    {
+      segmentId: 'multi-clause-segment',
+      durationMs: 4_000,
+      fallbackCharactersPerSecond: 4.31,
+    },
+  );
+  assert.deepEqual(
+    logs.filter(log => log.event === 'expression.cue-fired').map(log => ({
+      expressionKey: log.data.expressionKey,
+      timingBasis: log.data.timingBasis,
+      plannedAtMs: log.data.plannedAtMs,
+      actualPositionMs: log.data.actualPositionMs,
+    })),
+    [
+      {
+        expressionKey: 'smile',
+        timingBasis: 'duration-ratio',
+        plannedAtMs: 0,
+        actualPositionMs: 0,
+      },
+      {
+        expressionKey: 'neutral',
+        timingBasis: 'duration-ratio',
+        plannedAtMs: secondStartMs,
+        actualPositionMs: secondStartMs,
+      },
+    ],
+  );
+});
+
+function createRuntime(
+  effects: ControlledEffects,
+  logs?: Array<{ event: string; data: Record<string, unknown> }>,
+): AvatarRuntime {
   const runtime = new AvatarRuntime({
     planner: new DefaultAvatarPlanner(),
     mixer: new ParameterMixer({ ranges: {} }),
     effects,
     clock: () => 1_000,
     expressionRandomSeed: 3,
+    ...(logs ? { performanceLogger: (event, data) => logs.push({ event, data }) } : {}),
     expressionCatalog: catalog(),
     performancePlanning: {
       persona: { id: 'test', styleTags: ['friendly'] },

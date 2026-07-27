@@ -23,7 +23,7 @@ export interface Live2DModelSource {
 export interface Live2DCoreModel {
   readonly descriptor: CoreModelDescriptor;
   setParameter(id: string, value: number): void;
-  playMotion(group: string): Promise<void>;
+  playMotion(group: string, index?: number): Promise<void>;
   hitTest(x: number, y: number): string[];
   resize(width: number, height: number): void;
   dispose(): Promise<void>;

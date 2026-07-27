@@ -32,6 +32,7 @@ export class ControlledEffects implements RuntimeEffectExecutor {
   readonly playedSegments: string[] = [];
   readonly frames: Array<Record<string, number>> = [];
   readonly motions: string[] = [];
+  readonly motionCommands: Array<Extract<RuntimeEffect, { type: 'renderer.play-motion' }>['command']> = [];
   readonly expressions: Array<Extract<RuntimeEffect, { type: 'renderer.set-expression' }>['command']> = [];
   readonly cancelledGenerations: number[] = [];
   readonly cancelledPerformanceGenerations: number[] = [];
@@ -62,7 +63,10 @@ export class ControlledEffects implements RuntimeEffectExecutor {
         this.pendingPerformance.clear();
         break;
       case 'performance.infer-v2':
-        this.pendingPerformanceV2.set(effect.request.segmentId, { effect, dispatch });
+        this.pendingPerformanceV2.set(
+          performanceV2Key(effect.request.segmentId, effect.request.textAnchor.clauseIndex, effect.request.textAnchor.clauseCount),
+          { effect, dispatch },
+        );
         break;
       case 'performance.cancel-v2':
         this.cancelledPerformanceV2Generations.push(effect.generation);
@@ -116,7 +120,10 @@ export class ControlledEffects implements RuntimeEffectExecutor {
         this.expressions.push(structuredClone(effect.command));
         break;
       case 'renderer.play-motion':
-        this.motions.push(effect.command.actionId);
+        this.motions.push(effect.command.requestId);
+        this.motionCommands.push(structuredClone(effect.command));
+        break;
+      case 'renderer.stop-motion':
         break;
     }
   }
@@ -177,14 +184,14 @@ export class ControlledEffects implements RuntimeEffectExecutor {
   }
 
   resolvePerformanceV2(
-    segmentId: string,
+    requestKey: string,
     suggestion: Partial<Extract<AvatarEvent, {
       type: 'performance.suggestion-v2-ready';
     }>['suggestion']> = {},
   ): void {
-    const pending = this.pendingPerformanceV2.get(segmentId);
-    if (!pending) throw new Error(`No pending performance v2 inference for ${segmentId}`);
-    this.pendingPerformanceV2.delete(segmentId);
+    const pending = this.pendingPerformanceV2.get(requestKey);
+    if (!pending) throw new Error(`No pending performance v2 inference for ${requestKey}`);
+    this.pendingPerformanceV2.delete(requestKey);
     pending.dispatch({
       type: 'performance.suggestion-v2-ready',
       generation: pending.effect.generation,
@@ -192,9 +199,12 @@ export class ControlledEffects implements RuntimeEffectExecutor {
       suggestion: {
         contractVersion: pending.effect.request.contractVersion,
         requestId: pending.effect.request.requestId,
-        segmentId,
+        segmentId: pending.effect.request.segmentId,
         segmentRevision: pending.effect.request.segmentRevision,
         catalogRevision: pending.effect.request.catalogRevision,
+        textAnchor: structuredClone(pending.effect.request.textAnchor),
+        expressionTrigger: pending.effect.request.text,
+        expressionTextAnchor: structuredClone(pending.effect.request.textAnchor),
         source: 'model',
         provider: 'controlled-test-v2',
         expressionCandidates: [],
@@ -236,4 +246,8 @@ export class ControlledEffects implements RuntimeEffectExecutor {
       presentationId,
     });
   }
+}
+
+function performanceV2Key(segmentId: string, clauseIndex: number, clauseCount: number): string {
+  return clauseCount === 1 ? segmentId : `${segmentId}:clause-${clauseIndex}`;
 }

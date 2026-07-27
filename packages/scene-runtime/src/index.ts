@@ -1,4 +1,5 @@
 export * from './definitions.ts';
+export * from './action-context.ts';
 export * from './relations.ts';
 export * from './render-plan.ts';
 export * from './runtime.ts';

@@ -5,10 +5,318 @@
   "model": "Mao.model3.json",
   "defaultEmotion": "neutral",
   "allowedEmotions": ["neutral", "happy"],
-  "allowedActions": ["nod"],
+  "allowedActions": [
+    "penguin-double-wave",
+    "hands-behind-sway",
+    "adjust-wizard-hat",
+    "draw-heart-success",
+    "draw-heart-failure",
+    "summon-rabbit-buff"
+  ],
   "emotionBindings": {
     "neutral": { "expression": null },
     "happy": { "expression": "exp_02" }
+  },
+  "actionCatalog": {
+    "revision": 1,
+    "descriptors": [
+      {
+        "actionId": "penguin-double-wave",
+        "label": "企鹅式双臂摆动",
+        "semanticTags": ["ambient", "playful", "greeting", "celebration"],
+        "prototypeTexts": ["你好呀！", "太好了！", "一起开心一下吧。"],
+        "allowedAnchors": ["segment-start", "segment-end"],
+        "compatibleAvatarStates": ["idle", "thinking", "speaking", "presenting"],
+        "scene": {
+          "anyTags": ["desktop", "home", "social"],
+          "noneTags": ["sleeping", "seated"],
+          "postures": ["standing"]
+        },
+        "speech": "allow",
+        "priority": 20,
+        "cooldownMs": 20000,
+        "maxQueueAgeMs": 5000,
+        "busyPolicy": "enqueue",
+        "triggers": [
+          {
+            "ruleId": "performance",
+            "trigger": "performance.action",
+            "mode": "required",
+            "chance": 1,
+            "weight": 1
+          },
+          {
+            "ruleId": "scene-request",
+            "trigger": "scene.action-requested",
+            "mode": "required",
+            "chance": 1,
+            "weight": 1
+          },
+          {
+            "ruleId": "ambient-playful",
+            "trigger": "ambient.opportunity",
+            "mode": "optional",
+            "chance": 0.1,
+            "weight": 1,
+            "priority": 15
+          },
+          {
+            "ruleId": "conversation-playful",
+            "trigger": "conversation.completed",
+            "mode": "optional",
+            "chance": 0.1,
+            "weight": 1,
+            "priority": 15
+          }
+        ]
+      },
+      {
+        "actionId": "hands-behind-sway",
+        "label": "背手闭眼摇晃",
+        "semanticTags": ["ambient", "relaxed", "shy", "playful"],
+        "prototypeTexts": ["稍微放松一下。", "就这样安静待一会儿吧。", "有点不好意思呢。"],
+        "allowedAnchors": ["segment-start", "segment-end"],
+        "compatibleAvatarStates": ["idle", "thinking", "presenting"],
+        "scene": {
+          "anyTags": ["desktop", "home", "relaxed"],
+          "noneTags": ["sleeping", "seated", "high-attention"],
+          "postures": ["standing"]
+        },
+        "speech": "deny",
+        "priority": 10,
+        "cooldownMs": 45000,
+        "maxQueueAgeMs": 4000,
+        "busyPolicy": "ignore-if-busy",
+        "triggers": [
+          {
+            "ruleId": "performance",
+            "trigger": "performance.action",
+            "mode": "required",
+            "chance": 1,
+            "weight": 1
+          },
+          {
+            "ruleId": "scene-request",
+            "trigger": "scene.action-requested",
+            "mode": "required",
+            "chance": 1,
+            "weight": 1
+          },
+          {
+            "ruleId": "ambient-relaxed",
+            "trigger": "ambient.opportunity",
+            "mode": "optional",
+            "chance": 0.1,
+            "weight": 1.2,
+            "priority": 15
+          },
+          {
+            "ruleId": "conversation-relaxed",
+            "trigger": "conversation.completed",
+            "mode": "optional",
+            "chance": 0.1,
+            "weight": 1.2,
+            "priority": 15
+          }
+        ]
+      },
+      {
+        "actionId": "adjust-wizard-hat",
+        "label": "整理法师帽",
+        "semanticTags": ["ambient", "appearance", "composed", "thinking"],
+        "prototypeTexts": ["让我整理一下帽子。", "稍等，我准备好了。", "嗯，让我想想。"],
+        "allowedAnchors": ["segment-start", "segment-end"],
+        "compatibleAvatarStates": ["idle", "thinking", "speaking", "presenting"],
+        "scene": {
+          "anyTags": ["desktop", "home", "casual"],
+          "noneTags": ["sleeping", "seated"],
+          "postures": ["standing"]
+        },
+        "speech": "allow",
+        "priority": 15,
+        "cooldownMs": 35000,
+        "maxQueueAgeMs": 5000,
+        "busyPolicy": "enqueue",
+        "triggers": [
+          {
+            "ruleId": "performance",
+            "trigger": "performance.action",
+            "mode": "required",
+            "chance": 1,
+            "weight": 1
+          },
+          {
+            "ruleId": "scene-request",
+            "trigger": "scene.action-requested",
+            "mode": "required",
+            "chance": 1,
+            "weight": 1
+          },
+          {
+            "ruleId": "ambient-appearance",
+            "trigger": "ambient.opportunity",
+            "mode": "optional",
+            "chance": 0.1,
+            "weight": 0.9,
+            "priority": 15
+          },
+          {
+            "ruleId": "conversation-appearance",
+            "trigger": "conversation.completed",
+            "mode": "optional",
+            "chance": 0.1,
+            "weight": 0.9,
+            "priority": 15
+          }
+        ]
+      },
+      {
+        "actionId": "draw-heart-success",
+        "label": "法杖画出爱心",
+        "semanticTags": ["affection", "gratitude", "celebration", "success", "magic"],
+        "prototypeTexts": ["送你一颗爱心！", "谢谢你一直陪着我。", "成功啦！"],
+        "allowedAnchors": ["segment-start", "segment-end"],
+        "compatibleAvatarStates": ["idle", "thinking", "speaking", "presenting"],
+        "scene": {
+          "anyTags": ["desktop", "home", "social"],
+          "noneTags": ["sleeping", "seated"],
+          "postures": ["standing"]
+        },
+        "speech": "allow",
+        "priority": 50,
+        "cooldownMs": 60000,
+        "maxQueueAgeMs": 10000,
+        "busyPolicy": "interrupt-lower-priority",
+        "triggers": [
+          {
+            "ruleId": "performance",
+            "trigger": "performance.action",
+            "mode": "required",
+            "chance": 1,
+            "weight": 1
+          },
+          {
+            "ruleId": "scene-request",
+            "trigger": "scene.action-requested",
+            "mode": "required",
+            "chance": 1,
+            "weight": 1
+          }
+        ]
+      },
+      {
+        "actionId": "draw-heart-failure",
+        "label": "画爱心失败并懊恼",
+        "semanticTags": ["failure", "embarrassed", "apology", "comedy", "magic"],
+        "prototypeTexts": ["糟糕，好像失败了。", "抱歉，让我再试一次。", "怎么会变成这样！"],
+        "allowedAnchors": ["segment-start", "segment-end"],
+        "compatibleAvatarStates": ["idle", "thinking", "speaking", "presenting"],
+        "scene": {
+          "anyTags": ["desktop", "home", "social"],
+          "noneTags": ["sleeping", "seated"],
+          "postures": ["standing"]
+        },
+        "speech": "allow",
+        "priority": 50,
+        "cooldownMs": 75000,
+        "maxQueueAgeMs": 10000,
+        "busyPolicy": "interrupt-lower-priority",
+        "triggers": [
+          {
+            "ruleId": "performance",
+            "trigger": "performance.action",
+            "mode": "required",
+            "chance": 1,
+            "weight": 1
+          },
+          {
+            "ruleId": "scene-request",
+            "trigger": "scene.action-requested",
+            "mode": "required",
+            "chance": 1,
+            "weight": 1
+          }
+        ]
+      },
+      {
+        "actionId": "summon-rabbit-buff",
+        "label": "召唤兔子环绕增益",
+        "semanticTags": ["encouragement", "support", "celebration", "buff", "magic"],
+        "prototypeTexts": ["给你加油！", "这份好运就交给兔子们吧。", "准备好接受增益了吗？"],
+        "allowedAnchors": ["segment-start", "segment-end"],
+        "compatibleAvatarStates": ["idle", "thinking", "speaking", "presenting"],
+        "scene": {
+          "anyTags": ["desktop", "home", "social"],
+          "noneTags": ["sleeping", "seated"],
+          "postures": ["standing"]
+        },
+        "speech": "allow",
+        "priority": 55,
+        "cooldownMs": 90000,
+        "maxQueueAgeMs": 10000,
+        "busyPolicy": "interrupt-lower-priority",
+        "triggers": [
+          {
+            "ruleId": "performance",
+            "trigger": "performance.action",
+            "mode": "required",
+            "chance": 1,
+            "weight": 1
+          },
+          {
+            "ruleId": "scene-request",
+            "trigger": "scene.action-requested",
+            "mode": "required",
+            "chance": 1,
+            "weight": 1
+          }
+        ]
+      }
+    ],
+    "bindings": {
+      "penguin-double-wave": {
+        "type": "live2d-motion",
+        "group": "TapBody",
+        "index": 0,
+        "mode": "once",
+        "expectedDurationMs": 3467
+      },
+      "hands-behind-sway": {
+        "type": "live2d-motion",
+        "group": "TapBody",
+        "index": 1,
+        "mode": "once",
+        "expectedDurationMs": 4400
+      },
+      "adjust-wizard-hat": {
+        "type": "live2d-motion",
+        "group": "TapBody",
+        "index": 2,
+        "mode": "once",
+        "expectedDurationMs": 4200
+      },
+      "draw-heart-success": {
+        "type": "live2d-motion",
+        "group": "TapBody",
+        "index": 3,
+        "mode": "once",
+        "expectedDurationMs": 7800
+      },
+      "draw-heart-failure": {
+        "type": "live2d-motion",
+        "group": "TapBody",
+        "index": 4,
+        "mode": "once",
+        "expectedDurationMs": 9367
+      },
+      "summon-rabbit-buff": {
+        "type": "live2d-motion",
+        "group": "TapBody",
+        "index": 5,
+        "mode": "once",
+        "expectedDurationMs": 9233
+      }
+    }
   },
   "expressionCatalog": {
     "revision": 1,

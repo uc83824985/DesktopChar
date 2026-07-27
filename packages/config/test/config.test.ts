@@ -4,6 +4,7 @@ import test from 'node:test';
 import {
   loadTtsConfig,
   parseCharacterConfig,
+  validateCharacterActionResources,
   validateCharacterExpressionResources,
 } from '../src/index.ts';
 
@@ -18,6 +19,18 @@ test('Mao asset-side profile compensates its authored gaze and lip response', as
   assert.equal(profile.expressionCatalog?.revision, 1);
   assert.equal(profile.expressionCatalog?.defaultExpressionKey, 'neutral');
   assert.equal(profile.expressionCatalog?.descriptors.length, 8);
+  assert.equal(profile.actionCatalog?.revision, 1);
+  assert.deepEqual(
+    profile.actionCatalog?.descriptors.map(item => item.actionId),
+    [
+      'penguin-double-wave',
+      'hands-behind-sway',
+      'adjust-wizard-hat',
+      'draw-heart-success',
+      'draw-heart-failure',
+      'summon-rabbit-buff',
+    ],
+  );
   assert.deepEqual(
     profile.expressionCatalog?.descriptors.map(item => item.expressionKey),
     [
@@ -38,6 +51,56 @@ test('Mao asset-side profile compensates its authored gaze and lip response', as
   assert.deepEqual(
     { attackMs: profile.lipSyncProfile.attackMs, releaseMs: profile.lipSyncProfile.releaseMs, peakHoldMs: profile.lipSyncProfile.peakHoldMs },
     { attackMs: 30, releaseMs: 180, peakHoldMs: 25 },
+  );
+});
+
+test('Mao action catalog binds every reviewed action and excludes the render sample', async () => {
+  const profileUrl = new URL('../../../apps/desktop/public/models/Mao/DesktopChar.character.json', import.meta.url);
+  const modelUrl = new URL('../../../apps/desktop/public/models/Mao/Mao.model3.json', import.meta.url);
+  const profile = parseCharacterConfig(
+    JSON.parse(await readFile(profileUrl, 'utf8')),
+    'models/Mao/DesktopChar.character.json',
+  );
+  const model = JSON.parse(await readFile(modelUrl, 'utf8')) as {
+    FileReferences: { Motions: Record<string, Array<{ File: string }>> };
+  };
+  const available = Object.entries(model.FileReferences.Motions).flatMap(([group, motions]) => (
+    motions.map((_, index) => ({ group, index }))
+  ));
+  const catalog = profile.actionCatalog;
+  assert.ok(catalog);
+  validateCharacterActionResources(catalog, available);
+  assert.equal(catalog.descriptors.length, 6);
+  assert.equal(Object.keys(catalog.bindings).length, 6);
+  const ambientDescriptors = catalog.descriptors.filter(descriptor => (
+    descriptor.triggers.some(rule => rule.trigger === 'ambient.opportunity')
+  ));
+  const ambientRules = ambientDescriptors.flatMap(descriptor => (
+    descriptor.triggers.filter(rule => rule.trigger === 'ambient.opportunity')
+  ));
+  assert.equal(ambientRules.length, 3);
+  assert.deepEqual(
+    ambientDescriptors.map(descriptor => descriptor.actionId),
+    ['penguin-double-wave', 'hands-behind-sway', 'adjust-wizard-hat'],
+  );
+  for (const rule of ambientRules) {
+    assert.equal(rule.mode, 'optional');
+    assert.ok(rule.chance >= 0 && rule.chance <= 1);
+    assert.ok(rule.weight > 0);
+  }
+  assert.deepEqual(
+    ambientDescriptors.map(descriptor => (
+      descriptor.triggers.some(rule => rule.trigger === 'conversation.completed')
+    )),
+    [true, true, true],
+  );
+  assert.equal(
+    Object.values(catalog.bindings).some(binding => binding.group === 'Idle' && binding.index === 1),
+    false,
+  );
+  assert.throws(
+    () => validateCharacterActionResources(catalog, [{ group: 'TapBody', index: 0 }]),
+    /unavailable motion TapBody\[1\]/,
   );
 });
 
@@ -181,9 +244,11 @@ test('loads standardized TTS lifecycle and synthesis variables', () => {
     DESKTOP_CHAR_TTS_FORMAT: 'mp3',
     DESKTOP_CHAR_TTS_VOICE: 'alice',
     DESKTOP_CHAR_TTS_RATE: '1.1',
+    DESKTOP_CHAR_TTS_FALLBACK_CHARACTERS_PER_SECOND: '6.25',
   });
   assert.equal(config.lifecycle, 'managed');
   assert.deepEqual(config.mcp, { timeoutMs: 1234, format: 'mp3', voice: 'alice', rate: 1.1 });
+  assert.deepEqual(config.timing, { fallbackCharactersPerSecond: 6.25 });
 });
 
 test('rejects invalid TTS environment values', () => {
@@ -191,6 +256,7 @@ test('rejects invalid TTS environment values', () => {
   assert.throws(() => loadTtsConfig({ DESKTOP_CHAR_TTS_TIMEOUT_MS: '0' }), /positive/);
   assert.throws(() => loadTtsConfig({ DESKTOP_CHAR_TTS_FORMAT: 'aac' }), /pcm_s16le/);
   assert.throws(() => loadTtsConfig({ DESKTOP_CHAR_TTS_RATE: '3' }), /0.5 to 2/);
+  assert.throws(() => loadTtsConfig({ DESKTOP_CHAR_TTS_FALLBACK_CHARACTERS_PER_SECOND: '0' }), /positive/);
 });
 
 function axis(negative: number, positive: number) {

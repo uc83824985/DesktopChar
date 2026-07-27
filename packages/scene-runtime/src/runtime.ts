@@ -3,6 +3,7 @@ import type {
   ActorCapabilityInvocation,
   ActiveSceneFragment,
   SceneActorDefinition,
+  SceneActionContextDefinition,
   SceneBehavior,
   SceneBehaviorEvent,
   SceneDefinition,
@@ -14,7 +15,11 @@ import type {
   SceneSnapshot,
   SceneTransaction,
 } from './types.ts';
-import { validateSceneState, validateUniqueDefinitions } from './validation.ts';
+import {
+  validateSceneActionContext,
+  validateSceneState,
+  validateUniqueDefinitions,
+} from './validation.ts';
 
 export interface SceneRuntimeEffectExecutor {
   execute(effect: SceneRuntimeEffect, dispatch: (event: SceneRuntimeEvent) => boolean): void | Promise<void>;
@@ -30,13 +35,22 @@ interface MutableSceneState {
   actors: Record<string, SceneActorDefinition>;
   relations: Record<string, SceneRelation>;
   fragments: Record<string, ActiveSceneFragment>;
+  actionContext: SceneActionContextDefinition;
 }
+
+const EMPTY_ACTION_CONTEXT: SceneActionContextDefinition = Object.freeze({
+  tags: [],
+  allowedActionTags: [],
+  blockedActionTags: [],
+  triggerChanceMultipliers: {},
+});
 
 export class SceneRuntime {
   private snapshot: SceneSnapshot = freezeSnapshot({
     generation: 0,
     revision: 0,
     sceneId: null,
+    actionContext: EMPTY_ACTION_CONTEXT,
     actors: {},
     relations: {},
     fragments: {},
@@ -77,7 +91,12 @@ export class SceneRuntime {
         this.replaceScene(event.scene);
         return true;
       case 'scene.unload-requested':
-        this.commit({ actors: {}, relations: {}, fragments: {} }, null, this.snapshot.generation + 1, 0);
+        this.commit({
+          actors: {},
+          relations: {},
+          fragments: {},
+          actionContext: EMPTY_ACTION_CONTEXT,
+        }, null, this.snapshot.generation + 1, 0);
         return true;
       case 'scene.transaction-requested':
         return this.applyTransaction(event.transaction);
@@ -109,7 +128,9 @@ export class SceneRuntime {
       actors: table(scene.actors),
       relations: table(scene.relations),
       fragments: {},
+      actionContext: normalizedActionContext(scene.actionContext),
     };
+    validateSceneActionContext(state.actionContext);
     validateSceneState(state.actors, state.relations);
     this.commit(state, scene.id, this.snapshot.generation + 1, 0);
   }
@@ -257,6 +278,7 @@ export class SceneRuntime {
       generation,
       revision,
       sceneId,
+      actionContext: state.actionContext,
       actors: state.actors,
       relations: state.relations,
       fragments: state.fragments,
@@ -286,6 +308,19 @@ function cloneState(snapshot: SceneSnapshot): MutableSceneState {
     actors: structuredClone(snapshot.actors),
     relations: structuredClone(snapshot.relations),
     fragments: structuredClone(snapshot.fragments),
+    actionContext: structuredClone(snapshot.actionContext),
+  };
+}
+
+function normalizedActionContext(
+  context: SceneActionContextDefinition | undefined,
+): SceneActionContextDefinition {
+  return {
+    tags: [...(context?.tags ?? [])],
+    ...(context?.posture ? { posture: context.posture } : {}),
+    allowedActionTags: [...(context?.allowedActionTags ?? [])],
+    blockedActionTags: [...(context?.blockedActionTags ?? [])],
+    triggerChanceMultipliers: { ...(context?.triggerChanceMultipliers ?? {}) },
   };
 }
 

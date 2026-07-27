@@ -6,6 +6,7 @@ import {
   type AudioSource,
   type AvatarEvent,
   type AvatarSnapshot,
+  type CharacterActionCatalog,
   type CharacterExpressionCatalog,
   type Emotion,
   type EmotionBindings,
@@ -15,8 +16,10 @@ import {
   type ParameterValue,
   type PerformanceActionDescriptor,
   type PerformancePlan,
+  type PerformanceTextAnchor,
   type PersonaPerformanceProjection,
   type ScenePerformanceProjection,
+  type SceneActionContext,
   type PerformanceSegment,
   type RuntimeEffect,
   type SpeechBubbleState,
@@ -27,10 +30,15 @@ import {
   applyPerformanceSuggestionV2,
   type PerformanceSuggestionSlots,
 } from './performance-suggestion.ts';
+import {
+  performanceRequestKey,
+  splitPerformanceClauses,
+} from './performance-clauses.ts';
 import { resolveExpression } from './expression-resolver.ts';
 import type { ParameterLayers } from './mixer.ts';
 import { ParameterMixer } from './mixer.ts';
 import { createInitialSnapshot, reduceAvatarSnapshot } from './reducer.ts';
+import { ActionRuntime, type ActionRuntimeTransition } from './action-runtime.ts';
 import { PerformanceTimeline } from './timeline.ts';
 import { DEFAULT_GAZE_PROFILE } from './gaze-profile.ts';
 import { GazeInterpolator } from './gaze-interpolator.ts';
@@ -44,6 +52,11 @@ export interface RuntimeEffectExecutor {
   execute(effect: RuntimeEffect, dispatch: (event: AvatarEvent) => void): void | Promise<void>;
 }
 
+export type RuntimePerformanceLogger = (
+  event: string,
+  data: Record<string, unknown>,
+) => void;
+
 export interface AvatarRuntimeOptions {
   planner: AvatarPlanner;
   mixer: ParameterMixer;
@@ -52,7 +65,11 @@ export interface AvatarRuntimeOptions {
   performancePlanning?: PerformancePlanningOptions;
   emotionBindings?: EmotionBindings;
   expressionCatalog?: CharacterExpressionCatalog;
+  actionCatalog?: CharacterActionCatalog;
+  sceneActionContext?: SceneActionContext;
   expressionRandomSeed?: number;
+  actionRandom?: () => number;
+  performanceLogger?: RuntimePerformanceLogger;
   clock?: () => number;
   gazeProfile?: GazeProfile;
   lipSyncProfile?: LipSyncProfile;
@@ -73,8 +90,10 @@ export class AvatarRuntime {
   private readonly failedSequences = new Set<number>();
   private readonly performanceRequests = new Map<string, {
     requestId: string;
+    segmentId: string;
     revision: number;
     catalogRevision?: number;
+    textAnchor?: PerformanceTextAnchor;
   }>();
   private readonly performanceSlots = new Map<string, PerformanceSuggestionSlots>();
   private readonly expressionHistory: ExpressionSelectionHistoryEntry[] = [];
@@ -91,6 +110,8 @@ export class AvatarRuntime {
   private readonly lipSyncEnvelope: LipSyncEnvelope;
   private readonly expressionRandomSeed: number;
   private readonly clock: () => number;
+  private readonly actionRuntime: ActionRuntime;
+  private readonly actionRandom: () => number;
 
   constructor(options: AvatarRuntimeOptions) {
     this.options = options;
@@ -104,6 +125,20 @@ export class AvatarRuntime {
       throw new TypeError('expressionRandomSeed must be an integer');
     }
     this.clock = options.clock ?? (() => Date.now());
+    this.actionRandom = options.actionRandom ?? Math.random;
+    this.actionRuntime = new ActionRuntime(
+      options.actionCatalog ?? legacyActionCatalog(),
+      options.sceneActionContext ?? {
+        generation: 0,
+        revision: 0,
+        sceneId: options.performancePlanning?.scene.id ?? null,
+        tags: [...(options.performancePlanning?.scene.modeTags ?? [])],
+        posture: 'standing',
+        allowedActionTags: [],
+        blockedActionTags: [],
+        triggerChanceMultipliers: {},
+      },
+    );
     const catalog = options.expressionCatalog;
     if (catalog) {
       this.snapshot = {
@@ -147,6 +182,7 @@ export class AvatarRuntime {
 
     let acceptedEvent = event;
     let submittedPerformanceEffects: RuntimeEffect[] = [];
+    let actionTransition: ActionRuntimeTransition | undefined;
     if (event.type === 'presentation.chat-bubble-requested') {
       if (this.snapshot.state !== 'idle') {
         throw new Error('A chat-bubble presentation can only start while the Runtime is idle');
@@ -175,7 +211,11 @@ export class AvatarRuntime {
       for (const original of event.plan.segments) {
         this.performanceSlots.set(original.id, {
           emotion: original.emotion === undefined,
-          expression: original.expression === undefined && original.emotion === undefined,
+          expression: (
+            original.expression === undefined
+            && !original.expressionCues?.length
+            && original.emotion === undefined
+          ),
           actions: original.actions === undefined,
         });
       }
@@ -194,6 +234,70 @@ export class AvatarRuntime {
 
     if ('generation' in acceptedEvent && acceptedEvent.generation !== this.snapshot.generation) {
       return;
+    }
+
+    const actionEnvironment = {
+      generation: this.snapshot.generation,
+      avatarState: this.snapshot.state,
+      speechActive: this.snapshot.playback.status === 'playing'
+        || this.snapshot.playback.status === 'buffering'
+        || this.snapshot.playback.status === 'paused',
+    };
+    if (acceptedEvent.type === 'scene.action-context-updated') {
+      actionTransition = this.actionRuntime.updateSceneContext(acceptedEvent.context);
+    }
+    else if (acceptedEvent.type === 'action.requested') {
+      actionTransition = this.actionRuntime.request(acceptedEvent.intent, actionEnvironment);
+    }
+    else if (acceptedEvent.type === 'timeline.action-cue') {
+      actionTransition = this.actionRuntime.request({
+        requestId: acceptedEvent.cue.id,
+        source: 'performance',
+        trigger: 'performance.action',
+        mode: 'required',
+        occurredAtMs: this.clock(),
+        selectionRandomValue: 0,
+        chanceRandomValue: 0,
+        requestedActionId: acceptedEvent.cue.action,
+        ...(acceptedEvent.cue.priority === undefined ? {} : { priority: acceptedEvent.cue.priority }),
+      }, actionEnvironment);
+    }
+    else if (acceptedEvent.type === 'runtime.plan-completed') {
+      const occurredAtMs = this.clock();
+      actionTransition = this.actionRuntime.request({
+        requestId: `conversation-completed:${acceptedEvent.planId}:${occurredAtMs}`,
+        source: 'scene',
+        trigger: 'conversation.completed',
+        mode: 'optional',
+        occurredAtMs,
+        selectionRandomValue: this.nextActionRandom(),
+        chanceRandomValue: this.nextActionRandom(),
+        semanticTags: ['ambient'],
+      }, {
+        ...actionEnvironment,
+        avatarState: 'idle',
+        speechActive: false,
+      });
+    }
+    else if (acceptedEvent.type === 'renderer.motion-completed') {
+      actionTransition = this.actionRuntime.complete(
+        acceptedEvent.requestId,
+        this.clock(),
+        actionEnvironment,
+      );
+    }
+    else if (
+      acceptedEvent.type === 'renderer.motion-failed'
+      || acceptedEvent.type === 'renderer.motion-interrupted'
+    ) {
+      actionTransition = this.actionRuntime.fail(
+        acceptedEvent.requestId,
+        this.clock(),
+        actionEnvironment,
+      );
+    }
+    else if (acceptedEvent.type === 'user.interrupt-requested') {
+      actionTransition = this.actionRuntime.interrupt(this.snapshot.generation);
     }
 
     if (acceptedEvent.type.startsWith('playback.') && 'segmentId' in acceptedEvent) {
@@ -221,31 +325,47 @@ export class AvatarRuntime {
       this.acceptPerformanceSuggestionV2(acceptedEvent);
     }
     else if (acceptedEvent.type === 'performance.suggestion-failed') {
-      const pending = this.performanceRequests.get(acceptedEvent.segmentId);
+      const pending = this.performanceRequests.get(acceptedEvent.requestId);
       if (
         acceptedEvent.planId === this.plan?.id
-        && pending?.requestId === acceptedEvent.requestId
+        && pending?.segmentId === acceptedEvent.segmentId
         && pending?.revision === acceptedEvent.segmentRevision
       ) {
-        this.performanceRequests.delete(acceptedEvent.segmentId);
+        this.performanceRequests.delete(acceptedEvent.requestId);
       }
     }
     else if (acceptedEvent.type === 'performance.suggestion-v2-failed') {
-      const pending = this.performanceRequests.get(acceptedEvent.segmentId);
+      const pending = this.performanceRequests.get(acceptedEvent.requestId);
       if (
         acceptedEvent.planId === this.plan?.id
-        && pending?.requestId === acceptedEvent.requestId
+        && pending?.segmentId === acceptedEvent.segmentId
         && pending?.revision === acceptedEvent.segmentRevision
         && pending?.catalogRevision === acceptedEvent.catalogRevision
       ) {
-        this.performanceRequests.delete(acceptedEvent.segmentId);
+        this.performanceRequests.delete(acceptedEvent.requestId);
       }
     }
     else if (acceptedEvent.type === 'playback.started') {
       this.lipSyncEnvelope.reset(acceptedEvent.positionMs);
       const segment = this.segmentById(acceptedEvent.segmentId);
       if (segment) {
-        this.timeline = new PerformanceTimeline(segment);
+        this.timeline = new PerformanceTimeline(segment, {
+          ...(this.currentSource?.durationMs !== undefined
+            ? { durationMs: this.currentSource.durationMs }
+            : {}),
+          ...(this.currentSource?.fallbackCharactersPerSecond !== undefined
+            ? {
+                fallbackCharactersPerSecond:
+                  this.currentSource.fallbackCharactersPerSecond,
+              }
+            : {}),
+        });
+        this.logPerformance('expression.timeline-started', {
+          segmentId: segment.id,
+          durationMs: this.currentSource?.durationMs ?? null,
+          fallbackCharactersPerSecond:
+            this.currentSource?.fallbackCharactersPerSecond ?? null,
+        });
         this.applyTimeline(acceptedEvent.positionMs);
       }
     }
@@ -307,7 +427,11 @@ export class AvatarRuntime {
 
     const bubbleTransition = this.transitionSpeechBubble(acceptedEvent);
     const transition = reduceAvatarSnapshot(this.snapshot, acceptedEvent);
-    this.snapshot = { ...transition.snapshot, speechBubble: bubbleTransition.state };
+    this.snapshot = {
+      ...transition.snapshot,
+      speechBubble: bubbleTransition.state,
+      gesture: actionTransition?.gesture ?? this.actionRuntime.getGesture(),
+    };
     if (
       acceptedEvent.type === 'user.interrupt-requested'
       || acceptedEvent.type === 'runtime.plan-completed'
@@ -329,6 +453,7 @@ export class AvatarRuntime {
     }
     this.notify();
     this.executeAll(transition.effects);
+    this.executeAll(actionTransition?.effects ?? []);
     this.executeAll(submittedPerformanceEffects);
     this.executeAll(bubbleTransition.effects);
     if (acceptedEvent.type === 'renderer.ready') this.emitFrame();
@@ -434,6 +559,31 @@ export class AvatarRuntime {
       else if (cue.type === 'expression') {
         const catalog = this.options.expressionCatalog;
         if (!catalog) continue;
+        // Reapplying the same Cubism expression can visibly restart its fade.
+        // The cue is already marked emitted by the Timeline, so identical
+        // adjacent clause results become a stable hold instead of a flicker.
+        if (this.snapshot.expression.currentKey === cue.payload.expressionKey) {
+          this.logPerformance('expression.cue-held', {
+            segmentId: this.timeline?.segmentId ?? null,
+            expressionKey: cue.payload.expressionKey,
+            plannedAtMs: cue.atMs,
+            actualPositionMs: positionMs,
+            timingBasis: cue.timingBasis,
+            triggerText: cue.payload.triggerText ?? null,
+            textAnchor: cue.payload.textAnchor ?? null,
+          });
+          continue;
+        }
+        this.logPerformance('expression.cue-fired', {
+          segmentId: this.timeline?.segmentId ?? null,
+          expressionKey: cue.payload.expressionKey,
+          plannedAtMs: cue.atMs,
+          actualPositionMs: positionMs,
+          lagMs: Math.max(0, positionMs - cue.atMs),
+          timingBasis: cue.timingBasis,
+          triggerText: cue.payload.triggerText ?? null,
+          textAnchor: cue.payload.textAnchor ?? null,
+        });
         const startedAtMs = this.clock();
         this.dispatch({
           type: 'timeline.expression-cue',
@@ -483,7 +633,7 @@ export class AvatarRuntime {
       if (!slots || (!slots.emotion && !slots.actions) || !text) return [];
       const revision = 0;
       const requestId = `g${this.snapshot.generation}:q${++this.performanceRequestSequence}:${plan.id}:${segment.id}:r${revision}`;
-      this.performanceRequests.set(segment.id, { requestId, revision });
+      this.performanceRequests.set(requestId, { requestId, segmentId: segment.id, revision });
       return [{
         type: 'performance.infer' as const,
         generation: this.snapshot.generation,
@@ -516,38 +666,54 @@ export class AvatarRuntime {
     if (!planning || !catalog) return [];
     return plan.segments.flatMap(segment => {
       const slots = this.performanceSlots.get(segment.id);
-      const text = (segment.displayText || segment.speechText).trim();
-      if (!slots || (!slots.expression && !slots.actions) || !text) return [];
+      const text = segment.speechText;
+      if (!slots || (!slots.expression && !slots.actions) || !text.trim()) return [];
       const revision = 0;
-      const requestId = `g${this.snapshot.generation}:q${++this.performanceRequestSequence}:${plan.id}:${segment.id}:r${revision}:c${catalog.revision}`;
-      this.performanceRequests.set(segment.id, {
-        requestId,
-        revision,
-        catalogRevision: catalog.revision,
-      });
-      return [{
-        type: 'performance.infer-v2' as const,
-        generation: this.snapshot.generation,
-        request: {
-          contractVersion: PERFORMANCE_PLANNING_V2_CONTRACT_VERSION,
+      const clauses = slots.expression
+        ? splitPerformanceClauses(text)
+        : splitPerformanceClauses(text, 1);
+      return clauses.map((clause, index): RuntimeEffect => {
+        const requestId = `g${this.snapshot.generation}:q${++this.performanceRequestSequence}:${plan.id}:${segment.id}:r${revision}:c${catalog.revision}:k${clause.anchor.clauseIndex}`;
+        this.performanceRequests.set(requestId, {
+          requestId,
+          segmentId: segment.id,
+          revision,
+          catalogRevision: catalog.revision,
+          textAnchor: structuredClone(clause.anchor),
+        });
+        this.logPerformance('expression.clause-requested', {
           requestId,
           planId: plan.id,
           segmentId: segment.id,
-          segmentRevision: revision,
-          catalogRevision: catalog.revision,
-          defaultExpressionKey: catalog.defaultExpressionKey,
-          text,
-          persona: structuredClone(planning.persona),
-          scene: structuredClone(planning.scene),
-          avatar: {
-            state: 'thinking',
-            currentExpressionKey: this.snapshot.expression.currentKey ?? catalog.defaultExpressionKey,
-            coarseEmotion: this.snapshot.emotion.current,
+          text: clause.text,
+          textAnchor: clause.anchor,
+          actionSelectionEnabled: index === 0 && slots.actions,
+        });
+        return {
+          type: 'performance.infer-v2',
+          generation: this.snapshot.generation,
+          request: {
+            contractVersion: PERFORMANCE_PLANNING_V2_CONTRACT_VERSION,
+            requestId,
+            planId: plan.id,
+            segmentId: segment.id,
+            segmentRevision: revision,
+            catalogRevision: catalog.revision,
+            defaultExpressionKey: catalog.defaultExpressionKey,
+            text: clause.text,
+            textAnchor: structuredClone(clause.anchor),
+            persona: structuredClone(planning.persona),
+            scene: structuredClone(planning.scene),
+            avatar: {
+              state: 'thinking',
+              currentExpressionKey: this.snapshot.expression.currentKey ?? catalog.defaultExpressionKey,
+              coarseEmotion: this.snapshot.emotion.current,
+            },
+            expressions: structuredClone(catalog.descriptors),
+            actions: index === 0 && slots.actions ? structuredClone(actions) : [],
           },
-          expressions: structuredClone(catalog.descriptors),
-          actions: structuredClone(actions),
-        },
-      }];
+        };
+      });
     });
   }
 
@@ -556,15 +722,15 @@ export class AvatarRuntime {
   ): void {
     if (!this.plan || event.planId !== this.plan.id) return;
     const suggestion = event.suggestion;
-    const pending = this.performanceRequests.get(suggestion.segmentId);
+    const pending = this.performanceRequests.get(suggestion.requestId);
     if (
       !pending
-      || pending.requestId !== suggestion.requestId
+      || pending.segmentId !== suggestion.segmentId
       || pending.revision !== suggestion.segmentRevision
     ) {
       return;
     }
-    this.performanceRequests.delete(suggestion.segmentId);
+    this.performanceRequests.delete(suggestion.requestId);
     if (
       suggestion.contractVersion !== PERFORMANCE_PLANNING_CONTRACT_VERSION
       || !Array.isArray(suggestion.actions)
@@ -591,17 +757,19 @@ export class AvatarRuntime {
     const catalog = this.options.expressionCatalog;
     if (!catalog || !this.plan || event.planId !== this.plan.id) return;
     const suggestion = event.suggestion;
-    const pending = this.performanceRequests.get(suggestion.segmentId);
+    const pending = this.performanceRequests.get(suggestion.requestId);
     if (
       !pending
-      || pending.requestId !== suggestion.requestId
+      || pending.segmentId !== suggestion.segmentId
       || pending.revision !== suggestion.segmentRevision
       || pending.catalogRevision !== suggestion.catalogRevision
       || suggestion.catalogRevision !== catalog.revision
+      || !sameTextAnchor(pending.textAnchor, suggestion.textAnchor)
+      || !containedTextAnchor(pending.textAnchor, suggestion.expressionTextAnchor)
     ) {
       return;
     }
-    this.performanceRequests.delete(suggestion.segmentId);
+    if (!event.provisional) this.performanceRequests.delete(suggestion.requestId);
     if (
       suggestion.contractVersion !== PERFORMANCE_PLANNING_V2_CONTRACT_VERSION
       || !Array.isArray(suggestion.expressionCandidates)
@@ -623,7 +791,7 @@ export class AvatarRuntime {
       resolved = resolveExpression({
         catalog,
         avatarState: this.snapshot.state,
-        resolutionId: suggestion.segmentId,
+        resolutionId: performanceRequestKey(suggestion.segmentId, suggestion.textAnchor),
         randomSeed: this.expressionRandomSeed,
         nowMs: this.clock(),
         candidates: suggestion.expressionCandidates,
@@ -850,6 +1018,7 @@ export class AvatarRuntime {
         this.dispatch({
           type: 'renderer.motion-failed',
           generation: effect.generation,
+          requestId: effect.command.requestId,
           actionId: effect.command.actionId,
           error,
         });
@@ -859,6 +1028,14 @@ export class AvatarRuntime {
         break;
       case 'renderer.apply-frame':
         this.dispatch({ type: 'renderer.failed', error });
+        break;
+      case 'renderer.stop-motion':
+        this.dispatch({
+          type: 'renderer.motion-interrupted',
+          generation: effect.generation,
+          requestId: effect.requestId,
+          actionId: effect.actionId,
+        });
         break;
       case 'audio.play':
         this.dispatch({
@@ -986,13 +1163,30 @@ export class AvatarRuntime {
   private validateExplicitExpressions(plan: PerformancePlan): void {
     const catalog = this.options.expressionCatalog;
     for (const segment of plan.segments) {
-      if (!segment.expression) continue;
-      if (!catalog?.bindings[segment.expression.expressionKey]) {
-        throw new Error(
-          `Expression ${segment.expression.expressionKey} is not available in the active character catalog`,
-        );
+      const expressions = [
+        ...(segment.expression ? [segment.expression] : []),
+        ...(segment.expressionCues ?? []),
+      ];
+      for (const expression of expressions) {
+        if (!catalog?.bindings[expression.expressionKey]) {
+          throw new Error(
+            `Expression ${expression.expressionKey} is not available in the active character catalog`,
+          );
+        }
       }
     }
+  }
+
+  private nextActionRandom(): number {
+    const value = this.actionRandom();
+    if (!Number.isFinite(value) || value < 0 || value >= 1) {
+      throw new RangeError('actionRandom must return a value in [0, 1)');
+    }
+    return value;
+  }
+
+  private logPerformance(event: string, data: Record<string, unknown>): void {
+    this.options.performanceLogger?.(event, data);
   }
 }
 
@@ -1049,4 +1243,66 @@ function sampleAmplitude(samples: AmplitudeSample[] | undefined, positionMs: num
     selected = sample.value;
   }
   return Math.max(0, Math.min(1, selected));
+}
+
+function sameTextAnchor(
+  left: PerformanceTextAnchor | undefined,
+  right: PerformanceTextAnchor | undefined,
+): boolean {
+  return left !== undefined
+    && right !== undefined
+    && left.clauseIndex === right.clauseIndex
+    && left.clauseCount === right.clauseCount
+    && left.startCharacter === right.startCharacter
+    && left.endCharacter === right.endCharacter
+    && left.totalCharacters === right.totalCharacters;
+}
+
+function containedTextAnchor(
+  clause: PerformanceTextAnchor | undefined,
+  trigger: PerformanceTextAnchor | undefined,
+): boolean {
+  return clause !== undefined
+    && trigger !== undefined
+    && clause.clauseIndex === trigger.clauseIndex
+    && clause.clauseCount === trigger.clauseCount
+    && clause.totalCharacters === trigger.totalCharacters
+    && trigger.startCharacter >= clause.startCharacter
+    && trigger.endCharacter > trigger.startCharacter
+    && trigger.endCharacter <= clause.endCharacter;
+}
+
+function legacyActionCatalog(): CharacterActionCatalog {
+  const actionIds = ['nod', 'shake', 'tap', 'greet'];
+  return {
+    revision: 0,
+    descriptors: actionIds.map(actionId => ({
+      actionId,
+      label: actionId,
+      semanticTags: [actionId],
+      prototypeTexts: [actionId],
+      allowedAnchors: ['segment-start'],
+      compatibleAvatarStates: ['idle', 'listening', 'thinking', 'speaking', 'presenting'],
+      scene: {},
+      speech: 'allow',
+      priority: 0,
+      cooldownMs: 0,
+      maxQueueAgeMs: 5_000,
+      busyPolicy: 'enqueue',
+      triggers: [{
+        ruleId: 'performance',
+        trigger: 'performance.action',
+        mode: 'required',
+        chance: 1,
+        weight: 1,
+      }],
+    })),
+    bindings: Object.fromEntries(actionIds.map(actionId => [actionId, {
+      type: 'live2d-motion' as const,
+      group: actionId,
+      index: 0,
+      mode: 'once' as const,
+      expectedDurationMs: 1_200,
+    }])),
+  };
 }

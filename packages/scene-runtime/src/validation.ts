@@ -1,6 +1,7 @@
 import type {
   DepthRepresentation,
   SceneActorDefinition,
+  SceneActionContextDefinition,
   SceneRelation,
   SceneTransform,
 } from './types.ts';
@@ -37,6 +38,28 @@ export function validateUniqueDefinitions(
 ): void {
   unique(actors.map(actor => actor.id), 'actor id');
   unique(relations.map(relation => relation.id), 'relation id');
+}
+
+export function validateSceneActionContext(context: SceneActionContextDefinition): void {
+  unique(context.tags, 'scene action context tag');
+  unique(context.allowedActionTags, 'scene allowed action tag');
+  unique(context.blockedActionTags, 'scene blocked action tag');
+  for (const tag of [
+    ...context.tags,
+    ...context.allowedActionTags,
+    ...context.blockedActionTags,
+  ]) {
+    nonEmpty(tag, 'Scene action context tag');
+  }
+  if (context.posture !== undefined) nonEmpty(context.posture, 'Scene action context posture');
+  const overlap = context.allowedActionTags.filter(tag => context.blockedActionTags.includes(tag));
+  if (overlap.length) fail(`Scene action context cannot both allow and block "${overlap[0]}"`);
+  for (const [trigger, multiplier] of Object.entries(context.triggerChanceMultipliers)) {
+    nonEmpty(trigger, 'Scene action trigger');
+    if (!Number.isFinite(multiplier) || multiplier < 0) {
+      fail(`Scene action trigger multiplier "${trigger}" must be finite and non-negative`);
+    }
+  }
 }
 
 function validateActor(actor: SceneActorDefinition): void {

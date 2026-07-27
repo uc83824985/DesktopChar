@@ -24,7 +24,7 @@ export function createInitialSnapshot(): AvatarSnapshot {
       startedAtMs: null,
       holdUntilMs: null,
     },
-    gesture: { actionId: null, action: null, queueLength: 0 },
+    gesture: { requestId: null, actionId: null, queueLength: 0 },
     gaze: { x: 0, y: 0, active: false },
     interrupted: false,
     capabilities: null,
@@ -104,7 +104,7 @@ export function reduceAvatarSnapshot(
           segmentId: null,
           sequence: null,
           playback: { status: 'stopped', positionMs: snapshot.playback.positionMs },
-          gesture: { actionId: null, action: null, queueLength: 0 },
+          gesture: { requestId: null, actionId: null, queueLength: 0 },
         }, event.error),
         effects: [],
       };
@@ -185,7 +185,7 @@ export function reduceAvatarSnapshot(
           segmentId: null,
           sequence: null,
           playback: { status: 'idle', positionMs: event.positionMs },
-          gesture: { actionId: null, action: null, queueLength: 0 },
+          gesture: { requestId: null, actionId: null, queueLength: 0 },
         },
         effects: [],
       };
@@ -258,7 +258,7 @@ export function reduceAvatarSnapshot(
             startedAtMs: null,
             holdUntilMs: null,
           },
-          gesture: { actionId: null, action: null, queueLength: 0 },
+          gesture: { requestId: null, actionId: null, queueLength: 0 },
           gaze: snapshot.gaze,
           interrupted: false,
         },
@@ -337,25 +337,7 @@ export function reduceAvatarSnapshot(
       };
 
     case 'timeline.action-cue':
-      return {
-        snapshot: {
-          ...snapshot,
-          gesture: {
-            actionId: event.cue.id,
-            action: event.cue.action,
-            queueLength: snapshot.gesture.queueLength,
-          },
-        },
-        effects: [{
-          type: 'renderer.play-motion',
-          generation: snapshot.generation,
-          command: {
-            actionId: event.cue.id,
-            action: event.cue.action,
-            priority: event.cue.priority ?? 0,
-          },
-        }],
-      };
+      return { snapshot, effects: [] };
 
     case 'runtime.plan-completed':
       return {
@@ -374,7 +356,7 @@ export function reduceAvatarSnapshot(
             startedAtMs: null,
             holdUntilMs: null,
           },
-          gesture: { actionId: null, action: null, queueLength: 0 },
+          gesture: { requestId: null, actionId: null, queueLength: 0 },
         },
         effects: [
           { type: 'performance.cancel', generation: snapshot.generation },
@@ -388,16 +370,10 @@ export function reduceAvatarSnapshot(
     case 'plan.failed':
       return { snapshot: withError(snapshot, event.error), effects: [] };
 
+    case 'renderer.motion-started':
     case 'renderer.motion-completed':
-      return event.actionId === snapshot.gesture.actionId
-        ? {
-            snapshot: {
-              ...snapshot,
-              gesture: { actionId: null, action: null, queueLength: snapshot.gesture.queueLength },
-            },
-            effects: [],
-          }
-        : { snapshot, effects: [] };
+    case 'renderer.motion-interrupted':
+      return { snapshot, effects: [] };
 
     case 'plan.completed':
     case 'tts.plan-completed':
@@ -408,6 +384,8 @@ export function reduceAvatarSnapshot(
     case 'plan.segment-appended':
     case 'presentation.chat-bubble-requested':
     case 'runtime.speech-bubble-dismissed':
+    case 'scene.action-context-updated':
+    case 'action.requested':
     case 'user.avatar-clicked':
       return { snapshot, effects: [] };
   }
