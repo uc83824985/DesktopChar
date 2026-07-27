@@ -15,6 +15,7 @@
 - `local-tts-mcp`：可独立运行的真实 Streamable HTTP MCP/HTTP PCM 参考服务；默认固定音高 `jrpg-blip` 按字生成提示音、标点停顿及 sample-aligned 文本 cue，并保留确定性变化音调 `jrpg-blip-varied`。
 - `performance-model-service`：Qwen3.5-2B 首个本地表现模型开发环境；通过独立
   Transformers OpenAI-compatible 服务暴露能力，不向引擎包泄漏模型实现。
+- `temp`：开发截图、审阅导出和一次性诊断文件的统一临时目录；除目录说明外默认不进入 Git。
 
 详细设计见 [架构文档](docs/architecture.md)、[Avatar Runtime](docs/avatar-runtime.md)、[Scene Engine 抽象](docs/scene-engine.md) 和 [配置所有权与 JSON 重构方案](docs/configuration.md)。
 

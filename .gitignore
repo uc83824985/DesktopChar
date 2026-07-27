@@ -8,6 +8,10 @@ coverage/
 *.log
 /artifacts/motion-audit/
 
+# Developer scratch files
+/temp/*
+!/temp/README.md
+
 # Local environment
 .env
 .env.*
