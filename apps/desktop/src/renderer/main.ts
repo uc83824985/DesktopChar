@@ -31,6 +31,7 @@ import {
   DEFAULT_CHARACTER_PROFILE_URL,
   DEFAULT_TTS_CONFIG,
   loadCharacterConfig,
+  validateCharacterActionResources,
   validateCharacterExpressionResources,
 } from '../../../../packages/config/src/index.ts';
 import {
@@ -101,6 +102,8 @@ Live2DModel.registerTicker(Ticker);
 const desktopShell = window.desktopChar;
 const motionAuditRequested = !desktopShell
   && new URLSearchParams(location.search).get('motionAudit') === '1';
+const expressionFlowAuditRequested =
+  new URLSearchParams(location.search).get('expressionFlowAudit') === '1';
 if (desktopShell) {
   document.documentElement.dataset.shell = 'floating';
   document.body.dataset.shell = 'floating';
@@ -112,6 +115,7 @@ const speechBubbleActive = document.querySelector<HTMLElement>('#speech-bubble-a
 const speechBubbleTrailing = document.querySelector<HTMLElement>('#speech-bubble-trailing')!;
 const status = document.querySelector<HTMLElement>('#status')!;
 const speak = document.querySelector<HTMLButtonElement>('#speak')!;
+const expressionFlow = document.querySelector<HTMLButtonElement>('#expression-flow')!;
 const tone = document.querySelector<HTMLButtonElement>('#tone')!;
 const motion = document.querySelector<HTMLButtonElement>('#motion')!;
 const gaze = document.querySelector<HTMLButtonElement>('#gaze')!;
@@ -195,9 +199,17 @@ interface ToneAcceptanceRun {
   lastLoggedBucket: number;
   lastLoggedPhase: string;
 }
+interface ExpressionFlowRun {
+  segmentId: string;
+  expressionKeys: string[];
+}
 
 class ReloadableTtsAdapter implements TtsAdapter {
-  private current: { adapter: TtsAdapter; defaults: Pick<TtsSynthesisRequest, 'voice' | 'format' | 'rate'> } | undefined;
+  private current: {
+    adapter: TtsAdapter;
+    defaults: Pick<TtsSynthesisRequest, 'voice' | 'format' | 'rate'>;
+    fallbackCharactersPerSecond: number;
+  } | undefined;
   private enabled = false;
 
   configure(adapter: TtsAdapter, config: DesktopTtsConfig, enabled: boolean): void {
@@ -208,8 +220,16 @@ class ReloadableTtsAdapter implements TtsAdapter {
         ...(config.format ? { format: config.format } : {}),
         ...(config.rate !== undefined ? { rate: config.rate } : {}),
       },
+      fallbackCharactersPerSecond: config.fallbackCharactersPerSecond,
     };
     this.enabled = enabled;
+    document.body.dataset.ttsFallbackCharactersPerSecond =
+      config.fallbackCharactersPerSecond.toString();
+    writePerformanceLog('expression.timing-profile-configured', 'info', {
+      ttsProfile: config.profile ?? null,
+      provider: config.provider,
+      fallbackCharactersPerSecond: config.fallbackCharactersPerSecond,
+    });
   }
 
   setEnabled(enabled: boolean): void {
@@ -218,7 +238,11 @@ class ReloadableTtsAdapter implements TtsAdapter {
 
   async prepare(request: TtsSynthesisRequest) {
     const current = this.requireCurrent();
-    return await current.adapter.prepare({ ...request, ...current.defaults });
+    const source = await current.adapter.prepare({ ...request, ...current.defaults });
+    return {
+      ...source,
+      fallbackCharactersPerSecond: current.fallbackCharactersPerSecond,
+    };
   }
 
   async cancel(requestId: string): Promise<void> {
@@ -345,8 +369,10 @@ class ReloadablePerformanceInference implements PerformanceInferencePort {
 
 class ReloadableExpressionCatalogInference implements PerformanceInferencePortV2 {
   private current: PerformanceInferencePortV2 = new RuleBasedExpressionCatalogInference();
+  private readonly provisional = new RuleBasedExpressionCatalogInference();
   private signature = '';
   private modelEnabled = false;
+  private provisionalEnabled = false;
   private provider = 'deterministic-catalog-rules';
 
   configure(config: DesktopPerformanceInferenceConfig): boolean {
@@ -354,6 +380,7 @@ class ReloadableExpressionCatalogInference implements PerformanceInferencePortV2
     if (signature === this.signature) return false;
     this.signature = signature;
     this.modelEnabled = config.enabled && config.operational;
+    this.provisionalEnabled = this.modelEnabled && config.fallbackToRules;
     this.provider = this.modelEnabled ? config.provider : 'deterministic-catalog-rules';
     if (!this.modelEnabled) {
       this.current = new RuleBasedExpressionCatalogInference();
@@ -393,6 +420,26 @@ class ReloadableExpressionCatalogInference implements PerformanceInferencePortV2
     return this.current.describe();
   }
 
+  async provisionalPlan(
+    request: PerformancePlanningRequestV2,
+    signal: AbortSignal,
+  ): Promise<LocalPerformanceSuggestionV2 | undefined> {
+    if (!this.provisionalEnabled) return undefined;
+    const startedAt = performance.now();
+    const suggestion = await this.provisional.plan(request, signal);
+    writePerformanceLog('request.v2-provisional', 'info', {
+      requestId: request.requestId,
+      segmentId: request.segmentId,
+      clauseIndex: request.textAnchor.clauseIndex,
+      durationMs: Math.round(performance.now() - startedAt),
+      expressionTrigger: suggestion.expressionTrigger,
+      expressionTextAnchor: suggestion.expressionTextAnchor,
+      expressionCandidates: suggestion.expressionCandidates,
+      actions: suggestion.actions,
+    });
+    return suggestion;
+  }
+
   plan(
     request: PerformancePlanningRequestV2,
     signal: AbortSignal,
@@ -403,6 +450,8 @@ class ReloadableExpressionCatalogInference implements PerformanceInferencePortV2
       planId: request.planId,
       segmentId: request.segmentId,
       catalogRevision: request.catalogRevision,
+      clauseIndex: request.textAnchor.clauseIndex,
+      clauseCount: request.textAnchor.clauseCount,
       provider: this.provider,
       modelEnabled: this.modelEnabled,
       textCharacters: [...request.text].length,
@@ -413,10 +462,13 @@ class ReloadableExpressionCatalogInference implements PerformanceInferencePortV2
       writePerformanceLog('request.v2-completed', 'info', {
         requestId: request.requestId,
         segmentId: request.segmentId,
+        clauseIndex: request.textAnchor.clauseIndex,
         durationMs: Math.round(performance.now() - startedAt),
         source: suggestion.source,
         provider: suggestion.provider,
         affect: suggestion.affect ?? null,
+        expressionTrigger: suggestion.expressionTrigger,
+        expressionTextAnchor: suggestion.expressionTextAnchor,
         expressionCandidates: suggestion.expressionCandidates,
         actions: suggestion.actions,
       });
@@ -455,6 +507,34 @@ function writePerformanceLog(
   else console.info(message);
 }
 
+function handleRuntimePerformanceLog(
+  event: string,
+  data: Record<string, unknown>,
+): void {
+  writePerformanceLog(event, 'info', data);
+  const active = expressionFlowRun;
+  if (
+    !active
+    || data.segmentId !== active.segmentId
+    || (event !== 'expression.cue-fired' && event !== 'expression.cue-held')
+    || typeof data.expressionKey !== 'string'
+  ) {
+    return;
+  }
+  active.expressionKeys.push(data.expressionKey);
+  document.body.dataset.expressionFlowCues = JSON.stringify(active.expressionKeys);
+  document.body.dataset.expressionFlowLastKey = data.expressionKey;
+  document.body.dataset.expressionFlowLastTrigger =
+    typeof data.triggerText === 'string' ? data.triggerText : 'unknown';
+  document.body.dataset.expressionFlowLastTimingBasis =
+    typeof data.timingBasis === 'string' ? data.timingBasis : 'unknown';
+  document.body.dataset.expressionFlowLastPositionMs =
+    typeof data.actualPositionMs === 'number' ? data.actualPositionMs.toString() : 'unknown';
+  if (active.expressionKeys.length >= 3 && new Set(active.expressionKeys).size >= 3) {
+    document.body.dataset.expressionFlowTest = 'passed';
+  }
+}
+
 function performanceErrorDetails(error: unknown): Record<string, unknown> {
   return error instanceof Error
     ? {
@@ -480,8 +560,12 @@ let gazeFrameDriverAttached = false;
 let playbackTimer: ReturnType<typeof setInterval> | undefined;
 let motionTimer: ReturnType<typeof setTimeout> | undefined;
 let motionRequestToken = 0;
+let motionFinishListener: (() => void) | undefined;
+let demoActionId = 'nod';
 let expressionRequestToken = 0;
 let toneAcceptance: ToneAcceptanceRun | null = null;
+let expressionFlowRun: ExpressionFlowRun | null = null;
+let expressionFlowAuditStarted = false;
 let applyingToneTrace: ToneSyncTrace | null = null;
 let knownToneAvailable = false;
 let mcpServicesState: McpServicesState | undefined;
@@ -634,6 +718,9 @@ try {
   const ttsOperational = desktopShell ? isOperationalMcpService(mcpServicesState?.tts) : true;
   reloadableTtsAdapter.configure(tts.adapter, shellState?.tts ?? browserTtsConfig(), ttsOperational);
   currentLipSyncProfile = characterConfig.lipSyncProfile;
+  demoActionId = characterConfig.actionCatalog?.descriptors[0]?.actionId
+    ?? characterConfig.allowedActions[0]
+    ?? 'nod';
   document.body.dataset.gazeHeadResponseMs = characterConfig.gazeProfile.smoothing.headResponseMs.toString();
   document.body.dataset.gazeEyeResponseMs = characterConfig.gazeProfile.smoothing.eyeResponseMs.toString();
   knownToneAvailable = tts.supportsKnownToneFixture && ttsOperational;
@@ -658,6 +745,12 @@ try {
     validateCharacterExpressionResources(
       characterConfig.expressionCatalog,
       assetPreviewCatalog.expressions.map(expression => expression.id),
+    );
+  }
+  if (characterConfig.actionCatalog) {
+    validateCharacterActionResources(
+      characterConfig.actionCatalog,
+      assetPreviewCatalog.motions.map(motion => ({ group: motion.group, index: motion.index })),
     );
   }
   assetPreviewIsolation = new AssetPreviewIsolationController(model.internalModel.motionManager);
@@ -690,17 +783,38 @@ try {
     performancePlanning: {
       persona: { id: characterConfig.id, styleTags: [] },
       scene: { id: 'desktop-default', modeTags: ['desktop', 'foreground'] },
-      actions: characterConfig.allowedActions.map(actionId => ({
-        actionId,
-        label: actionId,
-        tags: [],
-        allowedAnchors: ['segment-start'],
-      })),
+      actions: characterConfig.actionCatalog
+        ? characterConfig.actionCatalog.descriptors.map(descriptor => ({
+            actionId: descriptor.actionId,
+            label: descriptor.label,
+            tags: [...descriptor.semanticTags],
+            allowedAnchors: [...descriptor.allowedAnchors],
+          }))
+        : characterConfig.allowedActions.map(actionId => ({
+            actionId,
+            label: actionId,
+            tags: [],
+            allowedAnchors: ['segment-start'],
+          })),
+    },
+    ...(characterConfig.actionCatalog ? { actionCatalog: characterConfig.actionCatalog } : {}),
+    sceneActionContext: {
+      generation: 1,
+      revision: 0,
+      sceneId: 'desktop-default',
+      tags: ['desktop', 'foreground', 'home', 'relaxed', 'casual'],
+      posture: 'standing',
+      allowedActionTags: [],
+      blockedActionTags: [],
+      triggerChanceMultipliers: {
+        'conversation.completed': 3,
+      },
     },
     emotionBindings: characterConfig.emotionBindings,
     ...(characterConfig.expressionCatalog
       ? { expressionCatalog: characterConfig.expressionCatalog }
       : {}),
+    performanceLogger: handleRuntimePerformanceLog,
     gazeProfile: characterConfig.gazeProfile,
     lipSyncProfile: characterConfig.lipSyncProfile,
   });
@@ -713,6 +827,26 @@ try {
     ],
     supportsMouthForm: true, supportsGaze: true, supportsHitTest: true,
   } });
+  if (characterConfig.actionCatalog) {
+    let opportunitySequence = 0;
+    window.setInterval(() => {
+      const snapshot = runtime?.getSnapshot();
+      if (!runtime || snapshot?.state !== 'idle' || snapshot.gesture.actionId !== null) return;
+      runtime.dispatch({
+        type: 'action.requested',
+        intent: {
+          requestId: `ambient:${++opportunitySequence}`,
+          source: 'scene',
+          trigger: 'ambient.opportunity',
+          mode: 'optional',
+          occurredAtMs: Date.now(),
+          selectionRandomValue: Math.random(),
+          chanceRandomValue: Math.random(),
+          semanticTags: ['ambient'],
+        },
+      });
+    }, 15_000);
+  }
   Ticker.shared.add(advanceRuntimeGaze, undefined, UPDATE_PRIORITY.HIGH);
   gazeFrameDriverAttached = true;
   runtime.subscribe(snapshot => {
@@ -721,6 +855,7 @@ try {
     document.body.dataset.gazeFollow = snapshot.gaze.active ? 'enabled' : 'disabled';
     const busy = snapshot.state !== 'idle';
     speak.disabled = busy || !isOperationalMcpService();
+    expressionFlow.disabled = busy || !isOperationalMcpService();
     motion.disabled = busy;
     tone.disabled = busy || !knownToneAvailable || !isOperationalMcpService();
     reset.disabled = false;
@@ -762,6 +897,7 @@ try {
       y: -(event.clientY / innerHeight * 2 - 1),
     }));
   speak.addEventListener('click', () => submitDemo(false));
+  expressionFlow.addEventListener('click', submitExpressionFlowDemo);
   tone.addEventListener('click', submitToneAcceptance);
   motion.addEventListener('click', () => submitDemo(true));
   gaze.addEventListener('click', () => runtime?.dispatch({
@@ -770,6 +906,7 @@ try {
   reset.addEventListener('click', () => runtime?.dispatch({ type: 'user.interrupt-requested' }));
   registerDevelopmentUi();
   if (motionAuditRequested) installMotionAuditApi(characterConfig.id);
+  trySubmitExpressionFlowAudit();
   canvas.addEventListener('contextmenu', openAvatarContextMenu);
   if (!desktopShell) canvas.addEventListener('click', openBrowserInteractionPanel);
   canvas.addEventListener('keydown', event => {
@@ -826,7 +963,7 @@ catch (error) {
       startedAtMs: null,
       holdUntilMs: null,
     },
-    gesture: { actionId: null, action: null, queueLength: 0 },
+    gesture: { requestId: null, actionId: null, queueLength: 0 },
     gaze: { x: 0, y: 0, active: false },
     interrupted: false,
     capabilities: null,
@@ -867,8 +1004,58 @@ function submitDemo(withAction: boolean): void {
     id: `segment-${Date.now()}`, sequence: 0, displayText: '运行时演示',
     speechText: withAction ? '正在播放动作演示，请观察视线和身体动作。' : '运行时演示',
     emotion: { emotion: 'happy', intensity: 0.7, atMs: 100 },
-    actions: withAction ? [{ id: 'nod-demo', action: 'nod', atMs: 200 }] : [],
+    actions: withAction ? [{ id: `action-demo:${demoActionId}`, action: demoActionId, atMs: 200 }] : [],
   }] } });
+}
+
+function submitExpressionFlowDemo(): void {
+  if (!runtime || runtime.getSnapshot().state !== 'idle') return;
+  const suffix = Date.now();
+  const segmentId = `expression-flow-${suffix}`;
+  const text = '今天的测试进展真是太好了！不过这个结果竟然有点出乎意料？至于接下来的安排让我想想还需要仔细分析。';
+  expressionFlowRun = { segmentId, expressionKeys: [] };
+  document.body.dataset.expressionFlowTest = 'running';
+  document.body.dataset.expressionFlowCues = '[]';
+  delete document.body.dataset.expressionFlowLastKey;
+  delete document.body.dataset.expressionFlowLastTrigger;
+  delete document.body.dataset.expressionFlowLastTimingBasis;
+  delete document.body.dataset.expressionFlowLastPositionMs;
+  runtime.dispatch({
+    type: 'plan.submitted',
+    plan: {
+      id: `expression-flow-plan-${suffix}`,
+      segments: [{
+        id: segmentId,
+        sequence: 0,
+        displayText: text,
+        speechText: text,
+        bubble: { mode: 'karaoke' },
+      }],
+    },
+  });
+}
+
+function trySubmitExpressionFlowAudit(): void {
+  if (
+    !expressionFlowAuditRequested
+    || expressionFlowAuditStarted
+    || !runtime
+    || runtime.getSnapshot().state !== 'idle'
+    || !isOperationalMcpService()
+  ) {
+    return;
+  }
+  const inference = performanceInferenceConfig;
+  if (
+    inference?.enabled
+    && !inference.operational
+    && inference.phase !== 'failed'
+    && inference.phase !== 'disabled'
+  ) {
+    return;
+  }
+  expressionFlowAuditStarted = true;
+  submitExpressionFlowDemo();
 }
 
 function execute(effect: RuntimeEffect, dispatch: (event: AvatarEvent) => void): void {
@@ -1003,6 +1190,7 @@ function execute(effect: RuntimeEffect, dispatch: (event: AvatarEvent) => void):
       dispatch({
         type: 'renderer.motion-completed',
         generation: effect.generation,
+        requestId: effect.command.requestId,
         actionId: effect.command.actionId,
       });
       return;
@@ -1012,26 +1200,93 @@ function execute(effect: RuntimeEffect, dispatch: (event: AvatarEvent) => void):
     stopCurrentMotion('replaced');
     const requestToken = ++motionRequestToken;
     document.body.dataset.motionState = 'starting';
-    void activeModel.motion('TapBody', 0, MotionPriority.FORCE).then(started => {
+    const binding = effect.command.binding;
+    const motionManager = activeModel.internalModel.motionManager;
+    void motionManager.loadMotion(binding.group, binding.index).then(loadedMotion => {
       if (requestToken !== motionRequestToken) {
-        if (started) activeModel.internalModel.motionManager.stopAllMotions();
         return;
       }
-      if (!started) throw new Error('Live2D TapBody motion did not start');
+      if (!loadedMotion) {
+        throw new Error(`Live2D motion ${binding.group}[${binding.index}] could not be loaded`);
+      }
+      loadedMotion.setIsLoop(binding.mode === 'loop');
+      motionManager.stopAllMotions();
+      return activeModel.motion(binding.group, binding.index, MotionPriority.FORCE);
+    }).then(started => {
+      if (started === undefined) return;
+      if (requestToken !== motionRequestToken) {
+        if (started) motionManager.stopAllMotions();
+        return;
+      }
+      if (!started) throw new Error(`Live2D motion ${binding.group}[${binding.index}] did not start`);
+      const onFinish = () => {
+        if (requestToken !== motionRequestToken) return;
+        if (motionTimer) clearTimeout(motionTimer);
+        motionTimer = undefined;
+        motionFinishListener = undefined;
+        document.body.dataset.motionState = 'completed';
+        // MotionManager emits before it clears its own state and restores Idle.
+        // Defer Runtime advancement so a queued action cannot be overwritten by
+        // the tail of the just-finished manager update.
+        queueMicrotask(() => {
+          if (requestToken !== motionRequestToken) return;
+          dispatch({
+            type: 'renderer.motion-completed',
+            generation: effect.generation,
+            requestId: effect.command.requestId,
+            actionId: effect.command.actionId,
+          });
+        });
+      };
+      motionFinishListener = onFinish;
+      motionManager.once('motionFinish', onFinish);
       document.body.dataset.motionState = 'playing';
+      dispatch({
+        type: 'renderer.motion-started',
+        generation: effect.generation,
+        requestId: effect.command.requestId,
+        actionId: effect.command.actionId,
+      });
       motionTimer = setTimeout(() => {
         if (requestToken !== motionRequestToken) return;
-        activeModel.internalModel.motionManager.stopAllMotions();
+        if (motionFinishListener) motionManager.off('motionFinish', motionFinishListener);
+        motionFinishListener = undefined;
+        motionManager.stopAllMotions();
         motionTimer = undefined;
-        document.body.dataset.motionState = 'completed';
-        dispatch({ type: 'renderer.motion-completed', generation: effect.generation, actionId: effect.command.actionId });
-      }, 1_200);
+        document.body.dataset.motionState = 'failed';
+        dispatch({
+          type: 'renderer.motion-failed',
+          generation: effect.generation,
+          requestId: effect.command.requestId,
+          actionId: effect.command.actionId,
+          error: {
+            code: 'live2d-motion-timeout',
+            message: `Live2D motion ${binding.group}[${binding.index}] exceeded its expected duration`,
+            recoverable: true,
+          },
+        });
+      }, binding.expectedDurationMs + 2_000);
     }).catch(error => {
+      if (requestToken !== motionRequestToken) return;
+      if (motionFinishListener) motionManager.off('motionFinish', motionFinishListener);
+      motionFinishListener = undefined;
       document.body.dataset.motionState = 'failed';
       dispatch({
-        type: 'renderer.motion-failed', generation: effect.generation, actionId: effect.command.actionId,
+        type: 'renderer.motion-failed',
+        generation: effect.generation,
+        requestId: effect.command.requestId,
+        actionId: effect.command.actionId,
         error: { code: 'live2d-motion-failed', message: error instanceof Error ? error.message : String(error), recoverable: true },
       });
+    });
+  }
+  else if (effect.type === 'renderer.stop-motion' && model) {
+    stopCurrentMotion('interrupted');
+    dispatch({
+      type: 'renderer.motion-interrupted',
+      generation: effect.generation,
+      requestId: effect.requestId,
+      actionId: effect.actionId,
     });
   }
 }
@@ -1071,7 +1326,9 @@ function applyMcpServicesState(next: McpServicesState): void {
   tone.title = knownToneAvailable ? '' : '当前 TTS MCP 未声明 known-tone-v1 测试能力';
   const busy = runtime?.getSnapshot().state !== 'idle';
   speak.disabled = busy || !operational;
+  expressionFlow.disabled = busy || !operational;
   tone.disabled = busy || !knownToneAvailable;
+  trySubmitExpressionFlowAudit();
   contextMenuHost.refresh();
 }
 
@@ -1137,6 +1394,8 @@ function browserTtsConfig(): DesktopTtsConfig {
     mcpUrl: url.href,
     timeoutMs: DEFAULT_TTS_CONFIG.mcp.timeoutMs,
     format: DEFAULT_TTS_CONFIG.mcp.format,
+    fallbackCharactersPerSecond:
+      DEFAULT_TTS_CONFIG.timing.fallbackCharactersPerSecond,
     testFixtures: (parameters.get('ttsTestFixtures') ?? '').split(',').map(value => value.trim()).filter(Boolean),
   };
 }
@@ -1158,8 +1417,8 @@ function browserPerformanceInferenceConfig(): DesktopPerformanceInferenceConfig 
     lastError: null,
     provider: 'browser-disabled',
     baseUrl: 'http://127.0.0.1:18090/v1',
-    timeoutMs: 5_000,
-    maxOutputTokens: 256,
+    timeoutMs: 10_000,
+    maxOutputTokens: 64,
     temperature: 0.1,
     fallbackToRules: true,
   };
@@ -2183,6 +2442,7 @@ function applyPerformanceInferenceConfig(config: DesktopPerformanceInferenceConf
   document.body.dataset.performanceInference = config.operational ? 'enabled' : 'disabled';
   document.body.dataset.performanceInferenceDesired = config.enabled ? 'enabled' : 'disabled';
   document.body.dataset.performanceInferencePhase = config.phase;
+  trySubmitExpressionFlowAudit();
   contextMenuHost.refresh();
 }
 
@@ -2352,6 +2612,10 @@ function stopCurrentMotion(state: 'interrupted' | 'replaced'): void {
   motionRequestToken++;
   if (motionTimer) clearTimeout(motionTimer);
   motionTimer = undefined;
+  if (motionFinishListener && model) {
+    model.internalModel.motionManager.off('motionFinish', motionFinishListener);
+  }
+  motionFinishListener = undefined;
   model?.internalModel.motionManager.stopAllMotions();
   if (document.body.dataset.motionState === 'playing' || document.body.dataset.motionState === 'starting') {
     document.body.dataset.motionState = state;

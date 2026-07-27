@@ -80,7 +80,7 @@ export function createCharacterMcpService(options = {}) {
     }, async ({ plan }) => {
       if (!currentState.ready) throw new Error('avatar-not-ready');
       if (currentState.snapshot?.state !== 'idle') throw new Error('avatar-busy');
-      const validated = validatePerformancePlan(plan);
+      const validated = validatePerformancePlan(plan, currentState.snapshot?.capabilities);
       onCommand({ type: 'performance.submit', plan: validated });
       const result = { accepted: true, plan_id: validated.id };
       return structuredResult(result);

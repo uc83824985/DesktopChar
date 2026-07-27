@@ -10,7 +10,13 @@ test('accepts a valid performance and interrupt on loopback HTTP', async t => {
   const base = `http://127.0.0.1:${address.port}`;
 
   assert.equal((await fetch(`${base}/v1/health`).then(response => response.json())).status, 'starting');
-  service.updateState({ ready: true, snapshot: { state: 'idle', capabilities: { emotions: ['happy'], actions: ['nod'] } } });
+  service.updateState({
+    ready: true,
+    snapshot: {
+      state: 'idle',
+      capabilities: { emotions: ['happy'], actions: ['draw-heart-success', 'summon-rabbit-buff'] },
+    },
+  });
   const capabilities = await fetch(`${base}/v1/capabilities`).then(result => result.json());
   assert.deepEqual(capabilities.presentation.speechBubbleModes, ['complete', 'stream', 'karaoke']);
   assert.equal(capabilities.presentation.playbackGated, true);
@@ -27,6 +33,7 @@ test('accepts a valid performance and interrupt on loopback HTTP', async t => {
     body: JSON.stringify({ id: 'reply-1', segments: [{
       id: 'reply-1-0', sequence: 0, displayText: '你好', speechText: '你好',
       emotion: { emotion: 'happy', intensity: 0.7 },
+      actions: [{ id: 'reply-1-heart', action: 'draw-heart-success', atMs: 180 }],
       bubble: { mode: 'karaoke', dismissDelayMs: 500, cues: [{ text: '你', atMs: 0 }, { text: '好', atMs: 200 }] },
     }] }),
   });
@@ -35,6 +42,7 @@ test('accepts a valid performance and interrupt on loopback HTTP', async t => {
   assert.equal(commands[0].type, 'performance.submit');
   assert.equal(commands[0].plan.segments[0].bubble.mode, 'karaoke');
   assert.equal(commands[0].plan.segments[0].bubble.dismissDelayMs, 500);
+  assert.equal(commands[0].plan.segments[0].actions[0].action, 'draw-heart-success');
 
   const interrupt = await fetch(`${base}/v1/interrupt`, { method: 'POST' });
   assert.equal(interrupt.status, 202);
@@ -69,6 +77,46 @@ test('rejects busy, malformed and non-json requests', async t => {
       segments: [{ id: 's', sequence: 0, displayText: 'x', speechText: 'x', bubble: { mode: 'complete', dismissDelayMs: -1 } }],
     }),
   })).status, 400);
+});
+
+test('validates explicit actions against the current Runtime capabilities', async t => {
+  const commands = [];
+  const service = createAgentHttpServer({ port: 0, onCommand: command => commands.push(command) });
+  const address = await service.listen();
+  t.after(() => service.close());
+  const base = `http://127.0.0.1:${address.port}`;
+  const request = action => fetch(`${base}/v1/performances`, {
+    method: 'POST',
+    headers: { 'content-type': 'application/json' },
+    body: JSON.stringify({
+      id: `plan-${action}`,
+      segments: [{
+        id: `segment-${action}`,
+        sequence: 0,
+        displayText: 'test',
+        speechText: 'test',
+        actions: [{ id: `cue-${action}`, action }],
+      }],
+    }),
+  });
+
+  service.updateState({
+    ready: true,
+    snapshot: { state: 'idle', capabilities: { emotions: [], actions: ['draw-heart-success'] } },
+  });
+  assert.equal((await request('nod')).status, 400);
+  assert.equal((await request('draw-heart-success')).status, 202);
+
+  service.updateState({
+    ready: true,
+    snapshot: { state: 'idle', capabilities: { emotions: [], actions: ['summon-rabbit-buff'] } },
+  });
+  assert.equal((await request('draw-heart-success')).status, 400);
+  assert.equal((await request('summon-rabbit-buff')).status, 202);
+  assert.deepEqual(
+    commands.map(command => command.plan.segments[0].actions[0].action),
+    ['draw-heart-success', 'summon-rabbit-buff'],
+  );
 });
 
 test('agent port parsing is bounded', () => {

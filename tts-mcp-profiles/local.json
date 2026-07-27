@@ -37,6 +37,9 @@
     "voice": "jrpg-blip",
     "rate": 1
   },
+  "timing": {
+    "fallbackCharactersPerSecond": 4.31
+  },
   "reconnect": {
     "initialDelayMs": 500,
     "maximumDelayMs": 10000

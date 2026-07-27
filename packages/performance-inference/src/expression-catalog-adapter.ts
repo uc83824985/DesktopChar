@@ -1,10 +1,7 @@
 import {
   PERFORMANCE_PLANNING_V2_CONTRACT_VERSION,
-  type AffectVector,
   type ExpressionCandidate,
   type LocalPerformanceSuggestionV2,
-  type PerformanceActionDescriptor,
-  type PerformanceActionSuggestion,
   type PerformancePlanningRequestV2,
 } from '../../contracts/src/index.ts';
 import type {
@@ -13,6 +10,11 @@ import type {
   PerformanceModelTransport,
 } from './model-transport.ts';
 import { PerformanceInferenceError } from './port.ts';
+import {
+  findRuleBasedTrigger,
+  matchRuleBasedExpression,
+  selectRuleBasedAction,
+} from './rule-based-v2.ts';
 import type { PerformanceInferencePortV2 } from './v2-port.ts';
 
 export interface ExpressionCatalogAdapterConfig {
@@ -49,19 +51,24 @@ export class ExpressionCatalogPlanningAdapter implements PerformancePlanningAdap
     validateRequest(request);
     return {
       instructions: [
-        'You select a subtle character performance for one already-written reply segment.',
+        'You select a subtle character performance for one natural clause from an already-written reply.',
         'Return exactly one JSON object without Markdown or explanation.',
         'Use only expressionKey and actionId values present in the input catalogs.',
-        'Never invent, translate, or paraphrase an ID. Empty candidates/actions are valid.',
-        'The result has exactly three fields: affect, expressionCandidates, actions.',
-        'affect is null or a full object with valence, arousal, approval, engagement, certainty.',
-        'valence and approval range from -1 to 1; other affect values range from 0 to 1.',
-        'expressionCandidates contains at most three unique objects with expressionKey, confidence, intensity.',
-        'actions contains at most two unique objects with actionId, confidence, anchor, and optional clauseIndex.',
-        'confidence and intensity range from 0 to 1. Prefer no action over a weak repetitive action.',
+        'Never invent, translate, or paraphrase an ID.',
+        'The result has exactly three root fields: expressionKey, trigger, and intensity.',
+        'trigger is the shortest exact non-empty substring of text that most directly causes the expression.',
+        'Copy trigger verbatim from text. Never paraphrase it and never return character offsets.',
+        'intensity ranges from 0 to 1.',
+        'Choose the expression whose semanticTags and prototypeTexts best match the strongest explicit affect in text.',
+        'Do not preserve currentExpressionKey or defaultExpressionKey when an explicit affect phrase matches another expression.',
+        'Use defaultExpressionKey only when text has no clear affect.',
+        'trigger must contain only the decisive affect phrase, not the whole clause when a shorter exact phrase is sufficient.',
+        'Do not return nested objects, arrays, affect, actions, confidence, anchors, or any field not listed above.',
+        'Choose the expression for the current clause only; timing and transitions are handled by the runtime.',
       ].join('\n'),
       input: JSON.stringify({
         text: request.text,
+        textAnchor: request.textAnchor,
         persona: request.persona,
         scene: request.scene,
         avatar: request.avatar,
@@ -73,12 +80,6 @@ export class ExpressionCatalogPlanningAdapter implements PerformancePlanningAdap
           prototypeTexts: expression.prototypeTexts,
           ...(expression.affectPrototype ? { affectPrototype: expression.affectPrototype } : {}),
           compatibleAvatarStates: expression.compatibleAvatarStates,
-        })),
-        actionCatalog: request.actions.map(action => ({
-          actionId: action.actionId,
-          label: action.label,
-          tags: action.tags,
-          allowedAnchors: action.allowedAnchors,
         })),
       }),
       maxOutputTokens: this.config.maxOutputTokens,
@@ -102,21 +103,53 @@ export class ExpressionCatalogPlanningAdapter implements PerformancePlanningAdap
       );
     }
     const root = record(parsed, 'performance suggestion v2');
-    assertKnownKeys(root, ['affect', 'expressionCandidates', 'actions'], 'performance suggestion v2');
-    const affect = parseAffect(root.affect);
-    const expressionCandidates = parseExpressionCandidates(root.expressionCandidates, request);
-    const actions = parseActions(root.actions, request.actions);
+    assertKnownKeys(
+      root,
+      ['expressionKey', 'trigger', 'intensity'],
+      'performance suggestion v2',
+    );
+    let expressionCandidates = parseExpressionCandidates([{
+      expressionKey: root.expressionKey,
+      confidence: 0.85,
+      intensity: root.intensity,
+    }], request);
+    const ruleMatch = matchRuleBasedExpression(request);
+    let semanticGuardApplied = false;
+    if (
+      expressionCandidates[0]!.expressionKey === request.defaultExpressionKey
+      && ruleMatch
+      && ruleMatch.expressionCandidates[0]!.expressionKey !== request.defaultExpressionKey
+    ) {
+      expressionCandidates = ruleMatch.expressionCandidates;
+      semanticGuardApplied = true;
+    }
+    const selectedDescriptor = request.expressions.find(expression => (
+      expression.expressionKey === expressionCandidates[0]!.expressionKey
+    ))!;
+    const localTrigger = findRuleBasedTrigger(
+      request.text,
+      selectedDescriptor.semanticTags,
+    );
+    const expressionTrigger = parseExpressionTrigger(
+      localTrigger ?? root.trigger,
+      request,
+    );
+    const action = selectRuleBasedAction(request.text, request);
     return {
       contractVersion: PERFORMANCE_PLANNING_V2_CONTRACT_VERSION,
       requestId: request.requestId,
       segmentId: request.segmentId,
       segmentRevision: request.segmentRevision,
       catalogRevision: request.catalogRevision,
+      textAnchor: structuredClone(request.textAnchor),
+      expressionTrigger: expressionTrigger.text,
+      expressionTextAnchor: expressionTrigger.anchor,
       source: 'model',
-      provider: response.provider,
-      ...(affect ? { affect } : {}),
+      provider: semanticGuardApplied
+        ? `${response.provider}+semantic-guard`
+        : response.provider,
       expressionCandidates,
-      actions,
+      actions: action ? [action] : [],
     };
   }
 }
@@ -144,20 +177,28 @@ export class AdaptedPerformanceInferenceV2 implements PerformanceInferencePortV2
   }
 }
 
-function parseAffect(value: unknown): AffectVector | undefined {
-  if (value === null || value === undefined) return undefined;
-  const affect = record(value, 'performance suggestion affect');
-  assertKnownKeys(
-    affect,
-    ['valence', 'arousal', 'approval', 'engagement', 'certainty'],
-    'performance suggestion affect',
-  );
+function parseExpressionTrigger(
+  value: unknown,
+  request: PerformancePlanningRequestV2,
+): { text: string; anchor: PerformancePlanningRequestV2['textAnchor'] } {
+  if (typeof value !== 'string' || !value.trim()) {
+    throw invalidResponse('expressionTrigger must be a non-empty exact substring of text');
+  }
+  const codeUnitStart = request.text.indexOf(value);
+  if (codeUnitStart < 0) {
+    throw invalidResponse('expressionTrigger must be copied exactly from text');
+  }
+  const localStart = Array.from(request.text.slice(0, codeUnitStart)).length;
+  const triggerLength = Array.from(value).length;
   return {
-    valence: rangedNumber(affect.valence, -1, 1, 'affect valence'),
-    arousal: rangedNumber(affect.arousal, 0, 1, 'affect arousal'),
-    approval: rangedNumber(affect.approval, -1, 1, 'affect approval'),
-    engagement: rangedNumber(affect.engagement, 0, 1, 'affect engagement'),
-    certainty: rangedNumber(affect.certainty, 0, 1, 'affect certainty'),
+    text: value,
+    anchor: {
+      clauseIndex: request.textAnchor.clauseIndex,
+      clauseCount: request.textAnchor.clauseCount,
+      startCharacter: request.textAnchor.startCharacter + localStart,
+      endCharacter: request.textAnchor.startCharacter + localStart + triggerLength,
+      totalCharacters: request.textAnchor.totalCharacters,
+    },
   };
 }
 
@@ -194,53 +235,6 @@ function parseExpressionCandidates(
   });
 }
 
-function parseActions(
-  value: unknown,
-  descriptors: PerformanceActionDescriptor[],
-): PerformanceActionSuggestion[] {
-  if (!Array.isArray(value)) throw invalidResponse('Performance suggestion actions must be an array');
-  if (value.length > Math.min(2, descriptors.length)) {
-    throw invalidResponse('Performance suggestion contains too many actions');
-  }
-  const descriptorById = new Map(descriptors.map(descriptor => [descriptor.actionId, descriptor]));
-  const seen = new Set<string>();
-  return value.map((item, index): PerformanceActionSuggestion => {
-    const action = record(item, `performance suggestion actions[${index}]`);
-    assertKnownKeys(
-      action,
-      ['actionId', 'confidence', 'anchor', 'clauseIndex'],
-      `performance suggestion actions[${index}]`,
-    );
-    if (typeof action.actionId !== 'string' || seen.has(action.actionId)) {
-      throw invalidResponse('Suggested action IDs must be available and unique');
-    }
-    const descriptor = descriptorById.get(action.actionId as never);
-    if (!descriptor) throw invalidResponse(`Suggested action is not available: ${String(action.actionId)}`);
-    if (
-      typeof action.anchor !== 'string'
-      || !descriptor.allowedAnchors.includes(action.anchor as never)
-    ) {
-      throw invalidResponse(`Suggested action anchor is not allowed: ${String(action.anchor)}`);
-    }
-    seen.add(action.actionId);
-    const suggestion: PerformanceActionSuggestion = {
-      actionId: descriptor.actionId,
-      confidence: unitNumber(action.confidence, `actions[${index}] confidence`),
-      anchor: action.anchor as PerformanceActionSuggestion['anchor'],
-    };
-    if (suggestion.anchor === 'after-clause') {
-      if (!Number.isInteger(action.clauseIndex) || (action.clauseIndex as number) < 0) {
-        throw invalidResponse(`actions[${index}] clauseIndex must be a non-negative integer`);
-      }
-      suggestion.clauseIndex = action.clauseIndex as number;
-    }
-    else if (action.clauseIndex !== undefined) {
-      throw invalidResponse(`actions[${index}] clauseIndex is only valid with after-clause`);
-    }
-    return suggestion;
-  });
-}
-
 function validateRequest(request: PerformancePlanningRequestV2): void {
   if (request.contractVersion !== PERFORMANCE_PLANNING_V2_CONTRACT_VERSION) {
     throw new PerformanceInferenceError(
@@ -258,6 +252,7 @@ function validateRequest(request: PerformancePlanningRequestV2): void {
   if (!Number.isInteger(request.catalogRevision) || request.catalogRevision < 0) {
     throw invalidRequest('Performance catalogRevision must be a non-negative integer');
   }
+  validateTextAnchor(request);
   if (!Array.isArray(request.expressions) || !request.expressions.length) {
     throw invalidRequest('Performance expression catalog must not be empty');
   }
@@ -281,6 +276,26 @@ function validateRequest(request: PerformancePlanningRequestV2): void {
       throw invalidRequest('Performance action capabilities must have unique IDs and non-empty anchors');
     }
     actionIds.add(action.actionId);
+  }
+}
+
+function validateTextAnchor(request: PerformancePlanningRequestV2): void {
+  const anchor = request.textAnchor;
+  if (
+    !anchor
+    || !Number.isInteger(anchor.clauseIndex)
+    || !Number.isInteger(anchor.clauseCount)
+    || !Number.isInteger(anchor.startCharacter)
+    || !Number.isInteger(anchor.endCharacter)
+    || !Number.isInteger(anchor.totalCharacters)
+    || anchor.clauseIndex < 0
+    || anchor.clauseCount <= 0
+    || anchor.clauseIndex >= anchor.clauseCount
+    || anchor.startCharacter < 0
+    || anchor.endCharacter <= anchor.startCharacter
+    || anchor.endCharacter > anchor.totalCharacters
+  ) {
+    throw invalidRequest('Performance textAnchor is invalid');
   }
 }
 

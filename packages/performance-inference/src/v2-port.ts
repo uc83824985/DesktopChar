@@ -6,6 +6,10 @@ import type {
 
 export interface PerformanceInferencePortV2 {
   describe(): PerformanceInferenceCapabilities;
+  provisionalPlan?(
+    request: PerformancePlanningRequestV2,
+    signal: AbortSignal,
+  ): Promise<LocalPerformanceSuggestionV2 | undefined>;
   plan(
     request: PerformancePlanningRequestV2,
     signal: AbortSignal,

@@ -122,6 +122,7 @@ export interface DesktopTtsConfig {
   timeoutMs: number;
   format: import('../../../../packages/tts-mcp-adapter/src/index.ts').TtsAudioFormat;
   testFixtures: string[];
+  fallbackCharactersPerSecond: number;
   voice?: string;
   rate?: number;
 }

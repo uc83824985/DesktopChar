@@ -24,8 +24,8 @@
     "lifecycle": "external",
     "provider": "qwen35-transformers",
     "baseUrl": "http://127.0.0.1:18090/v1",
-    "timeoutMs": 5000,
-    "maxOutputTokens": 256,
+    "timeoutMs": 10000,
+    "maxOutputTokens": 64,
     "temperature": 0.1,
     "fallbackToRules": true
   },

@@ -7,7 +7,13 @@ import { CHARACTER_MCP_TOOLS, createCharacterMcpService } from './character-mcp-
 test('character MCP exposes state, capabilities, performance and interrupt through the official client', async t => {
   const commands = [];
   const service = createCharacterMcpService({ port: 0, onCommand: command => commands.push(command) });
-  service.updateState({ ready: true, snapshot: { state: 'idle', capabilities: { emotions: ['happy'], actions: ['nod'] } } });
+  service.updateState({
+    ready: true,
+    snapshot: {
+      state: 'idle',
+      capabilities: { emotions: ['happy'], actions: ['summon-rabbit-buff'] },
+    },
+  });
   const address = await service.listen();
   t.after(() => service.close());
   const client = new Client({ name: 'character-mcp-test', version: '1.0.0' });
@@ -19,11 +25,17 @@ test('character MCP exposes state, capabilities, performance and interrupt throu
   const state = await client.callTool({ name: 'desktop_char_get_state', arguments: {} });
   assert.equal(JSON.parse(state.content[0].text).snapshot.state, 'idle');
   const capabilities = await client.callTool({ name: 'desktop_char_get_capabilities', arguments: {} });
-  assert.deepEqual(JSON.parse(capabilities.content[0].text).avatar.actions, ['nod']);
+  assert.deepEqual(JSON.parse(capabilities.content[0].text).avatar.actions, ['summon-rabbit-buff']);
 
   const plan = {
     id: 'mcp-plan',
-    segments: [{ id: 'mcp-segment', sequence: 0, displayText: '你好', speechText: '你好' }],
+    segments: [{
+      id: 'mcp-segment',
+      sequence: 0,
+      displayText: '你好',
+      speechText: '你好',
+      actions: [{ id: 'mcp-rabbit', action: 'summon-rabbit-buff' }],
+    }],
   };
   const performed = await client.callTool({ name: 'desktop_char_perform', arguments: { plan } });
   assert.deepEqual(performed.structuredContent, { accepted: true, plan_id: 'mcp-plan' });
@@ -33,6 +45,37 @@ test('character MCP exposes state, capabilities, performance and interrupt throu
     { type: 'performance.submit', plan },
     { type: 'performance.interrupt' },
   ]);
+});
+
+test('character MCP rejects actions outside the current Runtime capabilities', async t => {
+  const service = createCharacterMcpService({ port: 0 });
+  service.updateState({
+    ready: true,
+    snapshot: { state: 'idle', capabilities: { emotions: [], actions: ['draw-heart-failure'] } },
+  });
+  const address = await service.listen();
+  t.after(() => service.close());
+  const client = new Client({ name: 'character-mcp-action-test', version: '1.0.0' });
+  await client.connect(new StreamableHTTPClientTransport(new URL(address.mcpUrl)));
+  t.after(() => client.close());
+
+  const result = await client.callTool({
+    name: 'desktop_char_perform',
+    arguments: {
+      plan: {
+        id: 'legacy-action',
+        segments: [{
+          id: 'legacy-action-segment',
+          sequence: 0,
+          displayText: 'test',
+          speechText: 'test',
+          actions: [{ id: 'legacy-nod', action: 'nod' }],
+        }],
+      },
+    },
+  });
+  assert.equal(result.isError, true);
+  assert.match(result.content[0].text, /current avatar capabilities/);
 });
 
 test('character MCP enforces loopback binding and Runtime readiness', async t => {

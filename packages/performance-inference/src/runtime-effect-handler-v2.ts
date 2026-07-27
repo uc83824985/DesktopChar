@@ -16,6 +16,22 @@ export class PerformanceRuntimeEffectHandlerV2 {
       const group = this.pending.get(effect.generation) ?? new Set<AbortController>();
       group.add(controller);
       this.pending.set(effect.generation, group);
+      if (this.port.provisionalPlan) {
+        void this.port.provisionalPlan(effect.request, controller.signal)
+          .then(suggestion => {
+            if (!suggestion || controller.signal.aborted) return;
+            dispatch({
+              type: 'performance.suggestion-v2-ready',
+              generation: effect.generation,
+              planId: effect.request.planId,
+              provisional: true,
+              suggestion,
+            });
+          })
+          .catch(() => {
+            // A provisional result is opportunistic. The primary result still owns errors.
+          });
+      }
       void this.port.plan(effect.request, controller.signal)
         .then(suggestion => dispatch({
           type: 'performance.suggestion-v2-ready',

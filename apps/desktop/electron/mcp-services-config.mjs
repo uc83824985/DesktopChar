@@ -114,6 +114,8 @@ export function normalizeDesktopConfig(fileConfig = {}, env = {}, options = {}) 
   assertKnownKeys(contract, ['profile', 'version'], 'ttsMcp.contract');
   const synthesis = optionalRecord(selectedTtsProfile.synthesis, 'ttsMcp.synthesis');
   assertKnownKeys(synthesis, ['format', 'voice', 'rate'], 'ttsMcp.synthesis');
+  const timing = optionalRecord(selectedTtsProfile.timing, 'ttsMcp.timing');
+  assertKnownKeys(timing, ['fallbackCharactersPerSecond'], 'ttsMcp.timing');
   const ttsReconnect = optionalRecord(selectedTtsProfile.reconnect, 'ttsMcp.reconnect');
   const character = optionalRecord(fileConfig.characterMcp, 'characterMcp');
   assertKnownKeys(character, ['autoStart', 'host', 'port', 'path', 'reconnect'], 'characterMcp');
@@ -144,6 +146,11 @@ export function normalizeDesktopConfig(fileConfig = {}, env = {}, options = {}) 
   const localDelayMs = nonNegative(env.DESKTOP_CHAR_TTS_LOCAL_DELAY_MS, 15, 'DESKTOP_CHAR_TTS_LOCAL_DELAY_MS');
   const localRate = rate(env.DESKTOP_CHAR_TTS_LOCAL_RATE, 1, 'DESKTOP_CHAR_TTS_LOCAL_RATE');
   const localCharacterMs = positive(env.DESKTOP_CHAR_TTS_LOCAL_CHAR_MS, 232, 'DESKTOP_CHAR_TTS_LOCAL_CHAR_MS');
+  const fallbackCharactersPerSecond = positive(
+    timing.fallbackCharactersPerSecond,
+    1_000 / localCharacterMs,
+    'ttsMcp.timing.fallbackCharactersPerSecond',
+  );
   const localMinimumMs = positive(env.DESKTOP_CHAR_TTS_LOCAL_MIN_MS, 500, 'DESKTOP_CHAR_TTS_LOCAL_MIN_MS');
   const localSampleRate = positiveInteger(env.DESKTOP_CHAR_TTS_SAMPLE_RATE_HZ, 24_000, 'DESKTOP_CHAR_TTS_SAMPLE_RATE_HZ');
   const localChannels = monoChannels(env.DESKTOP_CHAR_TTS_CHANNELS);
@@ -252,10 +259,10 @@ export function normalizeDesktopConfig(fileConfig = {}, env = {}, options = {}) 
       baseUrl: performanceBaseUrl,
       healthUrl: performanceHealthUrl,
       ...(performanceModel ? { model: performanceModel } : {}),
-      timeoutMs: positive(performanceInference.timeoutMs, 5_000, 'performanceInference.timeoutMs'),
+      timeoutMs: positive(performanceInference.timeoutMs, 10_000, 'performanceInference.timeoutMs'),
       maxOutputTokens: positiveInteger(
         performanceInference.maxOutputTokens,
-        256,
+        64,
         'performanceInference.maxOutputTokens',
       ),
       temperature: boundedNumber(
@@ -311,6 +318,7 @@ export function normalizeDesktopConfig(fileConfig = {}, env = {}, options = {}) 
         ...(voice ? { voice } : {}),
         ...(synthesisRate !== undefined ? { rate: synthesisRate } : {}),
       },
+      timing: { fallbackCharactersPerSecond },
       reconnect: reconnectConfig(ttsReconnect, 'ttsMcp.reconnect'),
     },
     character: {
@@ -385,7 +393,7 @@ function requestedTtsProfileName(tts) {
 
 function normalizeSelectedTtsProfile(value, profileName) {
   const profile = optionalRecord(value, `tts profile ${profileName}`);
-  assertKnownKeys(profile, ['$schema', 'version', 'lifecycle', 'connection', 'contract', 'synthesis', 'reconnect'], `tts profile ${profileName}`);
+  assertKnownKeys(profile, ['$schema', 'version', 'lifecycle', 'connection', 'contract', 'synthesis', 'timing', 'reconnect'], `tts profile ${profileName}`);
   if (profile.$schema !== undefined) text(profile.$schema, `tts profile ${profileName}.$schema`);
   const version = profile.version ?? 1;
   if (version !== 1) throw new TypeError(`tts profile ${profileName} version must be 1`);
@@ -475,6 +483,7 @@ function defaultLocalTtsProfile() {
     connection: { transport: 'streamable-http' },
     contract: { profile: 'desktop-char.tts.streaming', version: 1 },
     synthesis: { format: 'pcm_s16le', voice: 'jrpg-blip', rate: 1 },
+    timing: { fallbackCharactersPerSecond: 1_000 / 232 },
     reconnect: { initialDelayMs: 500, maximumDelayMs: 10_000 },
   };
 }

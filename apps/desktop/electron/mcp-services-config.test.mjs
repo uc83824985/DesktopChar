@@ -30,6 +30,7 @@ test('MCP config merges environment bootstrap with JSON overrides', () => {
       },
       connection: { url: 'http://127.0.0.1:9876/mcp' },
       synthesis: { voice: 'test-voice', rate: 1.25 },
+      timing: { fallbackCharactersPerSecond: 6.25 },
       reconnect: { initialDelayMs: 20, maximumDelayMs: 40 },
     },
   });
@@ -39,6 +40,7 @@ test('MCP config merges environment bootstrap with JSON overrides', () => {
   assert.equal(config.tts.lifecycle.start.env.PROVIDER_RATE, '0.8');
   assert.equal(config.tts.synthesis.voice, 'test-voice');
   assert.equal(config.tts.synthesis.rate, 1.25);
+  assert.equal(config.tts.timing.fallbackCharactersPerSecond, 6.25);
   assert.equal(config.character.path, '/character-mcp');
   assert.equal(Object.isFrozen(config.tts.lifecycle.start), true);
 });
@@ -63,6 +65,7 @@ test('TTS config exposes the selected profile name from the resolved profile fil
       },
       connection: { url: 'http://127.0.0.1:8766/mcp', timeoutMs: 45_000 },
       synthesis: { format: 'pcm_s16le', rate: 1 },
+      timing: { fallbackCharactersPerSecond: 5.56 },
     },
   });
   assert.equal(config.tts.profile, 'qwen');
@@ -70,6 +73,7 @@ test('TTS config exposes the selected profile name from the resolved profile fil
   assert.equal(config.tts.connection.timeoutMs, 45_000);
   assert.equal(config.tts.synthesis.rate, 1);
   assert.equal(config.tts.synthesis.voice, undefined);
+  assert.equal(config.tts.timing.fallbackCharactersPerSecond, 5.56);
 });
 
 test('desktop config owns interaction, window, agent and character profile settings', () => {
@@ -147,6 +151,7 @@ test('MCP config rejects unsafe server binding and malformed reconnect policy', 
   assert.throws(() => normalizeMcpServicesConfig({}, {}, { ttsProfileName: 'bad', ttsProfileConfig: { reconnect: { initialDelayMs: 50, maximumDelayMs: 10 } } }), /at least/);
   assert.throws(() => normalizeMcpServicesConfig({}, {}, { ttsProfileName: 'bad', ttsProfileConfig: { synthesis: { format: 'aac' } } }), /unsupported/);
   assert.throws(() => normalizeMcpServicesConfig({}, {}, { ttsProfileName: 'bad', ttsProfileConfig: { synthesis: { rate: 0.4 } } }), /0.5 to 2/);
+  assert.throws(() => normalizeMcpServicesConfig({}, {}, { ttsProfileName: 'bad', ttsProfileConfig: { timing: { fallbackCharactersPerSecond: 0 } } }), /positive/);
   assert.throws(() => normalizeMcpServicesConfig({}, {}, { ttsProfileName: 'bad', ttsProfileConfig: { lifecycle: { type: 'embedded' } } }), /managed or external/);
   assert.throws(() => normalizeMcpServicesConfig({}, {}, { ttsProfileName: 'bad', ttsProfileConfig: { contract: { version: 2 } } }), /version must be 1|unsupported/);
   assert.throws(() => normalizeMcpServicesConfig({}, { DESKTOP_CHAR_TTS_MCP_TOOL: 'voice.generate' }), /fixed by the DesktopChar TTS Profile/);

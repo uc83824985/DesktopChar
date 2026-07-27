@@ -63,17 +63,19 @@ function selectAction(
   text: string,
   request: PerformancePlanningRequest,
 ): PerformanceActionSuggestion | undefined {
-  const candidates: Array<[AvatarAction, RegExp]> = [
-    ['greet', /你好|您好|早上好|晚上好|欢迎/u],
-    ['shake', /不行|不要|不能|并不是|拒绝/u],
-    ['nod', /是的|可以|当然|好的|没问题|同意/u],
+  const candidates: Array<[AvatarAction[], RegExp]> = [
+    [['greeting', 'greet'], /你好|您好|早上好|晚上好|欢迎/u],
+    [['failure', 'apology', 'shake'], /失败|抱歉|不行|不要|不能|并不是|拒绝/u],
+    [['encouragement', 'support'], /加油|支持|鼓励|祝你/u],
+    [['celebration', 'success', 'nod'], /成功|太好了|是的|可以|当然|好的|没问题|同意/u],
   ];
-  for (const [actionId, pattern] of candidates) {
+  for (const [tags, pattern] of candidates) {
     const descriptor = request.actions.find(candidate => (
-      candidate.actionId === actionId && candidate.allowedAnchors.includes('segment-start')
+      candidate.allowedAnchors.includes('segment-start')
+      && tags.some(tag => candidate.actionId === tag || candidate.tags.includes(tag))
     ));
     if (descriptor && pattern.test(text)) {
-      return { actionId, anchor: 'segment-start', confidence: 0.7 };
+      return { actionId: descriptor.actionId, anchor: 'segment-start', confidence: 0.7 };
     }
   }
   return undefined;

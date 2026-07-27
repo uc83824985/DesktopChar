@@ -19,7 +19,10 @@ export function createAgentHttpServer(options) {
       if (request.method === 'POST' && url.pathname === '/v1/performances') {
         if (!currentState.ready) return json(response, 503, { error: 'avatar-not-ready' });
         if (currentState.snapshot?.state !== 'idle') return json(response, 409, { error: 'avatar-busy', snapshot: currentState.snapshot });
-        const plan = validatePerformancePlan(await readJson(request));
+        const plan = validatePerformancePlan(
+          await readJson(request),
+          currentState.snapshot?.capabilities,
+        );
         options.onCommand({ type: 'performance.submit', plan });
         return json(response, 202, { accepted: true, planId: plan.id });
       }
@@ -77,7 +80,7 @@ export function createAgentCapabilities(currentState, ttsContext) {
   };
 }
 
-export function validatePerformancePlan(value) {
+export function validatePerformancePlan(value, avatarCapabilities) {
   if (!isRecord(value) || typeof value.id !== 'string' || !value.id.trim()) throw bad('invalid-plan', 'plan.id must be a non-empty string');
   if (!Array.isArray(value.segments) || value.segments.length === 0) throw bad('invalid-plan', 'plan.segments must be a non-empty array');
   const ids = new Set();
@@ -88,7 +91,9 @@ export function validatePerformancePlan(value) {
     if (!Number.isInteger(segment.sequence) || segment.sequence < 0 || sequences.has(segment.sequence)) throw bad('invalid-segment', `segments[${index}].sequence must be a unique non-negative integer`);
     if (typeof segment.displayText !== 'string' || typeof segment.speechText !== 'string' || !segment.speechText.trim()) throw bad('invalid-segment', `segments[${index}] requires displayText and non-empty speechText`);
     if (segment.emotion !== undefined) validateEmotion(segment.emotion, index);
-    if (segment.actions !== undefined) validateActions(segment.actions, index);
+    if (segment.actions !== undefined) {
+      validateActions(segment.actions, index, avatarCapabilities?.actions);
+    }
     if (segment.bubble !== undefined) validateBubble(segment.bubble, segment.displayText, index);
     ids.add(segment.id); sequences.add(segment.sequence);
     return structuredClone(segment);
@@ -129,11 +134,20 @@ function validateEmotion(value, segmentIndex) {
   if (value.atMs !== undefined && (!Number.isFinite(value.atMs) || value.atMs < 0)) throw bad('invalid-segment', `segments[${segmentIndex}].emotion.atMs must be non-negative`);
 }
 
-function validateActions(value, segmentIndex) {
-  const allowed = new Set(['nod', 'shake', 'tap', 'greet']);
+function validateActions(value, segmentIndex, availableActions) {
   if (!Array.isArray(value)) throw bad('invalid-segment', `segments[${segmentIndex}].actions must be an array`);
+  const allowed = new Set(
+    Array.isArray(availableActions)
+      ? availableActions.filter(action => typeof action === 'string' && action.trim())
+      : [],
+  );
   value.forEach((action, actionIndex) => {
-    if (!isRecord(action) || typeof action.id !== 'string' || !action.id.trim() || !allowed.has(action.action)) throw bad('invalid-segment', `segments[${segmentIndex}].actions[${actionIndex}] is invalid`);
+    if (!isRecord(action) || typeof action.id !== 'string' || !action.id.trim() || typeof action.action !== 'string' || !allowed.has(action.action)) {
+      throw bad(
+        'invalid-segment',
+        `segments[${segmentIndex}].actions[${actionIndex}].action must be one of the current avatar capabilities`,
+      );
+    }
     if (action.atMs !== undefined && (!Number.isFinite(action.atMs) || action.atMs < 0)) throw bad('invalid-segment', `segments[${segmentIndex}].actions[${actionIndex}].atMs must be non-negative`);
   });
 }

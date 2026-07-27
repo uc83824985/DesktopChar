@@ -28,19 +28,9 @@ test('v2 domain adapter exposes semantic descriptors but never renderer assets',
       return {
         provider: 'fixture-model',
         text: JSON.stringify({
-          affect: {
-            valence: 0.9,
-            arousal: 0.6,
-            approval: 0.8,
-            engagement: 0.9,
-            certainty: 0.8,
-          },
-          expressionCandidates: [{
-            expressionKey: 'closed-eye-smile',
-            confidence: 0.91,
-            intensity: 0.72,
-          }],
-          actions: [{ actionId: 'nod', confidence: 0.7, anchor: 'segment-start' }],
+          expressionKey: 'closed-eye-smile',
+          trigger: '很高兴',
+          intensity: 0.72,
         }),
       };
     },
@@ -53,6 +43,14 @@ test('v2 domain adapter exposes semantic descriptors but never renderer assets',
   assert.equal(result.contractVersion, PERFORMANCE_PLANNING_V2_CONTRACT_VERSION);
   assert.equal(result.catalogRevision, 3);
   assert.equal(result.expressionCandidates[0]?.expressionKey, 'closed-eye-smile');
+  assert.equal(result.expressionTrigger, '高兴');
+  assert.deepEqual(result.expressionTextAnchor, {
+    clauseIndex: 0,
+    clauseCount: 1,
+    startCharacter: 5,
+    endCharacter: 7,
+    totalCharacters: 8,
+  });
   assert.equal(result.actions[0]?.actionId, 'nod');
   assert.ok(prepared);
   assert.equal(prepared.maxOutputTokens, 192);
@@ -71,7 +69,7 @@ test('v2 domain adapter exposes semantic descriptors but never renderer assets',
   assert.doesNotMatch(prepared.input, /exp_0[1-8]/u);
 });
 
-test('v2 parser rejects unknown, duplicate and out-of-range model output', () => {
+test('v2 parser rejects unknown, out-of-range and non-verbatim model output', () => {
   const adapter = new ExpressionCatalogPlanningAdapter({
     maxOutputTokens: 192,
     temperature: 0.1,
@@ -79,23 +77,30 @@ test('v2 parser rejects unknown, duplicate and out-of-range model output', () =>
   assert.throws(
     () => adapter.parse({
       provider: 'fixture',
-      text: '{"affect":null,"expressionCandidates":[{"expressionKey":"exp_02","confidence":1,"intensity":1}],"actions":[]}',
+      text: '{"expressionKey":"exp_02","trigger":"很高兴","intensity":1}',
     }, request()),
     /available and unique/,
   );
   assert.throws(
     () => adapter.parse({
       provider: 'fixture',
-      text: '{"affect":null,"expressionCandidates":[{"expressionKey":"disdain","confidence":0.8,"intensity":0.5},{"expressionKey":"disdain","confidence":0.7,"intensity":0.4}],"actions":[]}',
+      text: '{"expressionKey":"disdain","trigger":"很高兴","intensity":2}',
     }, request()),
-    /available and unique/,
+    /intensity must be from 0 to 1/,
   );
   assert.throws(
     () => adapter.parse({
       provider: 'fixture',
-      text: '{"affect":{"valence":2,"arousal":0,"approval":0,"engagement":0,"certainty":0},"expressionCandidates":[],"actions":[]}',
+      text: '{"expressionKey":"disdain","trigger":"很高兴","intensity":-1}',
     }, request()),
-    /valence must be from -1 to 1/,
+    /intensity must be from 0 to 1/,
+  );
+  assert.throws(
+    () => adapter.parse({
+      provider: 'fixture',
+      text: '{"expressionKey":"disdain","trigger":"不存在","intensity":0.5}',
+    }, request()),
+    /copied exactly from text/,
   );
 });
 
@@ -108,6 +113,8 @@ test('deterministic catalog rules remain usable without any model transport', as
   assert.equal(result.source, 'rules');
   assert.equal(result.provider, 'deterministic-catalog-rules');
   assert.equal(result.expressionCandidates[0]?.expressionKey, 'disdain');
+  assert.equal(result.expressionTrigger, '认真的吗');
+  assert.ok(result.expressionTextAnchor.startCharacter > result.textAnchor.startCharacter);
   assert.ok((result.affect?.approval ?? 0) < 0);
 });
 
@@ -171,6 +178,9 @@ test('v2 effect handler preserves catalog identity and supports cancellation', a
       thinkingControl: 'unsupported' as const,
       streaming: false,
     }),
+    provisionalPlan: (planned: PerformancePlanningRequestV2, signal: AbortSignal) => (
+      new RuleBasedExpressionCatalogInference().plan(planned, signal)
+    ),
     plan: () => new Promise<Suggestion>(resolve => {
       resolvePlan = resolve;
     }),
@@ -183,12 +193,19 @@ test('v2 effect handler preserves catalog identity and supports cancellation', a
     generation: 4,
     request: planned,
   }, event => events.push(event)), true);
+  await new Promise(resolve => setTimeout(resolve, 0));
+  const provisional = events[0] as {
+    type: string;
+    provisional?: boolean;
+  };
+  assert.equal(provisional.type, 'performance.suggestion-v2-ready');
+  assert.equal(provisional.provisional, true);
   resolvePlan!(await new RuleBasedExpressionCatalogInference().plan(
     planned,
     new AbortController().signal,
   ));
   await new Promise(resolve => setTimeout(resolve, 0));
-  const ready = events[0] as {
+  const ready = events[1] as {
     type: string;
     suggestion: { catalogRevision: number };
   };
@@ -215,6 +232,13 @@ function request(): PerformancePlanningRequestV2 {
     catalogRevision: 3,
     defaultExpressionKey: 'neutral',
     text: '好的，我很高兴。',
+    textAnchor: {
+      clauseIndex: 0,
+      clauseCount: 1,
+      startCharacter: 0,
+      endCharacter: 8,
+      totalCharacters: 8,
+    },
     persona: { id: 'mao', styleTags: ['friendly'] },
     scene: { id: 'desktop', modeTags: ['idle'] },
     avatar: { state: 'thinking', currentExpressionKey: 'neutral', coarseEmotion: 'neutral' },

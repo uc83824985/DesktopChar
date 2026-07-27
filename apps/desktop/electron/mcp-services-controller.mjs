@@ -648,6 +648,7 @@ function ttsRuntimeConfig(config, endpoint, status) {
     timeoutMs: config.connection.timeoutMs,
     format: config.synthesis.format,
     testFixtures: Array.isArray(status?.capabilities?.test_fixtures) ? [...status.capabilities.test_fixtures] : [],
+    fallbackCharactersPerSecond: config.timing.fallbackCharactersPerSecond,
     ...(config.synthesis.voice ? { voice: config.synthesis.voice } : {}),
     ...(config.synthesis.rate !== undefined ? { rate: config.synthesis.rate } : {}),
   };

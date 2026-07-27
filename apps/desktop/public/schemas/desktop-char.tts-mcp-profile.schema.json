@@ -55,6 +55,16 @@
         "rate": { "type": "number", "minimum": 0.5, "maximum": 2 }
       }
     },
+    "timing": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "fallbackCharactersPerSecond": {
+          "type": "number",
+          "exclusiveMinimum": 0
+        }
+      }
+    },
     "reconnect": {
       "type": "object",
       "additionalProperties": false,

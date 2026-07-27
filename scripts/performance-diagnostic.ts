@@ -6,7 +6,6 @@ import {
 import { resolveExpression } from '../packages/avatar-runtime/src/index.ts';
 import { parseCharacterConfig } from '../packages/config/src/index.ts';
 import {
-  AdaptedPerformanceInferenceV2,
   ExpressionCatalogPlanningAdapter,
   OpenAiCompatiblePerformanceTransport,
 } from '../packages/performance-inference/src/index.ts';
@@ -33,6 +32,13 @@ const request: PerformancePlanningRequestV2 = {
   catalogRevision: catalog.revision,
   defaultExpressionKey: catalog.defaultExpressionKey,
   text: '你好，很高兴见到你！',
+  textAnchor: {
+    clauseIndex: 0,
+    clauseCount: 1,
+    startCharacter: 0,
+    endCharacter: 10,
+    totalCharacters: 10,
+  },
   persona: { id: profile.id, styleTags: ['friendly'] },
   scene: { id: 'desktop-default', modeTags: ['desktop', 'foreground'] },
   avatar: {
@@ -41,27 +47,46 @@ const request: PerformancePlanningRequestV2 = {
     coarseEmotion: profile.defaultEmotion,
   },
   expressions: structuredClone(catalog.descriptors),
-  actions: profile.allowedActions.map(actionId => ({
-    actionId,
-    label: actionId,
-    tags: [],
-    allowedAnchors: ['segment-start'],
-  })),
+  actions: profile.actionCatalog
+    ? profile.actionCatalog.descriptors.map(descriptor => ({
+        actionId: descriptor.actionId,
+        label: descriptor.label,
+        tags: [...descriptor.semanticTags],
+        allowedAnchors: [...descriptor.allowedAnchors],
+      }))
+    : profile.allowedActions.map(actionId => ({
+        actionId,
+        label: actionId,
+        tags: [],
+        allowedAnchors: ['segment-start'],
+      })),
 };
-const inference = new AdaptedPerformanceInferenceV2(
-  new OpenAiCompatiblePerformanceTransport({
-    provider: 'diagnostic-openai-compatible',
-    baseUrl,
-    ...(model ? { model } : {}),
-    timeoutMs: 120_000,
-  }),
-  new ExpressionCatalogPlanningAdapter({
-    maxOutputTokens: 256,
-    temperature: 0.1,
-  }),
-);
+const transport = new OpenAiCompatiblePerformanceTransport({
+  provider: 'diagnostic-openai-compatible',
+  baseUrl,
+  ...(model ? { model } : {}),
+  timeoutMs: 120_000,
+});
+const adapter = new ExpressionCatalogPlanningAdapter({
+  maxOutputTokens: 256,
+  temperature: 0.1,
+});
 const startedAt = performance.now();
-const suggestion = await inference.plan(request, new AbortController().signal);
+const response = await transport.complete(
+  adapter.prepare(request),
+  new AbortController().signal,
+);
+let suggestion;
+try {
+  suggestion = adapter.parse(response, request);
+}
+catch (error) {
+  console.error(JSON.stringify({
+    elapsedMs: Math.round(performance.now() - startedAt),
+    rawResponse: response.text,
+  }, null, 2));
+  throw error;
+}
 const resolved = resolveExpression({
   catalog,
   avatarState: request.avatar.state,

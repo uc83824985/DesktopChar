@@ -34,6 +34,9 @@
     "format": "pcm_s16le",
     "rate": 1
   },
+  "timing": {
+    "fallbackCharactersPerSecond": 5.56
+  },
   "reconnect": {
     "initialDelayMs": 500,
     "maximumDelayMs": 10000

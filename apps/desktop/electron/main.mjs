@@ -29,6 +29,8 @@ import {
 const directory = path.dirname(fileURLToPath(import.meta.url));
 const rendererRoot = path.resolve(directory, '../dist');
 const devUrl = parseLoopbackDevUrl(process.env.DESKTOP_CHAR_DEV_URL);
+const expressionFlowAuditRequested =
+  process.env.DESKTOP_CHAR_EXPRESSION_FLOW_AUDIT === '1';
 const packagedConfigPath = app.isPackaged ? path.join(app.getPath('userData'), 'config.json') : undefined;
 const packagedExampleConfigPath = app.isPackaged
   ? path.join(process.resourcesPath, 'desktop-char.config.example.json')
@@ -332,7 +334,9 @@ function createAvatarWindow() {
       },
     });
   }
-  void avatarWindow.loadURL(devUrl ?? 'desktop-char://app/');
+  const rendererUrl = new URL(devUrl ?? 'desktop-char://app/');
+  if (expressionFlowAuditRequested) rendererUrl.searchParams.set('expressionFlowAudit', '1');
+  void avatarWindow.loadURL(rendererUrl.href);
 
   cursorTimer = setInterval(() => {
     if (!avatarWindow || avatarWindow.isDestroyed()) return;
