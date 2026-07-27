@@ -30,6 +30,12 @@ Invoke-RestMethod http://127.0.0.1:17373/v1/state
 
 `health.status=ready` 表示 renderer 已加载模型并发布 Runtime snapshot；`starting` 时提交表演会返回 HTTP 503。`capabilities.avatar` 在 renderer ready 后包含实际模型支持的 emotion、action 和参数能力。
 
+显式动作必须先读取 `capabilities.avatar.actions`，并把其中的逻辑动作 ID 原样写入 segment 的 `actions[].action`。该列表来自当前角色 Runtime，而不是 HTTP/MCP 层的固定枚举；角色切换或配置热重载后应重新读取。旧原型值 `nod`、`shake`、`tap`、`greet` 不再被接入层特殊接受，除非当前角色确实将同名动作发布为能力。
+
+```powershell
+(Invoke-RestMethod http://127.0.0.1:17373/v1/capabilities).avatar.actions
+```
+
 ### 选择 TTS 后端
 
 外部 Agent 接入时可以把 TTS 后端记为以下两个应用装配选项：
@@ -136,7 +142,8 @@ $body = @{
       displayText = "联调测试"
       speechText = "这是一次桌面角色与MCP语音联调测试。"
       emotion = @{ emotion = "happy"; intensity = 0.6 }
-      actions = @(@{ id = "agent-smoke-001-nod"; action = "nod"; atMs = 180 })
+      # Mao 当前角色示例；应以 /v1/capabilities 返回值为准
+      actions = @(@{ id = "agent-smoke-001-heart"; action = "draw-heart-success"; atMs = 180 })
     }
   )
 } | ConvertTo-Json -Depth 8
@@ -222,7 +229,8 @@ $body = @{
       displayText = "很高兴见到你"
       speechText = "很高兴见到你"
       emotion = @{ emotion = "happy"; intensity = 0.7 }
-      actions = @(@{ id = "reply-nod"; action = "nod"; atMs = 200 })
+      # Mao 当前角色示例；其他角色必须改用其 capabilities.avatar.actions 中的 ID
+      actions = @(@{ id = "reply-heart"; action = "draw-heart-success"; atMs = 200 })
     }
   )
 } | ConvertTo-Json -Depth 8

@@ -117,6 +117,9 @@ DesktopChar 拥有一个配置明确的入口子进程。启动流程为：
     "format": "pcm_s16le",
     "voice": "jrpg-blip",
     "rate": 1
+  },
+  "timing": {
+    "fallbackCharactersPerSecond": 4.31
   }
 }
 ```
@@ -129,7 +132,7 @@ DesktopChar 拥有一个配置明确的入口子进程。启动流程为：
 | --- | --- |
 | `autoStart` | 应用启动后的初始启用状态；不改变生命周期所有权 |
 | `profile` | 必需；指定要加载的 TTS Profile 名称 |
-| `tts-mcp-profiles/<name>.json` | Profile 文件；承载 lifecycle/connection/contract/synthesis/reconnect |
+| `tts-mcp-profiles/<name>.json` | Profile 文件；承载 lifecycle/connection/contract/synthesis/timing/reconnect |
 | `lifecycle.type` | 只能是 `external` 或 `managed` |
 | `lifecycle.start` | 仅 `managed` 使用；推荐绝对路径，参数必须拆成数组 |
 | `startupTimeoutMs` | 等待 managed Provider endpoint 和 Profile 就绪的上限 |
@@ -144,6 +147,7 @@ DesktopChar 拥有一个配置明确的入口子进程。启动流程为：
 | `synthesis.format` | 默认请求的音频格式，必须在 Provider 能力中声明 |
 | `synthesis.voice` | 可选默认音色，必须是 Provider 接受的值 |
 | `synthesis.rate` | 可选默认语速，范围固定为 `0.5` 到 `2`，透传到 `tts_open_stream.rate` |
+| `timing.fallbackCharactersPerSecond` | 无原生时间戳且音频总时长未知时的有效字符语速估算；必须为正数，并按当前 Provider、音色与 `synthesis.rate` 实测校准 |
 | `reconnect` | MCP 连接的指数退避上下限 |
 
 Profile 搜索路径按以下顺序解析：
@@ -170,6 +174,7 @@ external profile 不应包含 `lifecycle.start`：
 ```
 
 配置文件支持运行时重载。TTS 正在播放时，影响服务的重载会等待 Runtime 回到空闲边界，再重建连接或 managed 进程。
+估算语速随每次合成结果固化到 `AudioSource`，因此 Profile 热切换不会回溯修改已进入播放队列的时间轴。
 
 ## 4. 强制语义接口
 

@@ -32,6 +32,10 @@ Live2D Motion 可通过受全局帧预算约束的真实 WebGL 采集器导出 C
 
 表情和已有 Live2D 动作的语义选择暂由本地表现推理端口完成，Qwen3.5-2B non-thinking 只是首个验证 Profile，不进入外部 Agent 关键路径；同协议模型只需替换 Profile，不同协议通过新 Adapter 接入。首个模型使用 OpenAI-compatible HTTP，不新增 MCP；`external` 只连接现有 endpoint，`managed` 由 Electron Supervisor 启停入口进程，两者复用同一 Adapter。边界与生命周期见 [本地表现模型接入设计](docs/performance-model-integration.md)，实现新 Provider 时遵循 [表现模型 Provider 接入指南](docs/performance-model-provider-integration.md)，官方模型配置阅读结论见 [Qwen3.5-2B 阅读记录](docs/references/qwen3.5-2b.md)。
 
+段内表情当前采用自然分句并发分析和文本位置锚点，不依赖 TTS 字词时间戳；Qwen3-ForcedAligner
+的公开效率、流式限制、当前近似绑定策略及未来精确时间戳接入点见
+[段内表情时序调研与阶段性实现](docs/expression-timing.md)。
+
 Qwen3.5-2B 环境可通过 `npm run performance:bootstrap` 初始化，通过
 `npm run performance:start` 启动；服务启动后在另一个终端执行
 `npm run performance:smoke` 可完成真实 UTF-8 Chat Completions 验证。完整说明见

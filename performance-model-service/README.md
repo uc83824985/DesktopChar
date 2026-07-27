@@ -46,7 +46,10 @@ must use the GPU.
 
 Continuous batching is disabled by default to reduce VRAM use while Qwen3.5 shares a
 consumer GPU with TTS. Use `.\start.ps1 -ContinuousBatching` only when explicitly
-benchmarking concurrent performance-model requests.
+benchmarking concurrent performance-model requests. With the currently pinned
+Transformers build and Qwen3.5-2B, the server reports that
+`Qwen3_5ForConditionalGeneration` does not support continuous batching and falls back
+to sequential generation, so enabling the switch does not improve current throughput.
 
 The full-precision 2B model needs several GiB of free VRAM. Close or reduce other GPU
 workloads before starting the service if model loading reports CUDA out of memory.

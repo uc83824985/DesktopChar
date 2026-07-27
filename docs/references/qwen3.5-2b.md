@@ -47,7 +47,6 @@ sealed reply segment
 + Persona performance projection
 + Scene/Avatar projection
 + current ExpressionDescriptor[]
-+ current Live2D ActionDescriptor[]
                  |
                  v
         Qwen3.5-2B non-thinking
@@ -70,9 +69,9 @@ sealed reply segment
 - 决定播放顺序、动作冲突和中断；
 - 作为角色接入 MCP 中的 Agent。
 
-当前 v2 Adapter 只允许模型从角色级 expression/action 目录返回候选，并附带资源无关的
-affect 向量；旧角色 v1 仍限制为 emotion/action ID。绝对 `atMs`
-仍由播放时间线决定，模型只返回 segment-start、after-clause、segment-end 等语义锚点。
+当前 v2 Adapter 只允许模型从角色级 expression 目录返回一个 `expressionKey`，并复制
+最短原文 `trigger`、给出 `intensity`。动作、候选置信度、文本锚点与完整领域结果均在
+本地恢复；旧角色 v1 仍限制为 emotion/action ID。绝对 `atMs` 仍由播放时间线决定。
 
 ## 推理与验收假设
 
@@ -81,7 +80,7 @@ affect 向量；旧角色 v1 仍限制为 emotion/action ID。绝对 `atMs`
 
 首轮验证至少比较：
 
-1. Qwen3.5-2B non-thinking、量化模型、短上下文、最多 256 个输出 token；
+1. Qwen3.5-2B non-thinking、量化模型、短上下文、最多 64 个输出 token；
 2. 与 Qwen3-TTS 同时运行时的首 token、完整 JSON、显存峰值和 TTS 首包；
 3. schema 约束前后的 action ID 合法率；
 4. 中文隐含语气、反问、否定、讽刺和“无动作”样本；
@@ -161,18 +160,36 @@ vLLM/SGLang），不改变 Runtime、Resolver 或角色 Profile。
 完整的目标契约、Resolver 评分、资源审计和迁移阶段见
 [角色级表情目录与表现解析](../expression-catalog.md)。
 
+## 2026-07-27 RTX 3080 实测
+
+在 Qwen3.5-2B warm、Local TTS 与 DesktopChar 同时运行时，旧的完整
+affect/candidates/actions 输出诊断约 25 秒，并在 256 tokens 处截断。把模型协议压缩成
+`expressionKey/trigger/intensity` 三个字段后，单请求约 3.0 秒。
+
+三分句同时提交时，关闭 UE 编辑器仍不能消除后两路 5 秒超时。显式启动 continuous
+batching 后，当前 Transformers 服务报告
+`Qwen3_5ForConditionalGeneration does not support continuous batching`，自动退回
+sequential generation；因此这个开关对当前架构没有吞吐收益。服务还提示缺少
+`flash-linear-attention` 和 `causal-conv1d`，使用 PyTorch fallback kernel。
+
+采用本地 provisional cue、`timeoutMs=10000`、`maxOutputTokens=64` 后，三路模型完成
+时间为 2.710、4.828、7.630 秒，均在 deadline 内返回；三个播放 cue 的误差分别为
+19、3、29ms。实时性由 1–3ms 的本地预判保证，模型只修正尚未播放的 cue。完整记录见
+[段内表情时序调研与阶段性实现](../expression-timing.md)。
+
 ## 当前未验证项
 
 - 尚未确定最终量化格式和生产推理框架；Transformers 是首个开发验证 Provider；
-- 尚未在 GPU 空闲条件下记录首 token、完整 JSON 与显存峰值；
+- 已在 RTX 3080 上记录 warm 完整 JSON 和三路并发结果；尚未单独记录精确首 token 与
+  进程级峰值显存；
 - 尚未在 RTX 3070 上与 Qwen3-TTS 并发压测；
 - Mao 的 6 个 `TapBody` 资源已完成人工视觉审阅并形成候选逻辑键，但尚未写入正式
   ActionCatalog、MotionBinding 和逐项可达性测试；Mao 的 8 个表情已写入正式 v2
   `ExpressionCatalog` Profile，并通过真实 `model3.json` 资源可达性测试；
-- 尚未验证 Qwen3.5-2B 对动态 `ExpressionDescriptor[]` 的 top-1/top-3 选择质量，
-  也未验证 prompt-only JSON 在目标样本集上的稳定性；
+- 已验证三条前台样本的 top-1 和 prompt-only JSON；尚未建立覆盖反问、否定、讽刺与
+  隐含情绪的目标样本集和 P50/P95；
 - 表现模型 external/managed Supervisor 已实现并共享同一 OpenAI-compatible
   Transport；managed 会等待 `/v1/models` readiness、监控入口异常退出并回收进程树；
-- v2 Adapter、确定性规则、Resolver、Runtime Effect Handler 和
-  generation/segment/catalog revision 丢弃策略已经实现；真实 Qwen v2 GPU 质量与
-  延迟诊断仍待受控显存条件。
+- v2 Adapter、确定性规则、provisional cue、Resolver、Runtime Effect Handler 和
+  generation/segment/catalog revision 丢弃策略已经实现；生产框架、量化模型及与
+  Qwen3-TTS 同卡运行仍待验证。

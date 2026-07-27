@@ -13,7 +13,8 @@ Domain adapter: expression-catalog-planning
 Transport: loopback HTTP
 Required endpoint: POST /v1/chat/completions
 Lifecycle implemented now: external | managed
-Response: one strict affect/expressionCandidates/actions JSON object
+Model response: one strict expressionKey/trigger/intensity JSON object
+Local normalized response: LocalPerformanceSuggestionV2
 ```
 
 没有 `expressionCatalog` 的旧角色仍走 v1 emotion/actions Adapter；两种 contract
@@ -118,8 +119,8 @@ Supervisor，不进入领域 Adapter 或 OpenAI-compatible Transport。
     "provider": "qwen35-transformers",
     "baseUrl": "http://127.0.0.1:18090/v1",
     "healthUrl": "http://127.0.0.1:18090/v1/models",
-    "timeoutMs": 5000,
-    "maxOutputTokens": 256,
+    "timeoutMs": 10000,
+    "maxOutputTokens": 64,
     "temperature": 0.1,
     "fallbackToRules": true
   }
@@ -187,10 +188,10 @@ Content-Type: application/json; charset=utf-8
     },
     {
       "role": "user",
-      "content": "{\"text\":\"...\",\"persona\":{},\"scene\":{},\"avatar\":{},\"defaultExpressionKey\":\"neutral\",\"expressionCatalog\":[],\"actionCatalog\":[]}"
+      "content": "{\"text\":\"...\",\"textAnchor\":{},\"persona\":{},\"scene\":{},\"avatar\":{},\"defaultExpressionKey\":\"neutral\",\"expressionCatalog\":[]}"
     }
   ],
-  "max_tokens": 256,
+  "max_tokens": 64,
   "temperature": 0.1,
   "stream": false
 }
@@ -215,7 +216,7 @@ OpenAI-compatible 最小响应：
   "choices": [
     {
       "message": {
-        "content": "{\"affect\":null,\"expressionCandidates\":[],\"actions\":[]}"
+        "content": "{\"expressionKey\":\"neutral\",\"trigger\":\"好的\",\"intensity\":0.4}"
       }
     }
   ]
@@ -230,7 +231,14 @@ Provider 在 user message 中收到以下 JSON 投影：
 
 ```json
 {
-  "text": "已经由 reply Agent 写好的完整段落",
+  "text": "已经由 Runtime 拆出的一个自然分句",
+  "textAnchor": {
+    "clauseIndex": 0,
+    "clauseCount": 3,
+    "startCharacter": 0,
+    "endCharacter": 13,
+    "totalCharacters": 48
+  },
   "persona": {
     "id": "mao",
     "styleTags": ["friendly"]
@@ -254,12 +262,6 @@ Provider 在 user message 中收到以下 JSON 投影：
       "affectPrototype": { "valence": 0.9, "arousal": 0.55 },
       "compatibleAvatarStates": ["idle", "speaking", "presenting"]
     }
-  ],
-  "actionCatalog": [
-    {
-      "actionId": "nod",
-      "allowedAnchors": ["segment-start"]
-    }
   ]
 }
 ```
@@ -269,12 +271,12 @@ Provider 在 user message 中收到以下 JSON 投影：
 | 字段 | Provider 使用方式 |
 | --- | --- |
 | `text` | 只分析表现语义，不改写、续写或总结 |
+| `textAnchor` | 当前自然分句在完整语音段中的本地锚点；模型不修改或回传 |
 | `persona` | 提供角色风格的只读投影，不是完整系统提示词 |
 | `scene` | 提供当前场景和模式标签 |
 | `avatar` | 提供请求时角色状态、当前逻辑 expression key 与可选粗粒度 emotion |
 | `defaultExpressionKey` | 没有更适合候选时的角色默认逻辑 key |
 | `expressionCatalog` | 本次唯一允许返回的 expression key 及语义描述；不含 binding |
-| `actionCatalog` | 本次唯一允许返回的 action ID 和 anchor |
 
 能力目录按当前 CharacterProfile、Renderer 能力和 Runtime policy 动态生成。Provider
 不得缓存某个角色的固定动作列表，也不得发明、翻译或改写 ID。
@@ -285,96 +287,66 @@ Provider 在 user message 中收到以下 JSON 投影：
 
 ## 6. 输出契约
 
-Provider 的 `message.content` 应只包含一个 JSON 对象：
+Provider 的 `message.content` 应只包含一个扁平 JSON 对象：
 
 ```json
 {
-  "affect": {
-    "valence": 0.9,
-    "arousal": 0.6,
-    "approval": 0.8,
-    "engagement": 0.9,
-    "certainty": 0.8
-  },
-  "expressionCandidates": [
-    {
-      "expressionKey": "closed-eye-smile",
-      "confidence": 0.9,
-      "intensity": 0.75
-    }
-  ],
-  "actions": [
-    {
-      "actionId": "nod",
-      "confidence": 0.8,
-      "anchor": "segment-start"
-    }
-  ]
+  "expressionKey": "closed-eye-smile",
+  "trigger": "太好了",
+  "intensity": 0.75
 }
 ```
 
-没有合适表情或动作时：
+没有明确情绪时：
 
 ```json
 {
-  "affect": null,
-  "expressionCandidates": [],
-  "actions": []
+  "expressionKey": "neutral",
+  "trigger": "好的",
+  "intensity": 0.4
 }
 ```
 
 根对象规则：
 
-- 只能包含 `affect`、`expressionCandidates` 和 `actions`；
-- `expressionCandidates` 与 `actions` 必须存在且为数组；
+- 只能包含 `expressionKey`、`trigger` 和 `intensity`；
+- `expressionKey` 必须来自当次 `expressionCatalog`；
+- `trigger` 必须是当前 `text` 中最直接引发表情的最短非空原文子串；模型复制
+  原文，不返回字符偏移或毫秒值；
+- `intensity` 必须是 `0` 到 `1` 的有限数字；
 - 禁止附加解释、推理过程、角色台词或资产编号；
 - Adapter 兼容外层 Markdown JSON fence，但 Provider 不应依赖该兼容路径。
 
-### 6.1 affect
+### 6.1 trigger
 
-`affect` 可以是 `null`，否则必须完整包含：
+`trigger` 用于把表情从“自然分句开头”细化到句内语义触发短语。Adapter
+先验证它确实是 `text` 的连续原文子串，再使用 Unicode code point 在本地计算全文
+`PerformanceTextAnchor`；模型输出 `"竟然"`、`"让我想想"` 等证据文本，不自行计算
+容易出错的 Unicode 偏移。若原文重复出现同一短语，当前取该分句内第一次出现的位置。
 
-| 字段 | 规则 |
-| --- | --- |
-| `valence` | `-1` 到 `1` 的有限数字 |
-| `arousal` | `0` 到 `1` 的有限数字 |
-| `approval` | `-1` 到 `1` 的有限数字 |
-| `engagement` | `0` 到 `1` 的有限数字 |
-| `certainty` | `0` 到 `1` 的有限数字 |
+### 6.2 本地恢复完整领域结果
 
-affect 对象不能包含其他字段。
+紧凑 JSON 是模型协议，不是 Runtime 领域契约。Adapter 会给模型选择附加固定置信度，
+校验 `trigger`，计算 `expressionTextAnchor`，并恢复
+`LocalPerformanceSuggestionV2.expressionCandidates`。动作不再由生成模型输出，而是从
+CharacterProfile 的动作目录中按确定性语义规则选择；明显情绪词也会经过 semantic guard，
+防止模型保留默认表情或虚构原文短语。
 
-### 6.2 expressionCandidates
-
-最多返回三项且不能重复。每项的 `expressionKey` 必须来自当次
-`expressionCatalog`；`confidence` 与 `intensity` 必须是 `0` 到 `1` 的有限数字。
-候选只是建议，最终选择由 Runtime 的 Resolver 完成。
-
-### 6.3 actions
-
-`actions` 当前最多返回两项，并且不能超过请求中动作描述符的数量。每项必须满足：
-
-| 字段 | 规则 |
-| --- | --- |
-| `actionId` | 必须来自 `actionCatalog`，同一响应中不能重复 |
-| `confidence` | `0` 到 `1` 的有限数字 |
-| `anchor` | 必须包含在该 action 的 `allowedAnchors` 中 |
-| `clauseIndex` | 仅 `after-clause` 使用，必须是非负整数 |
-
-当前 DesktopChar 实际向表现模型开放的动作 anchor 只有 `segment-start`。
-`after-clause` 和 `segment-end` 保留在领域契约中，待文本—播放同步点接入后再开放。
+模型在线且 `fallbackToRules=true` 时，Effect Handler 还会立即并行生成一个本地
+provisional suggestion。模型最终结果只修正尚未播放的同分句 cue；它不会使 TTS 或播放
+等待，也不会重放已经触发的表情。
 
 ## 7. 本地二次校验与应用策略
 
 Provider 返回合法 JSON 不等于建议一定执行。DesktopChar 还会依次检查：
 
 1. HTTP 与 Chat Completions 响应结构；
-2. 根对象及所有子对象没有未知字段；
-3. expression/action/anchor 属于本次动态白名单；
-4. intensity/confidence 数值范围；
+2. 根对象没有未知字段；
+3. expression 属于本次动态白名单，trigger 是原文连续子串；
+4. intensity 数值范围；
 5. request identity、generation、segment revision 和 catalog revision 仍然有效；
 6. 原计划对应字段仍允许模型补全；
-7. confidence 达到 Runtime policy 阈值；
+7. Adapter 恢复的候选 confidence 达到 Runtime policy 阈值；
 8. action 数量符合当前角色策略；
 9. 当前 Timeline 尚未错过对应 cue。
 
@@ -402,8 +374,9 @@ Adapter 使用以下稳定错误分类：
 | `performance-contract-mismatch` | 领域契约版本不支持 |
 | `performance-invalid-request` | Runtime 生成的请求 envelope 非法 |
 
-`fallbackToRules=true` 时，可恢复的 Provider 错误会转入确定性规则；日志中
-`request.completed source:"rules"` 不代表 Provider 接入成功。契约错误和本地非法
+`fallbackToRules=true` 时，本地规则先提供 provisional cue；可恢复的 Provider 错误还会
+把最终结果转入确定性规则。日志中的 `request.v2-provisional` 只代表即时预判，
+`request.v2-completed source:"rules"` 才代表模型最终失败或超时。契约错误和本地非法
 请求不能被静默隐藏。
 
 Provider 恢复在线后只处理新请求，不补发或重演已经开始/完成的 segment。
@@ -503,10 +476,11 @@ Live2D expression 的链路。
 
 1. Chat Completions 接受 UTF-8 文本并在 deadline 内返回；
 2. `choices[0].message.content` 是非空字符串；
-3. 内容是只有 `affect/expressionCandidates/actions` 的单个 JSON 对象；
+3. 内容是只有 `expressionKey/trigger/intensity` 的单个 JSON 对象；
 4. Provider 不返回能力目录以外的 ID；
-5. 空建议稳定返回 `affect:null`、`expressionCandidates:[]` 和 `actions:[]`；
-6. intensity/confidence/anchor 满足严格契约；
+5. 即使没有非中立候选，也返回默认 `expressionKey`、有效的原文 `trigger` 和
+   `0..1` 的 `intensity`；
+6. trigger 必须逐字来自当前分句，不能自行返回偏移；
 7. DesktopChar v2 Adapter 或前台日志输出 `source:"model"`；
 8. segment 显式 cue 不会被模型替换；
 9. 中断和配置重载能取消 in-flight 请求；

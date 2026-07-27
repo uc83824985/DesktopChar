@@ -127,7 +127,7 @@ Renderer 中的 `ReloadableTtsAdapter` 是稳定代理，`TtsRuntimeEffectHandle
 | `desktop_char_perform` | `{ "plan": PerformancePlan }` | 角色 ready 且 idle 时提交经过完整校验的表演计划 |
 | `desktop_char_interrupt` | `{}` | 请求 generation-safe Runtime 中断 |
 
-角色接入 MCP 与兼容 HTTP API 共用同一个 `validatePerformancePlan()`，因此 segment ID/sequence、speech/display text、emotion/action 白名单和聊天气泡 cue 校验完全一致。MCP 工具不允许直接写 Live2D 参数或跳过 Runtime。
+角色接入 MCP 与兼容 HTTP API 共用同一个 `validatePerformancePlan()`，因此 segment ID/sequence、speech/display text、emotion/action 能力和聊天气泡 cue 校验完全一致。显式 `actions[].action` 仅接受当前 Runtime snapshot 的 `capabilities.actions`；Agent 应先调用 `desktop_char_get_capabilities`，并在角色或配置变化后刷新缓存。接入层不再维护 `nod/shake/tap/greet` 等旧动作白名单。MCP 工具不允许直接写 Live2D 参数或跳过 Runtime。
 
 角色接入 MCP 可在语音合成 MCP 未启用时继续接受计划。此时每个合成失败的 segment 由 Runtime 按 sequence 进入 `presenting` 纯文本回退：只显示完整聊天气泡，不产生声音、口型、流式追加或 KTV 高亮；显示时长按非空白字符数估算。`desktop_char_get_capabilities` 会公开该回退能力和计时参数。
 

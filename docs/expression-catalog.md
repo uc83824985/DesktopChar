@@ -7,6 +7,11 @@
 没有目录的旧角色继续使用 `desktop-char.performance-planning.v1`、固定 `Emotion`
 和 `emotionBindings`，兼容路径暂不删除。
 
+2026-07-27 已在 v2 上加入段内表情第一阶段：Runtime 将一个自然语音段拆为有限数量的
+自然分句，并行提交表现推理，并把结果保存为文本范围锚点。当前不要求 TTS 返回字词时间戳；
+有音频总时长时按文本进度绑定，没有时按估算语速绑定。完整调研、误差边界和未来精确
+`atMs` 接入方案见[段内表情时序调研与阶段性实现](expression-timing.md)。
+
 ## 问题
 
 固定 `neutral / happy / sad / angry / surprised / thinking` 槽位只能证明
@@ -31,8 +36,8 @@ sealed segment + Persona + Scene + Avatar state
                          +--> TTS
                          |
                          v
-       Optional Performance Inference
-              affect + ranked candidates
+       Clause-level Performance Inference
+      text anchor + affect + ranked candidates
                          |
                          v
                ExpressionResolver

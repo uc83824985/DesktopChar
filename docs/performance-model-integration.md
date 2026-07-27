@@ -183,8 +183,8 @@ llama.cpp/vLLM 内部 worker、GPU allocator 或推理队列语义。
   "inference": {
     "promptProfile": "live2d-performance-v1",
     "thinking": false,
-    "timeoutMs": 5000,
-    "maxOutputTokens": 256,
+    "timeoutMs": 10000,
+    "maxOutputTokens": 64,
     "temperature": 0.1
   }
 }
@@ -264,8 +264,8 @@ DesktopChar 托管 Qwen 时可配置 managed：
     "provider": "qwen35-transformers",
     "baseUrl": "http://127.0.0.1:18090/v1",
     "healthUrl": "http://127.0.0.1:18090/v1/models",
-    "timeoutMs": 5000,
-    "maxOutputTokens": 256,
+    "timeoutMs": 10000,
+    "maxOutputTokens": 64,
     "temperature": 0.1,
     "fallbackToRules": true
   }

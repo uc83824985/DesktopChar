@@ -450,9 +450,12 @@ Avatar capability projection，再进行段内编排。它只接收表现所需�
 完整会话。
 
 增强结果通过 `responseId + segmentId + segmentRevision` 写入
-`ResponseAssembler`。动作和情绪先使用语义锚点，例如句首、短语后、句末或某个 cue ID；
-TTS 返回时长、文本 cue 或音频进度后，再由 timeline binder 映射为实际播放时点。这样表现
-Agent 不需要猜测音频时长，也不会把文字生成速度误当成播放进度。
+`ResponseAssembler`。动作和表情先使用语义锚点，例如句首、Unicode 文本范围、短语后、
+句末或某个 cue ID；TTS 返回时长、文本 cue 或音频进度后，再由 timeline binder 映射为
+实际播放时点。当前已实现的 v2 路径会把语音段拆成最多 6 个自然分句并发分析：
+有 `durationMs` 时按文本进度比例绑定，没有总时长时按确定性语速估算。精确 `atMs`
+始终优先，后续可由 TTS 原生 timing 或 ForcedAligner 覆盖。详见
+[段内表情时序调研与阶段性实现](expression-timing.md)。
 
 每个 segment 具有逐级冻结点：
 
@@ -610,7 +613,8 @@ interface LocalPerformanceSuggestion {
 
 - 本地文本模型选择 greet、nod、shake、tap 等具有明确语义的已有 motion；
 - PCM 能量、onset、语速和停顿只驱动轻量点头、身体 sway、眨眼或强调 beat，不承担语义选择；
-- TTS 若将来能提供 pitch、energy、duration 或字词时间戳，应直接用于 timeline binder。
+- TTS 若将来能提供 pitch、energy、duration 或字词时间戳，应直接用于 timeline binder；
+  当前文本锚点是无时间戳回退，不是新的音频事实来源。
 
 这种拆分与共语手势研究的结论一致：Gesticulator 同时使用文本语义和音频特征，
 [FastTalker](https://arxiv.org/abs/2409.16404) 进一步复用 TTS 的 pitch、onset、energy

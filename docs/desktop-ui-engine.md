@@ -209,7 +209,7 @@ Mao 原始表情/动作资源预览，用于完成语义标注前的前台审阅
 `TapBody` motion，并提供 Neutral/Reset。原始资源预览只显示 `exp_02`、
 `TapBody[0] · mtn_02` 这类资源身份，不把资源文件名直接冒充为跨角色语义绑定。
 Mao 六个 `TapBody` 的人工视觉审阅已经完成，原始身份、完整时长、候选逻辑键和正式
-接入缺口见[角色级动作目录与 Mao 资产审阅](action-catalog.md)。该面板属于开发期
+首版接入状态见[角色级动作目录与 Mao 资产审阅](action-catalog.md)。该面板属于开发期
 Renderer 资源审阅 capability，不修改 Avatar Runtime 的语义 emotion/action；正式
 对话表演仍只能经过角色 Profile 白名单、Runtime Timeline 和 renderer Effect。后续
 文本输入 presenter 复用同一 Host，但输入内容必须提交应用 ConversationRuntime，

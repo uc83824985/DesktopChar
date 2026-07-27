@@ -66,8 +66,10 @@ AvatarRuntime（门面、事件路由、聚合快照）
 │  └─ playing / holding / dismiss / text fallback
 ├─ GazeRuntime
 │  └─ follow mode / target / GazeProfile / neutral fallback
-└─ LipSyncRuntime
-   └─ audio level envelope / attack-release / neutral mouth
+├─ LipSyncRuntime
+│  └─ audio level envelope / attack-release / neutral mouth
+└─ ActionRuntime
+   └─ scene applicability / selection / cooldown / queue / Renderer lifecycle
 ```
 
 职责边界：
@@ -77,7 +79,12 @@ AvatarRuntime（门面、事件路由、聚合快照）
 - `SpeechBubbleRuntime` 根据播放时间线或无 TTS 回退时钟维护聊天气泡，不拥有音频队列；
 - `GazeRuntime` 独立维护常驻注视状态，表演计划结束或语音中断不得意外清除它；
 - `LipSyncRuntime` 将播放电平映射为嘴型参数层，播放器只报告电平和时点；
-- 表情、手势和动作在形成独立队列、恢复点或并发策略后再提取相应 Runtime；当前纯 cue 计算可继续留在 Planner/Timeline 服务中。
+- `ActionRuntime` 已形成独立子 Runtime：资产目录声明适用性，SceneRuntime 提供版本化语境投影，
+  ActionRuntime 独占候选筛选、独立随机抽样、场景概率倍率、冷却、队列和当前动作；Timeline
+  只提交 ActionIntent。完整对话计划结束会形成 `conversation.completed` 机会，由当前
+  SceneActionContext 决定是否显著提高动作触发概率；
+- 表情在形成独立恢复点或并发策略后再提取相应 Runtime；当前纯 cue 计算可继续留在
+  Planner/Timeline 服务中。
 
 不是每个类都应命名为 Runtime。只有拥有可观察状态、明确事件和生命周期的组件才是子 Runtime；
 `AvatarPlanner`、`PerformanceTimeline`、参数 `Mixer`、Gaze 映射和 Context Compiler
@@ -91,7 +98,8 @@ AvatarRuntime（门面、事件路由、聚合快照）
 1. 先提取 `SpeechBubbleRuntime` 和 `LipSyncRuntime`，它们已有清晰状态与输入事件；
 2. 再提取 `SpeechRuntime`，统一 TTS ready、音频播放和失败回退；
 3. 将 plan/segment/generation/中断保留并收敛到 `PerformanceRuntime`；
-4. 最后让 `AvatarRuntime` 退化为稳定门面、事件路由和聚合 Snapshot。
+4. ActionRuntime 先行完成资产/场景/播放边界收口，后续补充长动作 phase 和目录热重载；
+5. 最后让 `AvatarRuntime` 退化为稳定门面、事件路由和聚合 Snapshot。
 
 任何阶段都必须保持“整体呈现队列只有一个所有者”，不能在拆分期间形成
 `SpeechRuntime` 与 `PerformanceRuntime` 各自推进 segment 的双队列。
