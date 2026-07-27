@@ -242,9 +242,27 @@ export class AvatarRuntime {
       speechActive: this.snapshot.playback.status === 'playing'
         || this.snapshot.playback.status === 'buffering'
         || this.snapshot.playback.status === 'paused',
+      blockedActionTags: this.expressionBlockedActionTags(this.snapshot.expression.currentKey),
     };
     if (acceptedEvent.type === 'scene.action-context-updated') {
       actionTransition = this.actionRuntime.updateSceneContext(acceptedEvent.context);
+    }
+    else if (acceptedEvent.type === 'timeline.expression-cue') {
+      const blockedActionTags = this.expressionBlockedActionTags(
+        acceptedEvent.cue.expressionKey,
+      );
+      actionTransition = this.actionRuntime.reconcile(this.clock(), {
+        ...actionEnvironment,
+        blockedActionTags,
+      });
+      if (actionTransition.rejection === 'action-expression-conflict') {
+        this.logPerformance('action.interrupted-by-expression', {
+          expressionKey: acceptedEvent.cue.expressionKey,
+          blockedActionTags,
+          actionId: this.snapshot.gesture.actionId,
+          requestId: this.snapshot.gesture.requestId,
+        });
+      }
     }
     else if (acceptedEvent.type === 'action.requested') {
       actionTransition = this.actionRuntime.request(acceptedEvent.intent, actionEnvironment);
@@ -277,6 +295,7 @@ export class AvatarRuntime {
         ...actionEnvironment,
         avatarState: 'idle',
         speechActive: false,
+        blockedActionTags: [],
       });
     }
     else if (acceptedEvent.type === 'renderer.motion-completed') {
@@ -298,6 +317,27 @@ export class AvatarRuntime {
     }
     else if (acceptedEvent.type === 'user.interrupt-requested') {
       actionTransition = this.actionRuntime.interrupt(this.snapshot.generation);
+    }
+    if (
+      actionTransition?.rejection === 'action-expression-conflict'
+      && acceptedEvent.type !== 'timeline.expression-cue'
+    ) {
+      const intent = acceptedEvent.type === 'action.requested'
+        ? acceptedEvent.intent
+        : undefined;
+      this.logPerformance('action.rejected-by-expression', {
+        expressionKey: this.snapshot.expression.currentKey,
+        blockedActionTags: actionEnvironment.blockedActionTags,
+        actionId: acceptedEvent.type === 'timeline.action-cue'
+          ? acceptedEvent.cue.action
+          : intent?.requestedActionId ?? null,
+        requestId: acceptedEvent.type === 'timeline.action-cue'
+          ? acceptedEvent.cue.id
+          : intent?.requestId ?? null,
+        trigger: intent?.trigger ?? (
+          acceptedEvent.type === 'timeline.action-cue' ? 'performance.action' : null
+        ),
+      });
     }
 
     if (acceptedEvent.type.startsWith('playback.') && 'segmentId' in acceptedEvent) {
@@ -608,6 +648,13 @@ export class AvatarRuntime {
       }
     }
     this.emitFrame();
+  }
+
+  private expressionBlockedActionTags(expressionKey: string | null): readonly string[] {
+    if (expressionKey === null) return [];
+    return this.options.expressionCatalog?.descriptors.find(
+      descriptor => descriptor.expressionKey === expressionKey,
+    )?.blockedActionTags ?? [];
   }
 
   private createPerformanceEffects(plan: PerformancePlan): RuntimeEffect[] {

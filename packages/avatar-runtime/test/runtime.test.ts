@@ -3,6 +3,7 @@ import test from 'node:test';
 import type {
   AvatarEvent,
   CharacterActionCatalog,
+  CharacterExpressionCatalog,
   PerformancePlan,
   RuntimeEffect,
 } from '../../contracts/src/index.ts';
@@ -257,6 +258,118 @@ test('timeline action intents resolve character-owned bindings before reaching R
     actionId: 'reviewed-wave',
     queueLength: 0,
   });
+});
+
+test('a restrictive expression interrupts an already playing incompatible action', () => {
+  const effects = new ControlledEffects();
+  const logs: Array<{ event: string; data: Record<string, unknown> }> = [];
+  const expressionCatalog: CharacterExpressionCatalog = {
+    revision: 1,
+    defaultExpressionKey: 'neutral',
+    descriptors: [{
+      expressionKey: 'neutral',
+      label: 'Neutral',
+      semanticTags: ['neutral'],
+      prototypeTexts: ['Okay.'],
+      baseWeight: 1,
+      cooldownMs: 0,
+      holdMs: { minMs: 0, maxMs: 0 },
+      compatibleAvatarStates: ['idle', 'thinking', 'speaking'],
+    }, {
+      expressionKey: 'sad',
+      label: 'Sad',
+      semanticTags: ['sad'],
+      prototypeTexts: ['That is unfortunate.'],
+      blockedActionTags: ['ambient'],
+      baseWeight: 1,
+      cooldownMs: 0,
+      holdMs: { minMs: 500, maxMs: 1_000 },
+      compatibleAvatarStates: ['idle', 'thinking', 'speaking'],
+    }],
+    bindings: {
+      neutral: { expression: 'exp-neutral' },
+      sad: { expression: 'exp-sad' },
+    },
+  };
+  const actionCatalog: CharacterActionCatalog = {
+    revision: 1,
+    descriptors: [{
+      actionId: 'ambient-sway',
+      label: 'Ambient sway',
+      semanticTags: ['ambient', 'relaxed'],
+      prototypeTexts: ['A relaxed idle sway'],
+      allowedAnchors: ['segment-start'],
+      compatibleAvatarStates: ['thinking', 'speaking'],
+      scene: {},
+      speech: 'allow',
+      priority: 10,
+      cooldownMs: 0,
+      maxQueueAgeMs: 5_000,
+      busyPolicy: 'enqueue',
+      triggers: [{
+        ruleId: 'performance',
+        trigger: 'performance.action',
+        mode: 'required',
+        chance: 1,
+        weight: 1,
+      }],
+    }],
+    bindings: {
+      'ambient-sway': {
+        type: 'live2d-motion',
+        group: 'TapBody',
+        index: 1,
+        mode: 'once',
+        expectedDurationMs: 4_400,
+      },
+    },
+  };
+  const runtime = new AvatarRuntime({
+    planner: new DefaultAvatarPlanner(),
+    mixer: new ParameterMixer({ ranges: {} }),
+    effects,
+    expressionCatalog,
+    actionCatalog,
+    performanceLogger: (event, data) => logs.push({ event, data }),
+    clock: () => 2_000,
+  });
+  runtime.dispatch({
+    type: 'renderer.ready',
+    capabilities: { ...capabilities, actions: ['ambient-sway'] },
+  });
+  runtime.dispatch({
+    type: 'plan.submitted',
+    plan: {
+      id: 'expression-action-conflict',
+      segments: [{
+        id: 'conflict-segment',
+        sequence: 0,
+        displayText: '先放松一下。不过这确实令人难过。',
+        speechText: '先放松一下。不过这确实令人难过。',
+        actions: [{ id: 'ambient-at-start', action: 'ambient-sway', atMs: 0 }],
+        expressionCues: [{ expressionKey: 'sad', intensity: 0.9, atMs: 1_000 }],
+      }],
+    },
+  });
+  effects.resolveTts(0);
+
+  assert.deepEqual(effects.motions, ['ambient-at-start']);
+  assert.equal(runtime.getSnapshot().gesture.actionId, 'ambient-sway');
+
+  effects.progress(1_000);
+
+  assert.deepEqual(effects.stoppedMotionRequests, ['ambient-at-start']);
+  assert.equal(runtime.getSnapshot().expression.currentKey, 'sad');
+  assert.equal(runtime.getSnapshot().gesture.actionId, null);
+  assert.deepEqual(
+    logs.find(log => log.event === 'action.interrupted-by-expression')?.data,
+    {
+      expressionKey: 'sad',
+      blockedActionTags: ['ambient'],
+      actionId: 'ambient-sway',
+      requestId: 'ambient-at-start',
+    },
+  );
 });
 
 test('stream playback levels drive mouth frames while buffering remains a player fact', () => {

@@ -33,6 +33,7 @@ export class ControlledEffects implements RuntimeEffectExecutor {
   readonly frames: Array<Record<string, number>> = [];
   readonly motions: string[] = [];
   readonly motionCommands: Array<Extract<RuntimeEffect, { type: 'renderer.play-motion' }>['command']> = [];
+  readonly stoppedMotionRequests: string[] = [];
   readonly expressions: Array<Extract<RuntimeEffect, { type: 'renderer.set-expression' }>['command']> = [];
   readonly cancelledGenerations: number[] = [];
   readonly cancelledPerformanceGenerations: number[] = [];
@@ -124,6 +125,7 @@ export class ControlledEffects implements RuntimeEffectExecutor {
         this.motionCommands.push(structuredClone(effect.command));
         break;
       case 'renderer.stop-motion':
+        this.stoppedMotionRequests.push(effect.requestId);
         break;
     }
   }

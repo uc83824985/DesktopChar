@@ -68,6 +68,7 @@ interface ExpressionDescriptor {
   label: string;
   semanticTags: string[];
   prototypeTexts: string[];
+  blockedActionTags?: string[];
   affectPrototype?: Partial<AffectVector>;
   baseWeight: number;
   cooldownMs: number;
@@ -87,11 +88,21 @@ interface ExpressionBinding {
 - enabled 的每个资源至少具有 label、语义标签或原型句，不能成为永远不可达的孤儿；
 - Neutral/reset binding 唯一；
 - cooldown、hold 和权重有明确范围；
+- `blockedActionTags` 是稀疏的动作语义禁用表；省略或空数组表示默认兼容；
 - catalog revision 改变后，旧 revision 的推理结果不能提交。
 
 一个视觉资源可声明多个语义标签。例如 Mao 的 `disdain` 可以包含
 `displeased / dismissive / speechless`，不需要复制三份全局 Emotion binding。
 走神主要是 attention/gaze 行为，不应因为“半睁眼”就错误复用带怒嘴的资源。
+
+动作兼容策略归表情目录所有：大多数表情无需配置，只有确实不应与某类动作共存的表情
+声明禁用标签。例如 Mao 的 `sad-worried` 配置 `blockedActionTags: ["ambient"]`，因此
+轻松摇摆、挥手等待机动作不会在难过表情下开始；如果表情在动作播放中途生效，Runtime
+会停止该动作。这里按动作的语义标签约束，不绑定具体 `actionId`，新加同类动作会自动继承规则。
+
+动作侧不重复保存一份反向兼容矩阵。未来若某个动作资产需要独占完整面部编舞，应增加独立的
+参数所有权/表达式层策略（例如 `coexist` 或 `suppress`），它解决的是渲染层叠加问题，不替代
+当前的语义互斥规则。
 
 ## AffectVector
 

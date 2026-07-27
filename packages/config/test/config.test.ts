@@ -131,6 +131,16 @@ test('Mao expression catalog binds every logical entry to a real model expressio
     new Set(Object.values(catalog.bindings).map(binding => binding.expression)),
     available,
   );
+  assert.deepEqual(
+    catalog.descriptors.find(descriptor => descriptor.expressionKey === 'sad-worried')
+      ?.blockedActionTags,
+    ['ambient'],
+  );
+  assert.ok(
+    catalog.descriptors
+      .filter(descriptor => descriptor.expressionKey !== 'sad-worried')
+      .every(descriptor => descriptor.blockedActionTags?.length === 0),
+  );
   assert.throws(
     () => validateCharacterExpressionResources(catalog, ['exp_01']),
     /unavailable resource exp_02/,
@@ -232,6 +242,52 @@ test('character profile rejects path traversal and unregistered capabilities', (
       },
     }),
     /approval must be from -1 to 1/,
+  );
+  assert.throws(
+    () => parseCharacterConfig({
+      ...valid,
+      allowedActions: ['wave'],
+      actionCatalog: {
+        revision: 1,
+        descriptors: [{
+          actionId: 'wave',
+          label: 'Wave',
+          semanticTags: ['ambient'],
+          prototypeTexts: ['Hello'],
+          allowedAnchors: ['segment-start'],
+          compatibleAvatarStates: ['idle'],
+          scene: {},
+          speech: 'deny',
+          priority: 1,
+          cooldownMs: 0,
+          maxQueueAgeMs: 1_000,
+          busyPolicy: 'enqueue',
+          triggers: [{
+            ruleId: 'ambient',
+            trigger: 'ambient.opportunity',
+            mode: 'optional',
+            chance: 1,
+            weight: 1,
+          }],
+        }],
+        bindings: {
+          wave: {
+            type: 'live2d-motion',
+            group: 'TapBody',
+            index: 0,
+            mode: 'once',
+            expectedDurationMs: 1_000,
+          },
+        },
+      },
+      expressionCatalog: {
+        revision: 1,
+        defaultExpressionKey: 'neutral',
+        descriptors: [{ ...descriptor, blockedActionTags: ['ambinet'] }],
+        bindings: { neutral: { expression: null } },
+      },
+    }),
+    /unknown action tags: ambinet/,
   );
 });
 

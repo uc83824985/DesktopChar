@@ -394,6 +394,7 @@
         "expressionKey": "sad-worried",
         "label": "难过担忧",
         "semanticTags": ["sad", "worried", "concerned", "apologetic"],
+        "blockedActionTags": ["ambient"],
         "prototypeTexts": ["听起来有点让人担心。", "真的很遗憾。", "对不起，让你难过了。"],
         "affectPrototype": {
           "valence": -0.8,

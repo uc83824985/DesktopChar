@@ -87,6 +87,11 @@ export interface ExpressionDescriptor {
   label: string;
   semanticTags: string[];
   prototypeTexts: string[];
+  /**
+   * Sparse semantic exclusions evaluated by ActionRuntime. Omitted means the
+   * expression can coexist with every action category.
+   */
+  blockedActionTags?: string[];
   affectPrototype?: Partial<AffectVector>;
   baseWeight: number;
   cooldownMs: number;

@@ -142,6 +142,36 @@ ActionRuntime 是 AvatarRuntime 的子模块，并且是动作状态的唯一所
 开发面板测试。ActionRuntime 解析 binding 后才产生 `renderer.play-motion` Effect；Renderer
 只执行命令并报告开始、完成、中断或失败事实。
 
+## 表情与动作兼容方案
+
+主流动画系统通常把问题拆成两层：
+
+- **参数/骨骼是否重叠**：使用动画层、遮罩、权重以及 Override/Additive 混合。Unity 的
+  [Animation Layers](https://docs.unity3d.com/cn/current/Manual/AnimationLayers.html)
+  就是按身体区域建立 mask，并为层选择 Override 或 Additive；
+- **语义状态能否共存**：使用状态机、优先级和 transition 条件。Godot 的
+  [AnimationNodeStateMachineTransition](https://docs.godotengine.org/en/stable/classes/class_animationnodestatemachinetransition.html)
+  也把优先级、切换模式和 cross-fade 作为状态转换属性。
+
+Live2D 的约束更直接：[About Motion](https://docs.live2d.com/en/cubism-sdk-manual/motion/)
+说明优先级拒绝应在 `CubismMotionManager` 外部管理；并行 Motion 应尽量避免写同一参数，
+否则后更新者生效且 fade 可能不干净。其
+[Motion Unity](https://docs.live2d.com/en/cubism-sdk-manual/motion-unity/) 文档同样说明多层写入
+相同参数时后写覆盖，并由层权重控制覆盖程度。因此 Renderer 的更新顺序只能决定“谁覆盖谁”，
+不能判断“难过时是否应该挥手”。
+
+DesktopChar 采用同样的分层：
+
+1. Live2D 更新管线继续负责 Motion、Expression、眨眼、视线和口型的参数所有权与最终覆盖顺序；
+2. Character ExpressionCatalog 以 `blockedActionTags` 声明少量语义互斥，默认全部兼容；
+3. ActionRuntime 在候选选择、队列真正启动前、表情切换后三个时点执行同一硬约束；
+4. 新表情使当前动作失效时，Runtime 发出 `renderer.stop-motion`，清除同类排队动作，再允许兼容动作调度；
+5. `mode: required` 只跳过概率门，不跳过表情、场景、姿态、说话状态等硬约束。
+
+兼容配置放在表情侧，是因为当前关系是“多数表情兼容、少数表情禁止一类动作”的稀疏矩阵。
+动作目录只需维护稳定的 `semanticTags`，不会随着表情数量增长而复制反向列表。若未来某个 Motion
+拥有不可被 Expression 覆盖的完整面部演出，再单独在动作侧增加参数所有权策略，不与语义互斥混用。
+
 ## 概率、权重与硬条件
 
 以下概念不能混用：
@@ -163,12 +193,12 @@ Reducer 内不得读取随机数或系统时钟。概率只能在一次 `action-
 
 1. 将外部输入转换为 ActionIntent；
 2. 按准确 `actionId` 或语义标签建立候选集；
-3. 依次过滤 binding、场景、姿态、Runtime 状态、说话兼容性、冲突、冷却和重复限制；
+3. 依次过滤 binding、场景、姿态、Runtime 状态、说话兼容性、当前表情禁用标签、冷却和重复限制；
 4. 优先处理 `required` 候选；
 5. 对可选候选执行一次概率门控，并在最高优先级层按权重选择；
 6. 生成包含上下文 revision 和已解析 binding 的不可变请求；
 7. 根据忙碌策略立即播放、排队、替换或忽略；
-8. 真正开始前再次验证当前场景；
+8. 真正开始前再次验证当前场景与表情；
 9. 由 Renderer 的真实生命周期事件推进队列；
 10. 完成、失败或中断后更新历史，再调度下一个请求。
 

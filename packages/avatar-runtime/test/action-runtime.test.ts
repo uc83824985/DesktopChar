@@ -199,6 +199,51 @@ test('scene context can significantly boost the same asset rule after conversati
   assert.equal(boosted.selectedActionId, 'post-chat-wave');
 });
 
+test('expression exclusions are hard eligibility rules even for required intents', () => {
+  const runtime = new ActionRuntime(
+    catalog([descriptor('idle-wave', ['ambient'])]),
+    defaultScene,
+  );
+  const transition = runtime.request(
+    intent('blocked', 'idle-wave', 1_000),
+    { ...environment(), blockedActionTags: ['ambient'] },
+  );
+
+  assert.equal(transition.rejection, 'action-expression-conflict');
+  assert.deepEqual(transition.effects, []);
+  assert.deepEqual(transition.gesture, {
+    requestId: null,
+    actionId: null,
+    queueLength: 0,
+  });
+});
+
+test('expression changes stop an incompatible active action and discard incompatible queued work', () => {
+  const active = { ...descriptor('active-ambient', ['ambient']), busyPolicy: 'enqueue' as const };
+  const queued = { ...descriptor('queued-ambient', ['ambient']), busyPolicy: 'enqueue' as const };
+  const runtime = new ActionRuntime(catalog([active, queued]), defaultScene);
+  runtime.request(intent('active', 'active-ambient', 1_000), environment());
+  runtime.request(intent('queued', 'queued-ambient', 1_100), environment());
+
+  const transition = runtime.reconcile(
+    1_200,
+    { ...environment(), blockedActionTags: ['ambient'] },
+  );
+
+  assert.equal(transition.rejection, 'action-expression-conflict');
+  assert.deepEqual(transition.effects, [{
+    type: 'renderer.stop-motion',
+    generation: 2,
+    requestId: 'active',
+    actionId: 'active-ambient',
+  }]);
+  assert.deepEqual(transition.gesture, {
+    requestId: null,
+    actionId: null,
+    queueLength: 0,
+  });
+});
+
 function descriptor(
   actionId: string,
   semanticTags: string[],
@@ -254,7 +299,12 @@ function catalog(descriptors: ActionDescriptor[]): CharacterActionCatalog {
 }
 
 function environment() {
-  return { generation: 2, avatarState: 'idle' as const, speechActive: false };
+  return {
+    generation: 2,
+    avatarState: 'idle' as const,
+    speechActive: false,
+    blockedActionTags: [],
+  };
 }
 
 function intent(requestId: string, requestedActionId: string, occurredAtMs: number) {

@@ -14,6 +14,7 @@ export interface ActionRuntimeEnvironment {
   generation: number;
   avatarState: AvatarState;
   speechActive: boolean;
+  blockedActionTags: readonly string[];
 }
 
 export interface ActionRuntimeTransition {
@@ -103,7 +104,13 @@ export class ActionRuntime {
     validateIntent(intent);
     const candidate = this.selectCandidate(intent, environment);
     if (!candidate) {
-      return { gesture: this.getGesture(), effects: [], rejection: 'no-eligible-action' };
+      return {
+        gesture: this.getGesture(),
+        effects: [],
+        rejection: this.isIntentBlockedByExpression(intent, environment)
+          ? 'action-expression-conflict'
+          : 'no-eligible-action',
+      };
     }
     const request: ResolvedActionRequest = {
       requestId: intent.requestId,
@@ -190,6 +197,52 @@ export class ActionRuntime {
     };
   }
 
+  /**
+   * Revalidates queued and active work after the surrounding avatar
+   * environment changes. This is intentionally separate from Renderer
+   * blending: semantic incompatibility is an application-level hard rule.
+   */
+  reconcile(
+    nowMs: number,
+    environment: ActionRuntimeEnvironment,
+  ): ActionRuntimeTransition {
+    this.queue = this.queue.filter(request => {
+      const descriptor = this.descriptors.get(request.actionId);
+      return Boolean(
+        descriptor
+        && nowMs - request.enqueuedAtMs <= descriptor.maxQueueAgeMs
+        && this.isRequestValidForScene(request)
+        && this.isDescriptorEligible(descriptor, environment)
+      );
+    });
+    if (!this.current) return { gesture: this.getGesture(), effects: [] };
+
+    const descriptor = this.descriptors.get(this.current.actionId);
+    if (descriptor && this.isDescriptorEligible(descriptor, environment)) {
+      return { gesture: this.getGesture(), effects: [] };
+    }
+
+    const previous = this.current;
+    const expressionConflict = Boolean(
+      descriptor && intersects(descriptor.semanticTags, environment.blockedActionTags),
+    );
+    this.current = null;
+    const next = this.startNext(nowMs, environment);
+    return {
+      ...next,
+      gesture: this.getGesture(),
+      rejection: expressionConflict
+        ? 'action-expression-conflict'
+        : 'action-environment-conflict',
+      effects: [{
+        type: 'renderer.stop-motion',
+        generation: environment.generation,
+        requestId: previous.requestId,
+        actionId: previous.actionId,
+      }, ...next.effects],
+    };
+  }
+
   private selectCandidate(
     intent: ActionIntent,
     environment: ActionRuntimeEnvironment,
@@ -240,12 +293,34 @@ export class ActionRuntime {
     return selected;
   }
 
+  private isIntentBlockedByExpression(
+    intent: ActionIntent,
+    environment: ActionRuntimeEnvironment,
+  ): boolean {
+    if (!environment.blockedActionTags.length) return false;
+    return [...this.descriptors.values()].some(descriptor => {
+      if (intent.requestedActionId && descriptor.actionId !== intent.requestedActionId) return false;
+      if (
+        !intent.requestedActionId
+        && intent.semanticTags?.length
+        && !intersects(descriptor.semanticTags, intent.semanticTags)
+      ) {
+        return false;
+      }
+      if (!intersects(descriptor.semanticTags, environment.blockedActionTags)) return false;
+      if (!this.catalog.bindings[descriptor.actionId]) return false;
+      return intent.source === 'debug'
+        || descriptor.triggers.some(rule => rule.trigger === intent.trigger);
+    });
+  }
+
   private isDescriptorEligible(
     descriptor: ActionDescriptor,
     environment: ActionRuntimeEnvironment,
   ): boolean {
     if (!descriptor.compatibleAvatarStates.includes(environment.avatarState)) return false;
     if (environment.speechActive && descriptor.speech === 'deny') return false;
+    if (intersects(descriptor.semanticTags, environment.blockedActionTags)) return false;
     if (
       this.scene.allowedActionTags.length
       && !intersects(descriptor.semanticTags, this.scene.allowedActionTags)
@@ -289,6 +364,7 @@ export class ActionRuntime {
       generation: 0,
       avatarState: descriptor.compatibleAvatarStates[0] ?? 'idle',
       speechActive: false,
+      blockedActionTags: [],
     });
   }
 

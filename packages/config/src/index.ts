@@ -75,6 +75,20 @@ export function parseCharacterConfig(value: unknown, profileUrl = DEFAULT_CHARAC
   }
   const bindings = emotionBindings(profile.emotionBindings, allowedEmotions);
   const catalog = expressionCatalog(profile.expressionCatalog);
+  if (catalog && parsedActionCatalog) {
+    const actionTags = new Set(
+      parsedActionCatalog.descriptors.flatMap(descriptor => descriptor.semanticTags),
+    );
+    for (const descriptor of catalog.descriptors) {
+      const unknownTags = (descriptor.blockedActionTags ?? []).filter(tag => !actionTags.has(tag));
+      if (unknownTags.length) {
+        throw new TypeError(
+          `Expression ${descriptor.expressionKey} blockedActionTags reference unknown action tags: `
+          + unknownTags.join(', '),
+        );
+      }
+    }
+  }
   return {
     id,
     modelJsonUrl: resolveProfileAsset(profileUrl, model),
@@ -260,7 +274,7 @@ function expressionCatalog(value: unknown): CharacterExpressionCatalog | undefin
     const descriptor = record(item, label);
     assertKnownKeys(descriptor, [
       'expressionKey', 'label', 'semanticTags', 'prototypeTexts', 'affectPrototype',
-      'baseWeight', 'cooldownMs', 'holdMs', 'compatibleAvatarStates',
+      'blockedActionTags', 'baseWeight', 'cooldownMs', 'holdMs', 'compatibleAvatarStates',
     ], label);
     const key = expressionKey(descriptor.expressionKey, `${label}.expressionKey`);
     if (keys.has(key)) throw new TypeError(`${label}.expressionKey must be unique`);
@@ -276,6 +290,10 @@ function expressionCatalog(value: unknown): CharacterExpressionCatalog | undefin
       label: nonEmptyText(descriptor.label, `${label}.label`),
       semanticTags: uniqueTextArray(descriptor.semanticTags, `${label}.semanticTags`),
       prototypeTexts: uniqueTextArray(descriptor.prototypeTexts, `${label}.prototypeTexts`),
+      blockedActionTags: optionalTextArray(
+        descriptor.blockedActionTags,
+        `${label}.blockedActionTags`,
+      ) ?? [],
       ...(affect ? { affectPrototype: affect } : {}),
       baseWeight: positiveNumber(descriptor.baseWeight, `${label}.baseWeight`),
       cooldownMs: nonNegativeNumber(descriptor.cooldownMs, `${label}.cooldownMs`),

@@ -198,6 +198,11 @@
           "uniqueItems": true,
           "items": { "type": "string", "minLength": 1 }
         },
+        "blockedActionTags": {
+          "type": "array",
+          "uniqueItems": true,
+          "items": { "type": "string", "minLength": 1 }
+        },
         "affectPrototype": { "$ref": "#/$defs/affectPrototype" },
         "baseWeight": { "type": "number", "exclusiveMinimum": 0 },
         "cooldownMs": { "type": "number", "minimum": 0 },
