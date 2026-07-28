@@ -95,6 +95,34 @@ try {
     if (await interactionPanel.count()) break;
   }
   await interactionPanel.waitFor({ state: 'visible', timeout: 2_000 });
+  const panelTabs = await page.locator('.scene-interaction-panel__tab').allTextContents();
+  if (JSON.stringify(panelTabs) !== JSON.stringify(['角色对话', '资源调试'])) {
+    throw new Error(`Interaction panel categories are incomplete: ${JSON.stringify(panelTabs)}`);
+  }
+  const conversationInput = page.locator('.conversation-panel__form textarea');
+  await conversationInput.fill('第一条前台并行测试');
+  await conversationInput.press('Control+Enter');
+  await conversationInput.fill('第二条前台并行测试');
+  await conversationInput.press('Control+Enter');
+  await page.locator('body[data-conversation-turns="2"]').waitFor({ timeout: 2_000 });
+  await page.locator('body[data-conversation-pending="0"]').waitFor({ timeout: 15_000 });
+  const conversationUi = await page.evaluate(() => ({
+    userMessages: [...document.querySelectorAll('.conversation-panel__transcript [data-role="user"] span')]
+      .map(node => node.textContent),
+    assistantMessages: [...document.querySelectorAll('.conversation-panel__transcript [data-role="assistant"] span')]
+      .map(node => node.textContent),
+    taskOrder: [...document.querySelectorAll('.conversation-panel__task strong')]
+      .map(node => node.textContent),
+  }));
+  if (JSON.stringify(conversationUi.userMessages) !== JSON.stringify([
+    '第一条前台并行测试', '第二条前台并行测试',
+  ]) || conversationUi.assistantMessages.length !== 2
+    || JSON.stringify(conversationUi.taskOrder) !== JSON.stringify([
+      '#1 assistant-1', '#2 assistant-2',
+    ])) {
+    throw new Error(`Conversation interaction view did not preserve turn order: ${JSON.stringify(conversationUi)}`);
+  }
+  await page.getByRole('button', { name: '资源调试', exact: true }).click();
   const previewCatalog = await page.locator('body').evaluate(body => ({
     expressionResources: Number(body.dataset.assetPreviewExpressions),
     motionResources: Number(body.dataset.assetPreviewMotions),

@@ -521,6 +521,16 @@ async function verifyNativeInteractionPanel(application, page) {
   await setNativePointer(application, coveredPoint, true);
   const panel = page.locator('.scene-interaction-panel');
   await panel.waitFor({ state: 'visible', timeout: 2_000 });
+  const resourceTabPoint = await page.getByRole('button', { name: '资源调试', exact: true })
+    .evaluate((button, bounds) => {
+      const rect = button.getBoundingClientRect();
+      return {
+        x: bounds.x + rect.x + rect.width / 2,
+        y: bounds.y + rect.y + rect.height / 2,
+      };
+    }, state.bounds);
+  await setNativePointer(application, resourceTabPoint, true);
+  await page.locator('.scene-interaction-panel[data-view="resources"]').waitFor({ timeout: 2_000 });
   const buttonPoint = await page.locator('[data-item-id="expression-exp_01"]').evaluate((button, bounds) => {
     const rect = button.getBoundingClientRect();
     return {

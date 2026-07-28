@@ -71,10 +71,26 @@ import type {
   PerformanceInferencePortV2,
 } from '../../../../packages/performance-inference/src/index.ts';
 import {
+  AgentConnectionManager,
+} from '../../../../packages/conversation-runtime/src/agent-connection-manager.ts';
+import {
+  ConversationRuntime,
+} from '../../../../packages/conversation-runtime/src/conversation-runtime.ts';
+import type {
+  ConversationSnapshot,
+  PresentationUnit,
+  ReplyAgentEndpoint,
+  ReplyResult,
+  ReplyTask,
+} from '../../../../packages/conversation-runtime/src/types.ts';
+import {
   DomContextMenuHost,
   DomInteractionPanelHost,
   ImmediateUiRegistry,
   formatChatBubbleFragment,
+} from '../../../../packages/scene-ui-dom/src/index.ts';
+import type {
+  DomInteractionPanelViewController,
 } from '../../../../packages/scene-ui-dom/src/index.ts';
 import type {
   McpCallOptions,
@@ -88,6 +104,7 @@ import type {
 import { JsonConsoleTtsLogger, McpTtsAdapter, TtsRuntimeEffectHandler } from '../../../../packages/tts-mcp-adapter/src/index.ts';
 import './style.css';
 import type {
+  ConversationAgentState,
   DesktopTtsConfig,
   DesktopPerformanceInferenceConfig,
   McpServiceId,
@@ -556,6 +573,12 @@ const assetPreviewMotionDurations = new Map<string, Promise<number>>();
 const motionAuditSourceSummaries = new Map<string, Promise<Live2dMotionSourceSummary>>();
 let cubismUpdatePipeline: Cubism4UpdatePipelineHandle | undefined;
 let runtime: AvatarRuntime | undefined;
+let conversationRuntime: ConversationRuntime | undefined;
+let conversationConnections: AgentConnectionManager | undefined;
+let conversationAgentState: ConversationAgentState | undefined;
+let conversationAgentStateUnsubscribe: (() => void) | undefined;
+let conversationMaxAssistants = 2;
+const conversationAgentDisposers: Array<() => void> = [];
 let gazeFrameDriverAttached = false;
 let playbackTimer: ReturnType<typeof setInterval> | undefined;
 let motionTimer: ReturnType<typeof setTimeout> | undefined;
@@ -662,7 +685,21 @@ const contextMenuHost = new DomContextMenuHost(immediateUi, {
 const interactionPanelHost = new DomInteractionPanelHost(interactionUi, {
   dismissDelayMs: 3_000,
   fadeOutMs: 120,
-  label: '角色交互与资源预览',
+  label: '角色对话与资源调试',
+  initialViewId: 'conversation',
+  views: [
+    {
+      id: 'conversation',
+      label: '角色对话',
+      kind: 'custom',
+      mount: mountConversationPanel,
+    },
+    {
+      id: 'resources',
+      label: '资源调试',
+      kind: 'registry',
+    },
+  ],
   onPhaseChanged(phase) {
     document.body.dataset.interactionPanel = phase;
   },
@@ -707,6 +744,7 @@ function handleTonePlaybackEvent(event: AvatarEvent): void {
 
 try {
   const shellState = desktopShell ? await desktopShell.ready() : undefined;
+  conversationMaxAssistants = shellState?.conversation.maxAssistants ?? 2;
   const characterConfig = await loadCharacterConfig(
     shellState?.character.profileUrl ?? DEFAULT_CHARACTER_PROFILE_URL,
   );
@@ -904,6 +942,19 @@ try {
     type: runtime.getSnapshot().gaze.active ? 'user.gaze-follow-disabled' : 'user.gaze-follow-enabled',
   }));
   reset.addEventListener('click', () => runtime?.dispatch({ type: 'user.interrupt-requested' }));
+  initializeConversationTestRuntime();
+  if (desktopShell) {
+    conversationAgentStateUnsubscribe = desktopShell.onConversationAgentState(state => {
+      conversationAgentState = state;
+      document.body.dataset.conversationProvider = 'managed';
+      interactionPanelHost.refresh();
+    });
+    void desktopShell.getConversationAgentState().then(state => {
+      conversationAgentState = state;
+      document.body.dataset.conversationProvider = 'managed';
+      interactionPanelHost.refresh();
+    }).catch(error => console.error('[conversation] failed to read Agent state', error));
+  }
   registerDevelopmentUi();
   if (motionAuditRequested) installMotionAuditApi(characterConfig.id);
   trySubmitExpressionFlowAudit();
@@ -930,6 +981,10 @@ try {
     }
     performanceEffects?.cancelAll();
     performanceV2Effects?.cancelAll();
+    conversationRuntime?.dispose();
+    conversationConnections?.close();
+    conversationAgentStateUnsubscribe?.();
+    conversationAgentStateUnsubscribe = undefined;
     cubismUpdatePipeline?.restore();
     cubismUpdatePipeline = undefined;
     contextMenuHost.dispose();
@@ -1614,6 +1669,436 @@ function submitEmotionBindingDemo(): void {
   }] } });
 }
 
+function createDesktopConversationReplyEndpoint(agentId: string): ReplyAgentEndpoint {
+  return {
+    execute(task: ReplyTask, signal: AbortSignal): Promise<ReplyResult> {
+      if (!desktopShell) return browserConversationReply(agentId, task, signal);
+      if (signal.aborted) return Promise.reject(signal.reason);
+      return new Promise((resolve, reject) => {
+        let settled = false;
+        const onAbort = () => {
+          if (settled) return;
+          settled = true;
+          desktopShell.cancelConversationReply(agentId, task.taskId, task.attemptId);
+          reject(signal.reason ?? new DOMException('Conversation reply cancelled', 'AbortError'));
+        };
+        signal.addEventListener('abort', onAbort, { once: true });
+        void desktopShell.requestConversationReply(agentId, task)
+          .then(result => {
+            if (settled) return;
+            settled = true;
+            resolve(result);
+          }, error => {
+            if (settled) return;
+            settled = true;
+            reject(error);
+          })
+          .finally(() => signal.removeEventListener('abort', onAbort));
+      });
+    },
+  };
+}
+
+async function browserConversationReply(
+  agentId: string,
+  task: ReplyTask,
+  signal: AbortSignal,
+): Promise<ReplyResult> {
+  await abortableDelay(task.turnSequence % 2 === 0 ? 600 : 150, signal);
+  return {
+    conversationId: task.conversationId,
+    turnId: task.turnId,
+    taskId: task.taskId,
+    attemptId: task.attemptId,
+    generation: task.generation,
+    segments: [{
+      segmentId: `segment-${task.turnId}`,
+      text: `${agentId} 已收到：“${task.userMessage}”`,
+    }],
+  };
+}
+
+function initializeConversationTestRuntime(): void {
+  const connections = new AgentConnectionManager();
+  conversationConnections = connections;
+  reconcileConversationAgentSlots();
+  conversationRuntime = new ConversationRuntime({
+    conversationId: `desktop-foreground-${Date.now()}`,
+    connections,
+    preparation: {
+      async prepareSpeech(request, signal) {
+        const health = await raceWithAbort(reloadableTtsAdapter.health(), signal);
+        if (health.status === 'unavailable') throw new Error(health.details);
+        return {
+          preparationId: `avatar-tts-handoff:${request.segmentId}:${request.segmentRevision}`,
+          value: { mode: 'avatar-runtime-on-presentation', provider: health.provider },
+        };
+      },
+      async preparePerformance(request, signal) {
+        if (signal.aborted) throw signal.reason;
+        return {
+          preparationId: `avatar-performance-handoff:${request.segmentId}:${request.segmentRevision}`,
+          value: {
+            mode: 'avatar-runtime-on-presentation',
+            provider: performanceInferenceConfig?.provider ?? 'deterministic-catalog-rules',
+          },
+        };
+      },
+    },
+    presentation: {
+      present: presentConversationUnit,
+    },
+  });
+  conversationRuntime.subscribe(snapshot => {
+    const pending = snapshot.responses.filter(response => !terminalConversationPresentation(response.presentation)).length;
+    document.body.dataset.conversationPending = pending.toString();
+    document.body.dataset.conversationTurns = snapshot.responses.length.toString();
+    if (pending === 0) reconcileConversationAgentSlots();
+    interactionPanelHost.refresh();
+  });
+}
+
+function reconcileConversationAgentSlots(): void {
+  const connections = conversationConnections;
+  if (!connections) return;
+  const busy = conversationRuntime?.getSnapshot().responses
+    .some(response => !terminalConversationPresentation(response.presentation)) ?? false;
+  if (busy) return;
+  while (conversationAgentDisposers.length < conversationMaxAssistants) {
+    const slot = conversationAgentDisposers.length + 1;
+    const agentId = `assistant-${slot}`;
+    conversationAgentDisposers.push(connections.register({
+      agentId,
+      instanceId: `${agentId}-foreground`,
+      protocolVersion: 'desktop-char.reply.v1',
+      capabilities: ['reply'],
+      maxConcurrency: 1,
+    }, createDesktopConversationReplyEndpoint(agentId)));
+  }
+  while (conversationAgentDisposers.length > conversationMaxAssistants) {
+    conversationAgentDisposers.pop()?.();
+  }
+  document.body.dataset.conversationAssistants = conversationAgentDisposers.length.toString();
+  interactionPanelHost.refresh();
+}
+
+async function presentConversationUnit(unit: PresentationUnit, signal: AbortSignal): Promise<void> {
+  await waitForAvatarIdle(signal);
+  if (signal.aborted) throw signal.reason;
+  const avatar = runtime;
+  if (!avatar) throw new Error('AvatarRuntime is unavailable');
+  stopAssetPreviewMotion('conversation-started');
+  if (assetPreviewIsolation?.locked) setAssetPreviewIsolationLocked(false);
+  const planId = `conversation:${unit.responseId}`;
+  return new Promise((resolve, reject) => {
+    let seenPlan = false;
+    let settled = false;
+    const finish = (error?: unknown) => {
+      if (settled) return;
+      settled = true;
+      unsubscribe();
+      signal.removeEventListener('abort', onAbort);
+      if (error === undefined) resolve();
+      else reject(error);
+    };
+    const onAbort = () => {
+      if (avatar.getSnapshot().planId === planId) {
+        avatar.dispatch({ type: 'user.interrupt-requested' });
+      }
+      finish(signal.reason ?? new DOMException('Conversation presentation cancelled', 'AbortError'));
+    };
+    const unsubscribe = avatar.subscribe(snapshot => {
+      if (snapshot.planId === planId) seenPlan = true;
+      if (seenPlan && snapshot.planId === null && snapshot.state === 'idle') finish();
+    });
+    signal.addEventListener('abort', onAbort, { once: true });
+    try {
+      avatar.dispatch({
+        type: 'plan.submitted',
+        plan: {
+          id: planId,
+          segments: unit.segments.map((segment, sequence) => ({
+            id: segment.segmentId,
+            sequence,
+            displayText: segment.text,
+            speechText: segment.text,
+            bubble: { mode: 'stream' },
+          })),
+        },
+      });
+    }
+    catch (error) {
+      finish(error);
+    }
+  });
+}
+
+async function waitForAvatarIdle(signal: AbortSignal): Promise<void> {
+  const avatar = runtime;
+  if (!avatar) throw new Error('AvatarRuntime is unavailable');
+  if (signal.aborted) throw signal.reason;
+  if (avatar.getSnapshot().state === 'idle') return;
+  await new Promise<void>((resolve, reject) => {
+    const onAbort = () => {
+      unsubscribe();
+      reject(signal.reason ?? new DOMException('Conversation presentation cancelled', 'AbortError'));
+    };
+    const unsubscribe = avatar.subscribe(snapshot => {
+      if (snapshot.state !== 'idle') return;
+      signal.removeEventListener('abort', onAbort);
+      unsubscribe();
+      resolve();
+    });
+    signal.addEventListener('abort', onAbort, { once: true });
+  });
+}
+
+function mountConversationPanel(container: HTMLElement): DomInteractionPanelViewController {
+  const abort = new AbortController();
+  const header = document.createElement('header');
+  header.className = 'conversation-panel__header';
+  const title = document.createElement('strong');
+  title.textContent = '多 Agent 对话测试';
+  const summary = document.createElement('span');
+  header.append(title, summary);
+
+  const agentAudit = document.createElement('details');
+  agentAudit.className = 'conversation-panel__agent-audit';
+  const agentAuditSummary = document.createElement('summary');
+  const agentAuditContent = document.createElement('div');
+  agentAuditContent.className = 'conversation-panel__agent-audit-content';
+  agentAudit.append(agentAuditSummary, agentAuditContent);
+
+  const transcript = document.createElement('ol');
+  transcript.className = 'conversation-panel__transcript';
+  transcript.setAttribute('aria-live', 'polite');
+
+  const queue = document.createElement('div');
+  queue.className = 'conversation-panel__queue';
+  queue.setAttribute('aria-label', '回复任务状态');
+
+  const form = document.createElement('form');
+  form.className = 'conversation-panel__form';
+  const input = document.createElement('textarea');
+  input.name = 'message';
+  input.rows = 2;
+  input.maxLength = 600;
+  input.placeholder = '输入消息；Enter 换行，Ctrl+Enter 发送…';
+  input.setAttribute('aria-label', '发送给桌面角色的消息');
+  const submit = document.createElement('button');
+  submit.type = 'submit';
+  submit.textContent = '发送';
+  submit.title = 'Ctrl+Enter';
+  form.append(input, submit);
+  form.addEventListener('submit', event => {
+    event.preventDefault();
+    const text = input.value.trim();
+    if (!text || !conversationRuntime) return;
+    conversationRuntime.submitUserMessage(text);
+    input.value = '';
+    refreshConversationPanel(summary, agentAuditSummary, agentAuditContent, transcript, queue, submit);
+    input.focus();
+  }, { signal: abort.signal });
+  input.addEventListener('keydown', event => {
+    if (event.key !== 'Enter' || !event.ctrlKey || event.isComposing) return;
+    event.preventDefault();
+    form.requestSubmit();
+  }, { signal: abort.signal });
+  container.append(header, agentAudit, transcript, queue, form);
+  refreshConversationPanel(summary, agentAuditSummary, agentAuditContent, transcript, queue, submit);
+  queueMicrotask(() => input.focus());
+  return {
+    refresh: () => refreshConversationPanel(
+      summary,
+      agentAuditSummary,
+      agentAuditContent,
+      transcript,
+      queue,
+      submit,
+    ),
+    dispose: () => abort.abort(),
+  };
+}
+
+function refreshConversationPanel(
+  summary: HTMLElement,
+  agentAuditSummary: HTMLElement,
+  agentAuditContent: HTMLElement,
+  transcript: HTMLOListElement,
+  queue: HTMLElement,
+  submit: HTMLButtonElement,
+): void {
+  const snapshot = conversationRuntime?.getSnapshot();
+  if (!snapshot) {
+    summary.textContent = '初始化中';
+    submit.disabled = true;
+    return;
+  }
+  const pending = snapshot.responses.filter(response => !terminalConversationPresentation(response.presentation)).length;
+  const assistantCount = conversationConnections?.getSnapshot().length ?? conversationMaxAssistants;
+  const providerLabel = desktopShell ? 'Codex App Server' : '浏览器回显';
+  summary.textContent = `${providerLabel} · ${assistantCount} 助手 · ${pending} 个处理中`;
+  submit.disabled = pending >= 6;
+  renderConversationAgentAudit(agentAuditSummary, agentAuditContent);
+  renderConversationTranscript(transcript, snapshot);
+  renderConversationQueue(queue, snapshot);
+}
+
+function renderConversationAgentAudit(summary: HTMLElement, content: HTMLElement): void {
+  const state = conversationAgentState;
+  content.replaceChildren();
+  if (!desktopShell || !state) {
+    summary.textContent = desktopShell ? '连接状态读取中…' : '浏览器测试连接';
+    return;
+  }
+  summary.textContent = `Managed · Codex App Server · ${state.managed.phase}`;
+  const activities = state.activities.slice(-8).reverse();
+  if (activities.length === 0) {
+    const empty = document.createElement('div');
+    empty.className = 'conversation-panel__agent-empty';
+    empty.textContent = '尚无 ReplyTask 请求。';
+    content.append(empty);
+    return;
+  }
+  for (const activity of activities) {
+    const item = document.createElement('article');
+    item.className = 'conversation-panel__agent-activity';
+    item.dataset.state = activity.state;
+    const provider = document.createElement('strong');
+    provider.textContent = `${activity.providerKind} · ${activity.providerAgentId ?? '等待连接'}`;
+    const input = document.createElement('span');
+    input.textContent = `→ ${activity.input}`;
+    item.append(provider, input);
+    if (activity.reply) {
+      const reply = document.createElement('span');
+      reply.textContent = `← ${activity.reply}`;
+      item.append(reply);
+    }
+    else if (activity.error) {
+      const error = document.createElement('span');
+      error.textContent = `× ${activity.error}`;
+      item.append(error);
+    }
+    else {
+      const status = document.createElement('span');
+      status.textContent = '… 请求处理中';
+      item.append(status);
+    }
+    content.append(item);
+  }
+}
+
+function renderConversationTranscript(transcript: HTMLOListElement, snapshot: ConversationSnapshot): void {
+  const previousScrollTop = transcript.scrollTop;
+  const wasPinnedToBottom = transcript.scrollHeight - transcript.scrollTop - transcript.clientHeight <= 12;
+  transcript.replaceChildren();
+  if (snapshot.responses.length === 0) {
+    const empty = document.createElement('li');
+    empty.className = 'conversation-panel__empty';
+    empty.textContent = '尚无消息。发送多条输入可观察 Agent 并行与顺序播放。';
+    transcript.append(empty);
+    return;
+  }
+  for (const response of snapshot.responses.slice(-6)) {
+    const user = snapshot.messages.find(message => message.turnId === response.turnId && message.role === 'user');
+    const assistant = snapshot.messages.find(message => message.turnId === response.turnId && message.role === 'assistant');
+    if (user) transcript.append(conversationMessageElement('你', user.text, 'user'));
+    transcript.append(conversationMessageElement(
+      response.agentId ?? `Turn ${response.turnSequence + 1}`,
+      assistant?.text ?? (response.error ? `失败：${response.error}` : replyProgressLabel(response.reply)),
+      assistant ? 'assistant' : response.error ? 'error' : 'pending',
+    ));
+  }
+  transcript.scrollTop = wasPinnedToBottom ? transcript.scrollHeight : previousScrollTop;
+}
+
+function conversationMessageElement(
+  author: string,
+  text: string,
+  role: 'user' | 'assistant' | 'pending' | 'error',
+): HTMLLIElement {
+  const item = document.createElement('li');
+  item.dataset.role = role;
+  const label = document.createElement('b');
+  label.textContent = author;
+  const body = document.createElement('span');
+  body.textContent = text;
+  item.append(label, body);
+  return item;
+}
+
+function renderConversationQueue(queue: HTMLElement, snapshot: ConversationSnapshot): void {
+  queue.replaceChildren();
+  for (const response of snapshot.responses.slice(-4)) {
+    const item = document.createElement('div');
+    item.className = 'conversation-panel__task';
+    item.dataset.presentation = response.presentation;
+    const agent = document.createElement('strong');
+    agent.textContent = `#${response.turnSequence + 1} ${response.agentId ?? '等待 Agent'}`;
+    const state = document.createElement('span');
+    const segment = response.segments[0];
+    state.textContent = [
+      `reply:${response.reply}`,
+      `speech:${segment?.speech ?? 'none'}`,
+      `expr:${segment?.performance ?? 'none'}`,
+      `play:${response.presentation}`,
+    ].join(' · ');
+    item.append(agent, state);
+    queue.append(item);
+  }
+}
+
+function replyProgressLabel(state: ConversationSnapshot['responses'][number]['reply']): string {
+  if (state === 'pending') return '等待分派…';
+  if (state === 'running') return '正在生成回复…';
+  if (state === 'sealed') return '文本已返回，准备语音与表情…';
+  if (state === 'cancelled') return '已取消';
+  return '回复失败';
+}
+
+function terminalConversationPresentation(
+  state: ConversationSnapshot['responses'][number]['presentation'],
+): boolean {
+  return state === 'completed' || state === 'failed' || state === 'cancelled';
+}
+
+function resourceDebugEnabled(): boolean {
+  const avatarIdle = runtime?.getSnapshot().state === 'idle';
+  const conversationBusy = conversationRuntime?.getSnapshot().responses
+    .some(response => !terminalConversationPresentation(response.presentation)) ?? false;
+  return avatarIdle && !conversationBusy;
+}
+
+function abortableDelay(milliseconds: number, signal: AbortSignal): Promise<void> {
+  return new Promise((resolve, reject) => {
+    if (signal.aborted) {
+      reject(signal.reason);
+      return;
+    }
+    const timer = setTimeout(() => {
+      signal.removeEventListener('abort', onAbort);
+      resolve();
+    }, milliseconds);
+    const onAbort = () => {
+      clearTimeout(timer);
+      reject(signal.reason);
+    };
+    signal.addEventListener('abort', onAbort, { once: true });
+  });
+}
+
+function raceWithAbort<T>(promise: Promise<T>, signal: AbortSignal): Promise<T> {
+  return new Promise((resolve, reject) => {
+    if (signal.aborted) {
+      reject(signal.reason);
+      return;
+    }
+    const onAbort = () => reject(signal.reason);
+    signal.addEventListener('abort', onAbort, { once: true });
+    void promise.then(resolve, reject).finally(() => signal.removeEventListener('abort', onAbort));
+  });
+}
+
 function openAvatarInteractionPanel(
   hitArea: string,
   point: { x: number; y: number } | undefined,
@@ -1968,7 +2453,7 @@ function registerDevelopmentUi(): void {
         id: 'asset-preview-isolation',
         label: '基准姿态锁定',
         checked: assetPreviewIsolation?.locked ?? false,
-        enabled: runtime?.getSnapshot().state === 'idle',
+        enabled: resourceDebugEnabled(),
         invoke: locked => setAssetPreviewIsolationLocked(locked),
       }],
     }),
@@ -1978,7 +2463,7 @@ function registerDevelopmentUi(): void {
     target: 'avatar',
     order: 10,
     build: () => {
-      const enabled = runtime?.getSnapshot().state === 'idle';
+      const enabled = resourceDebugEnabled();
       return {
         label: '表情资源',
         items: [
@@ -2005,7 +2490,7 @@ function registerDevelopmentUi(): void {
     target: 'avatar',
     order: 20,
     build: () => {
-      const enabled = runtime?.getSnapshot().state === 'idle';
+      const enabled = resourceDebugEnabled();
       return {
         label: '动作资源',
         items: assetPreviewCatalog.motions.map(resource => ({
@@ -2415,6 +2900,8 @@ function initializeDesktopInteraction(initialState: Awaited<ReturnType<NonNullab
   }, { once: true });
   const applyReadyState = (state: Awaited<ReturnType<NonNullable<typeof desktopShell>['ready']>>) => {
     applyPerformanceInferenceConfig(state.performanceInference);
+    conversationMaxAssistants = state.conversation.maxAssistants;
+    reconcileConversationAgentSlots();
     dragGesture.setHoldDelayMs(state.interaction.dragHoldDelayMs);
     document.body.dataset.dragHoldDelayMs = state.interaction.dragHoldDelayMs.toString();
     document.body.dataset.dragWindowApi = state.interaction.dragWindowApi;
