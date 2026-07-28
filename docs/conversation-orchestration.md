@@ -27,6 +27,19 @@ Desktop / Voice / Scene Interaction
 
 单 Agent 只作为 endpoint 不足或调度故障时的兼容降级路径，不作为高频桌面交互的目标形态。上下文、任务和提交协议从一开始按多 Agent 建模，目标架构验收必须覆盖至少两个 reply Agent 对不同 Turn 的并发任务、乱序返回、取消和唯一提交。当前多 Agent 主要用于降低连续输入的等待时间，并把提交后的上下文维护移出响应关键路径；表情和动作不再分派给外部 Agent，而由本地表现模型处理。它不能改变“规范上下文由应用持有、用户可见回复单写提交、实际呈现由应用仲裁”的边界。
 
+多 Agent 子系统按两层实现：
+
+1. `AgentConnectionManager` 是连接管理层，持有逻辑 Agent 实例、能力、健康状态、
+   endpoint 适配和并发额度。它只负责把任务交给可用执行者并返回带相关性的结果，不判断
+   Conversation 顺序，也不能调用 TTS、表现模型或播放器。
+2. `ConversationRuntime` 是回复任务编排层，持有 Ledger、Turn、reply task、ResponseSlot
+   和单写提交状态。它接收 Agent 结果、校验 attempt/generation，把 sealed 文本尽早扇出到
+   TTS 与本地表现准备队列，并以独立的顺序屏障推进正式提交和播放。
+
+从并发模型看，这是“多生产者、单提交者”：Agent、TTS 和本地表现推理都可以并行完成，
+但所有完成事实只能作为事件回到 `ConversationRuntime`。实现不依赖多个工作线程直接共享
+可变 ResponseSlot，也不允许后台任务自行推进 AvatarRuntime。
+
 这里的“应用持有”不表示把全部职责塞入现有 `AvatarRuntime`：
 
 - `ConversationRuntime` 是对话消息、上下文 revision、待处理 Turn 和 Agent Task 的唯一所有者；
@@ -47,7 +60,7 @@ DesktopCharRuntime（组合根）
 │  ├─ TurnScheduler
 │  ├─ ResponseQueueRuntime
 │  └─ ResponseCommitter
-├─ AgentTaskRuntime
+├─ AgentConnectionManager
 ├─ SceneRuntime
 └─ AvatarRuntime（角色领域门面）
    ├─ PerformanceRuntime
@@ -60,8 +73,9 @@ DesktopCharRuntime（组合根）
 跨领域协作必须通过有类型的事件完成。例如 `response.committed` 可以请求
 `AvatarRuntime` 接受一个 `PerformanceUnit`，`performance.completed` 再向
 `ConversationRuntime` 报告呈现完成；组合根不能直接修改任一子 Runtime 的内部字段。
-`AgentTaskRuntime` 是否最终并入 `ConversationRuntime`，取决于实现阶段是否需要独立恢复、
-并发限制和任务快照，但它不能拥有第二份对话记录。
+reply task、attempt 和 ResponseSlot 属于 `ConversationRuntime`；连接、进程和 endpoint
+并发属于 `AgentConnectionManager`。两者通过 `ReplyTask` 与 `ReplyResult` 契约协作，
+任何一层都不能拥有第二份对话记录。
 
 ## “完整上下文”的准确含义
 
@@ -313,33 +327,19 @@ sealed 一个 segment 后即可进入校验和 TTS 准备，不必等待整段�
 revision；它们不能修改已经提交或正在播放的回复。下一次对话读取最新已提交 revision，
 无需等待所有后台维护任务清空。
 
-## 外部 Agent 自注册
+## 托管 Reply 与独立 Task Manager
 
-DesktopChar 不应在核心配置中硬编码 Provider、模型名称、SDK 或密钥。外部 Agent
-自行管理这些实现细节，并向应用注册一个可访问的交互 endpoint 和能力描述：
+DesktopChar 的多 Turn Reply 执行面固定采用 managed 模式：一个由应用持有的 Codex App
+Server 为多个逻辑 reply endpoint 建立 ephemeral thread。它不注册用户已经打开的 CLI，
+也不依赖这些 CLI 的私有历史。`AgentConnectionManager` 管理的是应用内逻辑容量和请求
+关联，不再承担外部进程注册、租约或 callback 数据面。
 
-```ts
-interface AgentRegistration {
-  agentId: string;
-  instanceId: string;
-  endpoint: string;
-  protocolVersion: string;
-  capabilities: Array<'reply' | 'context-maintenance'>;
-  resultModes: Array<'complete' | 'streaming'>;
-  maxConcurrency: number;
-  latencyClass?: 'realtime' | 'interactive' | 'background';
-  costClass?: 'local' | 'low' | 'standard' | 'high';
-  leaseExpiresAt: string;
-}
-```
-
-Provider 与具体模型可以完全隐藏；`latencyClass`、`costClass` 也只是可选的调度提示。
-应用只依赖协议版本、能力、并发额度、健康状态和实际观测到的延迟/成功率进行路由。
-注册可以借用角色接入 MCP 作为控制面，但任务请求和流式结果继续走 Agent 提供的独立
-HTTP/流式 endpoint，不让 MCP 承担消息数据面或 Agent 生命周期管理。
-
-注册必须使用租约、实例 ID、健康检查和会话认证。Agent 断开或租约到期后，
-`AgentTaskRuntime` 将未完成任务重新路由；恢复连接的旧实例不能继续提交已失效任务。
+跨项目会话监控是独立业务域。Task Manager 可以作为非 Agent 的常驻服务，通过 Session
+Monitor 轮询原始会话状态，并向 DesktopChar 发送带稳定 `sessionId` 的原始事件。DesktopChar
+内部再分别调用 Router Agent 做无副作用的目标判断、调用 Char Agent 做角色化通知。Task
+Manager 只接受已解析完成的 `sessionId + text` 命令，不能自行理解“之前那个项目”等含糊
+目标。完整的用户可见时间线、二次确认和独立 Agent 配置见
+[Task Manager 与会话路由设计](task-manager-routing.md)。
 
 ### 当前多 Agent 范围
 
@@ -367,18 +367,22 @@ Agent，不读取完整 ConversationLedger，也不参与 ResponseCommitter。
 ## 响应队列与顺序提交
 
 `ResponseQueueRuntime` 是每个 conversation 的响应顺序、候选生命周期和提交资格的唯一
-所有者。它与 `AvatarRuntime` 中的呈现队列不同：
+所有者。准备队列和播放队列必须分离：前者允许推测并发，后者是单消费者顺序队列。它们
+都与 Agent 连接队列不同：
 
 ```text
 ResponseQueueRuntime
-  Agent 结果 -> 校验 -> 暂存/过时判定 -> 顺序提交
-                                      |
-                                      v
-                              PerformanceUnit
-                                      |
-                                      v
-Avatar PerformanceRuntime
-  TTS/气泡/动作准备 -> 顺序播放 -> 完成或中断
+  Agent 结果 -> 校验 -> sealed text
+                         |          |
+                         v          v
+                  TTS Prepare   Local Performance Prepare
+                         \          /
+                          ResponseAssembler
+                                 |
+                         顺序提交/播放屏障
+                                 |
+                                 v
+                  Avatar PerformanceRuntime（单消费者）
 ```
 
 每个未合并 Turn 创建一个稳定的响应槽位：
@@ -391,27 +395,36 @@ interface ResponseSlot {
   turnSequence: number;
   baseContextRevision: number;
   assemblyRevision: number;
-  state:
-    | 'waiting-text'
-    | 'text-ready'
-    | 'commit-blocked'
-    | 'committed'
-    | 'presenting'
-    | 'completed'
-    | 'superseded'
-    | 'expired'
-    | 'cancelled';
+  reply: 'pending' | 'running' | 'sealed' | 'failed' | 'cancelled';
+  commit: 'waiting' | 'blocked' | 'committed' | 'failed' | 'cancelled';
+  presentation: 'waiting' | 'queued' | 'presenting' | 'completed' | 'failed' | 'cancelled';
   segments: ResponseSegmentDraft[];
   expiresAt?: string;
   supersededBy?: string;
 }
+
+interface ResponseSegmentDraft {
+  segmentId: string;
+  segmentRevision: number;
+  text: string;
+  speech: 'none' | 'queued' | 'running' | 'ready' | 'failed' | 'cancelled';
+  performance: 'none' | 'queued' | 'running' | 'ready' | 'fallback' | 'cancelled';
+}
 ```
+
+reply、speech、performance、commit 和 presentation 是正交状态，不合并成一个包含所有组合
+的大枚举。这样后续 Turn 可以处于“文本已 sealed、TTS/表情均 ready、提交仍 blocked”，
+不会丢失真实并发状态。
 
 队列规则：
 
 - Agent 可并行处理多个 Turn，结果按 `responseId + turnId + turnSequence` 回到对应槽位；
-- 较晚 Turn 先得到文本时进入 `commit-blocked`，不能越过有效的前置槽位写 Ledger 或播放；
-- 队首获得合格的 sealed segment 后立即提交该响应并启动 TTS/呈现关键路径；
+- 每个文本 segment 一旦 sealed，立即并行进入 TTS 和 LocalPerformancePlanner 准备队列，
+  不等待前置 Turn 回复或播放完成；
+- 较晚 Turn 先得到文本时令 `commit = blocked`，但其受预算约束的准备任务仍可继续；它不能
+  越过有效的前置槽位写 Ledger 或播放；
+- 队首获得合格的 sealed segment 后立即顺序提交；播放还必须等待自身准备任务达到
+  ready/fallback 终态和前一 Presentation 完成；
 - 前置槽位只有进入 `committed`、`superseded`、`expired` 或 `cancelled` 终态，后续槽位才能推进；
 - 队首超时不能无限造成队头阻塞：用户 Turn 应产生可见失败/降级结果，主动 Turn 可以直接过期；
 - 过时丢弃只清理 Agent 候选、TTS 预生成物和表现增强，绝不删除原始用户消息；
@@ -420,10 +433,10 @@ interface ResponseSlot {
 - 已提交回复不因更晚回复到达而回滚；需要纠正时创建新的正式 Turn 和响应记录。
 
 文本是响应关键路径的最高优先级任务。调度器必须为 reply 能力保留并发额度，不能让
-context-maintenance 任务耗尽全部 Agent 槽位；本地表现模型也使用独立推理并发池。对于当前可提交的队首，
-文本通过校验后直接启动语音合成；对于仍被前置 Turn 阻塞的后续响应，可以受预算限制地
-提前合成，但只允许缓存音频，禁止提前播放。响应被 supersede、取消或过期时立即取消对应
-TTS；预生成必须有并发、内存和时长上限，避免推测任务反过来拖慢队首。
+context-maintenance 任务耗尽全部 Agent 槽位；本地表现模型使用独立任务池，但当它与 TTS
+共享 GPU 时仍由应用级资源预算器协调。准备优先级依次为：当前播放缺失资源、队首响应、
+队首后续 segment、下一 Turn、更远推测任务、context-maintenance。响应被 supersede、取消
+或过期时立即取消对应 TTS/表现任务；预生成必须有并发、音频缓存时长和显存上限。
 
 ## 响应组装、依赖与冻结点
 
@@ -502,8 +515,8 @@ sealed text segment
    ExpressionCatalog 和高置信关键词，立即得到合法目录候选；
 2. **本地小模型**：`segment.sealed` 后与 TTS 同时运行，尽早覆盖回退结果；允许首包播放后再
    平滑加入表情，并把动作安排到仍满足提前量的后续时点；
-3. **外部 Agent 增强**：只编排后续尚未冻结的 segment，或为长回复提出跨段动作计划；
-   迟到时不影响当前句。
+3. **本地延迟完善**：只把较晚返回的本地表现结果附加到后续尚未冻结的 segment；
+   迟到时不影响当前句，外部 reply Agent 不参与该路径。
 
 本地分析器不是另一个 Runtime，而是可预热、可替换的纯推理服务。目标验收预算设为：
 
@@ -705,8 +718,9 @@ Player 只报告 `buffering/started/progress/stalled/recovered/completed/failed`
 
 ## 下一阶段仍需明确的策略
 
-已经确定采用多 Turn reply 并发、外部 Agent 自注册、应用单写提交、本地表现规划，并将
-摘要/记忆作为可回滚的异步 Context patch。实现调度器前仍需依次决定：
+已经确定采用多 Turn reply 并发、managed Reply 执行面、应用单写提交、本地表现规划，并将
+摘要/记忆作为可回滚的异步 Context patch。最小内存调度框架已验证双 reply Agent、
+乱序结果提前准备和顺序播放；继续扩展前仍需依次决定：
 
 1. 如何判断后续输入与前置 Turn 语义独立、补充或纠正，以选择暂存、rebase 或 supersede；
 2. 新用户输入到达时，正在运行的 reply task 默认继续、取消重启还是降级为过期候选；

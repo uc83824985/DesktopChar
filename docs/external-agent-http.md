@@ -1,10 +1,16 @@
 # 外部 Agent 本地 HTTP 接入指南
 
-> 本文保留兼容 HTTP case。新 Agent 优先使用 DesktopChar 自身的角色接入 MCP Server；其动态启停、默认 `http://127.0.0.1:17374/mcp` endpoint、四个工具和重连语义见 [MCP 服务生命周期与角色接入接口](mcp-services.md)。HTTP 与角色接入 MCP 共用同一计划校验和 Runtime 命令入口。
+> 本文只说明外部调用方直接提交 `PerformancePlan` 的兼容 HTTP case。多 Agent 文本回复
+> 由 DesktopChar 托管的 Codex App Server 完成；Task Manager 与 CLI 会话路由另见
+> [Task Manager 与会话路由设计](task-manager-routing.md)。三者不要混用。
 
 ## 定位与边界
 
-该模式是独立的应用装配 case，不是新的 Avatar Runtime。外部 Agent 决定回复文本以及期望的表情/动作；DesktopChar 负责 TTS、真实播放时钟、口型、表情、动作和中断一致性。Agent 不得直接写 Live2D 参数，也不得把 TTS 完成当作角色表演完成。
+该模式是独立的直接角色控制/调试 case，不是新的 Avatar Runtime，也不是多 Agent reply
+数据面。调用方提交完整 `PerformancePlan` 时可以显式编写表情/动作 cue；DesktopChar 仍负责
+TTS、真实播放时钟、口型、能力校验和中断一致性。生产多 Agent 流程中的 reply Agent
+只返回文本，表情和动作由本地表现模型生成。任何调用方都不得直接写 Live2D 参数，也不得
+把 TTS 完成当作角色表演完成。
 
 ```text
 External Agent

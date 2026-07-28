@@ -156,6 +156,12 @@ Windows 通常对应 `%APPDATA%/DesktopChar/config.json`。程序只通过 Elect
     "defaultMarginDip": 24,
     "alwaysOnTop": true
   },
+  "conversation": {
+    "maxAssistants": 2,
+    "reply": {
+      "requestTimeoutMs": 180000
+    }
+  },
   "agentHttp": {
     "enabled": true,
     "host": "127.0.0.1",
@@ -180,10 +186,18 @@ Windows 通常对应 `%APPDATA%/DesktopChar/config.json`。程序只通过 Elect
 以下当前可调项已经进入应用 JSON：
 
 - 拖动长按延迟；
+- 对话逻辑助手并发上限 `conversation.maxAssistants`，允许 `1–8`，默认 `2`；
+- managed Reply Provider 请求超时 `conversation.reply.requestTimeoutMs`；所有逻辑助手
+  共享 DesktopChar 托管的单个 Codex App Server；
 - Agent HTTP 启停、loopback host 和端口；
 - 语音合成 MCP、角色接入 MCP、重连与内置本地语音合成参数；
 - 窗口默认尺寸、边距、置顶策略等用户偏好；
 - 当前角色资产 Profile 路径。
+
+Char Agent 与 Router Agent 的独立 Provider/Profile 仍是目标设计，不属于当前 schema。
+后续会采用“可复用 Provider Profile + Agent 角色绑定”，并以环境变量或 secret reference
+传递密钥；不能在应用 JSON 中硬编码 DeepSeek 或其他 Provider 凭据。目标示例和角色边界见
+[Task Manager 与会话路由设计](task-manager-routing.md)。
 
 `performanceInference.lifecycle` 接受 `external`、`managed` 字符串简写，或带启动和
 健康检查策略的对象。`external` 的动态开关只改变 Adapter 是否向现有 endpoint 发请求；
@@ -258,6 +272,8 @@ Settings UI --patch intent--> preload whitelist --> main validate
 
 - **立即应用**：拖动长按延迟和置顶策略。
 - **Runtime 空闲边界应用**：语音 Provider 切换。
+- **Conversation 空闲边界应用**：逻辑助手并发上限；不会中断正在生成或播放的 Turn。
+- **Provider 新请求边界应用**：Reply 请求超时；已经分派的请求继续使用原超时。
 - **先建立候选端口再替换**：Agent HTTP；新 listener 建立失败时旧 listener 继续服务。
 - **先关闭再重绑**：角色接入 MCP 的监听端口。
 - **仅启动时读取**：配置文件位置、开发服务器 URL、原生拖动后端诊断选择。

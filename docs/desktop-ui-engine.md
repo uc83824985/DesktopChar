@@ -193,11 +193,18 @@ registry.register({
 
 ### 左键角色交互面板
 
-`DomInteractionPanelHost` 是后续对话输入框和角色快捷交互的共享容器。当前第一阶段先注册
-Mao 原始表情/动作资源预览，用于完成语义标注前的前台审阅：
+`DomInteractionPanelHost` 是对话输入框和角色快捷交互的共享容器。顶部 view selector
+把内容分成 `角色对话` 和 `资源调试`：前者是默认 custom view，后者复用声明式
+Immediate UI registry，保留 Mao 原始表情/动作资源预览：
 
 - 左键命中角色可见像素后以 120ms 动画打开；
+- `角色对话` 提供多行输入、消息记录和 reply/speech/expression/presentation 队列状态，
+  输入只提交 `ConversationRuntime`，不由 DOM 直接调用 Agent；
+- 消息记录仅在用户原本位于底部时自动跟随新消息；用户向上滚动后，Runtime 状态刷新
+  保留原 scrollTop，不再强制置底；
+- `资源调试` 是二级页，原有资源按钮和基准姿态锁定实现不变；
 - 鼠标位于面板内时不会自动关闭，action 点击也不关闭；
+- 输入框保持焦点时，即使鼠标暂时离开面板也不会自动关闭；
 - 鼠标离开后等待 3000ms，再用 120ms 渐出；渐出完成前回到面板会复用原 DOM 并恢复；
 - 每次重新进入后，下一次离开重新获得完整 3000ms；
 - Host 使用不含回调函数的声明签名去重，视线 Runtime 的高频 snapshot 不会在
@@ -227,7 +234,10 @@ Renderer 资源审阅 capability，不修改 Avatar Runtime 的语义 emotion/ac
 - 手动资源按钮仍可使用。表情预览前先停 motion，动作预览前先恢复 Neutral；
   动作资源播放完后重新停在基准姿态；
 - 解锁恢复角色资源声明的原始 Idle 组。该状态属于开发期 Renderer 诊断能力，不进入
-  正式的 Avatar Runtime 领域状态，也不能成为应用业务逻辑的条件。
+正式的 Avatar Runtime 领域状态，也不能成为应用业务逻辑的条件。
+
+对话页的多 Agent 状态、Electron Codex App Server 接线、自动化入口，以及 preparation 目前仍是
+handoff 标记而非可复用合成产物的边界，见[多 Agent 回复流水线开发说明](multi-agent-development.md)。
 
 ### 已落地的应用 presenter：聊天气泡
 

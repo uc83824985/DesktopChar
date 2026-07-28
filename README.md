@@ -30,7 +30,12 @@ Live2D Motion 可通过受全局帧预算约束的真实 WebGL 采集器导出 C
 
 外部 Agent 可通过角色接入 MCP 或兼容的 loopback HTTP 控制面提交完整表演计划、发起中断并读取 Runtime 状态；HTTP 协议与 PowerShell 示例见 [外部 Agent 本地 HTTP 接入指南](docs/external-agent-http.md)。
 
-高频输入、主动聊天和多 Agent 的目标架构由应用统一持有 ConversationLedger、版本化 Persona、Turn/Task 调度和唯一 PerformanceQueue；设计缺陷约束及下一阶段决策项见 [对话上下文与任务编排设计](docs/conversation-orchestration.md)。
+高频输入、主动聊天和多 Agent 的目标架构由应用统一持有 ConversationLedger、版本化 Persona、Turn/Task 调度和唯一 PerformanceQueue。多 Agent 只跨 Turn 并行生成文本；sealed 文本尽早扇出到 TTS 与本地表情/动作准备队列，正式提交和播放仍保持单写顺序。生产 Reply 数据面采用 DesktopChar 托管的单个 Codex App Server，不连接或污染用户正在使用的 CLI 会话。总体约束见 [对话上下文与任务编排设计](docs/conversation-orchestration.md)，当前框架与测试方式见 [多 Agent 回复流水线开发说明](docs/multi-agent-development.md)。
+
+跨项目任务通知与回复路由是另一条链路：独立常驻 Task Manager 只监控会话并执行已经解析为
+`sessionId + text` 的命令；DesktopChar 内部的 Router Agent 负责候选会话判断，Char Agent
+负责角色化表达，两者允许绑定独立 Provider/Profile。边界、用户可见时间线和二次确认规则见
+[Task Manager 与会话路由设计](docs/task-manager-routing.md)。
 
 表情和已有 Live2D 动作的语义选择暂由本地表现推理端口完成，Qwen3.5-2B non-thinking 只是首个验证 Profile，不进入外部 Agent 关键路径；同协议模型只需替换 Profile，不同协议通过新 Adapter 接入。首个模型使用 OpenAI-compatible HTTP，不新增 MCP；`external` 只连接现有 endpoint，`managed` 由 Electron Supervisor 启停入口进程，两者复用同一 Adapter。边界与生命周期见 [本地表现模型接入设计](docs/performance-model-integration.md)，实现新 Provider 时遵循 [表现模型 Provider 接入指南](docs/performance-model-provider-integration.md)，官方模型配置阅读结论见 [Qwen3.5-2B 阅读记录](docs/references/qwen3.5-2b.md)。
 
@@ -81,6 +86,11 @@ npm run desktop
 
 这会构建并启动透明置顶角色，同时在系统通知区域创建后台托盘。单击托盘图标可切换角色显示，托盘右键可显示/隐藏、恢复位置或退出；角色自身右键菜单也提供“隐藏角色”。隐藏不会销毁 Runtime 或中断 TTS。最终渲染帧的透明像素保持点击穿透，所有实际可见像素均可左键点击或拖动；WebGL2 通过鼠标附近 `3×3` 像素的异步 PBO/fence 流水线更新选择状态。角色拖动直接移动原生窗口，窗口包围盒与显示位置同步更新。
 
+左键角色会打开交互面板。顶部默认选择“角色对话”，可连续输入多条消息来观察多个
+逻辑 reply Agent 的并行生成、后台准备和顺序播放；桌面端只维护一个隐藏的 Codex
+App Server 进程，不为每个助手启动 CLI 窗口。“资源调试”二级页保留原有
+表情、动作与基准姿态锁定按钮。详见[多 Agent 回复流水线开发说明](docs/multi-agent-development.md)。
+
 ## 验证
 
 ```bash
@@ -90,6 +100,7 @@ npm run diagnose:topmost
 npm audit --omit=dev
 npm run test:smoke
 npm run test:desktop-smoke
+npm run test:conversation-ui
 ```
 
-`test:smoke` 在 Windows Edge 中实际加载 Core、Mao 模型和纹理，并操作三个前台按钮；`test:desktop-smoke` 另外启动真实 Electron 窗口验证透明、置顶、穿透、拖动和 bounds 同步。首次启动前请阅读 [Live2D 资源与许可说明](docs/live2d-assets.md)。
+`test:smoke` 在 Windows Edge 中实际加载 Core、Mao 模型和纹理，并操作前台按钮；`test:desktop-smoke` 另外启动真实 Electron 窗口验证透明、置顶、穿透、拖动和 bounds 同步；`test:conversation-ui` 专门验证对话/资源分类、跨 Turn 提前准备和有序播放。首次启动前请阅读 [Live2D 资源与许可说明](docs/live2d-assets.md)。
