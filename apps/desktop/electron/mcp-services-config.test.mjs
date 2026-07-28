@@ -76,11 +76,17 @@ test('TTS config exposes the selected profile name from the resolved profile fil
   assert.equal(config.tts.timing.fallbackCharactersPerSecond, 5.56);
 });
 
-test('desktop config owns interaction, window, agent and character profile settings', () => {
+test('desktop config owns interaction, window, conversation, agent and character profile settings', () => {
   const config = normalizeDesktopConfig({
     version: 1,
     interaction: { drag: { holdDelayMs: 120 } },
     window: { defaultSize: { width: 512, height: 768 }, defaultMarginDip: 16, alwaysOnTop: false },
+    conversation: {
+      maxAssistants: 4,
+      reply: {
+        requestTimeoutMs: 90_000,
+      },
+    },
     agentHttp: { enabled: false, port: 0 },
     character: { profile: 'models/Test/DesktopChar.character.json' },
   }, {
@@ -90,6 +96,8 @@ test('desktop config owns interaction, window, agent and character profile setti
   assert.equal(config.interaction.drag.holdDelayMs, 120);
   assert.deepEqual(config.window.defaultSize, { width: 512, height: 768 });
   assert.equal(config.window.alwaysOnTop, false);
+  assert.equal(config.conversation.maxAssistants, 4);
+  assert.equal(config.conversation.reply.requestTimeoutMs, 90_000);
   assert.equal(config.agentHttp.enabled, false);
   assert.equal(config.agentHttp.port, 0);
   assert.equal(config.characterProfile.url, 'models/Test/DesktopChar.character.json');
@@ -111,6 +119,9 @@ test('desktop config path prefers the new bootstrap variable and validates appli
   );
   assert.throws(() => normalizeDesktopConfig({ version: 2 }), /version/);
   assert.throws(() => normalizeDesktopConfig({ interaction: { drag: { holdDelayMs: 1000 } } }), /0 to 999/);
+  assert.throws(() => normalizeDesktopConfig({ conversation: { maxAssistants: 0 } }), /1 to 8/);
+  assert.throws(() => normalizeDesktopConfig({ conversation: { maxAssistants: 9 } }), /1 to 8/);
+  assert.throws(() => normalizeDesktopConfig({ conversation: { reply: { lifecycle: 'external' } } }), /unknown field/);
   assert.throws(() => normalizeDesktopConfig({ interaction: { drag: { holdDelyMs: 100 } } }), /unknown field/);
   assert.throws(() => normalizeDesktopConfig({ agentHttp: { host: '0.0.0.0' } }), /loopback/);
   assert.throws(() => normalizeDesktopConfig({ character: { profile: '../escape.json' } }), /parent traversal/);

@@ -12,6 +12,10 @@ const channels = {
   windowCommand: 'avatar-window:command',
   agentCommand: 'agent-http:command',
   agentState: 'agent-http:state',
+  conversationReply: 'conversation:reply',
+  conversationCancel: 'conversation:cancel',
+  conversationAgentsGet: 'conversation:agents:get-state',
+  conversationAgentsState: 'conversation:agents:state',
   mcpListTools: 'tts-mcp:list-tools',
   mcpCallTool: 'tts-mcp:call-tool',
   mcpServicesGet: 'mcp-services:get-state',
@@ -34,6 +38,10 @@ contextBridge.exposeInMainWorld('desktopChar', {
   setPointerPresentation: presentation => ipcRenderer.send(channels.setPointerPresentation, presentation),
   runWindowCommand: command => ipcRenderer.send(channels.windowCommand, command),
   publishAgentState: state => ipcRenderer.send(channels.agentState, state),
+  requestConversationReply: (agentId, task) => ipcRenderer.invoke(channels.conversationReply, agentId, task),
+  cancelConversationReply: (agentId, taskId, attemptId) =>
+    ipcRenderer.send(channels.conversationCancel, agentId, taskId, attemptId),
+  getConversationAgentState: () => ipcRenderer.invoke(channels.conversationAgentsGet),
   listTtsMcpTools: () => ipcRenderer.invoke(channels.mcpListTools),
   callTtsMcpTool: (name, args, options) => ipcRenderer.invoke(channels.mcpCallTool, name, args, options),
   getMcpServicesState: () => ipcRenderer.invoke(channels.mcpServicesGet),
@@ -51,6 +59,11 @@ contextBridge.exposeInMainWorld('desktopChar', {
     const listener = (_event, state) => callback(state);
     ipcRenderer.on(channels.desktopConfigState, listener);
     return () => ipcRenderer.removeListener(channels.desktopConfigState, listener);
+  },
+  onConversationAgentState(callback) {
+    const listener = (_event, state) => callback(state);
+    ipcRenderer.on(channels.conversationAgentsState, listener);
+    return () => ipcRenderer.removeListener(channels.conversationAgentsState, listener);
   },
   onAgentCommand(callback) {
     const listener = (_event, command) => callback(command);

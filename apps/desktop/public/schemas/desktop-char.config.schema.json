@@ -36,6 +36,20 @@
         "alwaysOnTop": { "type": "boolean" }
       }
     },
+    "conversation": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "maxAssistants": { "type": "integer", "minimum": 1, "maximum": 8 },
+        "reply": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "requestTimeoutMs": { "type": "integer", "minimum": 1000, "maximum": 600000 }
+          }
+        }
+      }
+    },
     "agentHttp": {
       "type": "object",
       "additionalProperties": false,

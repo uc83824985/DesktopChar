@@ -40,6 +40,7 @@ export interface DesktopWindowState {
   };
   tray: { available: boolean; iconScaleFactors: number[] };
   interaction: DesktopInteractionConfig;
+  conversation: DesktopConversationConfig;
   character: DesktopCharacterConfig;
   performanceInference: DesktopPerformanceInferenceConfig;
   tts: DesktopTtsConfig;
@@ -53,6 +54,13 @@ export interface DesktopCharacterConfig {
 export interface DesktopInteractionConfig {
   dragHoldDelayMs: number;
   dragWindowApi: 'native-set-window-pos' | 'setBounds';
+}
+
+export interface DesktopConversationConfig {
+  maxAssistants: number;
+  reply: {
+    requestTimeoutMs: number;
+  };
 }
 
 export interface DesktopPerformanceInferenceConfig {
@@ -88,6 +96,12 @@ export interface DesktopCharApi {
   setPointerPresentation(presentation: PointerPresentation): void;
   runWindowCommand(command: DesktopWindowCommand): void;
   publishAgentState(state: AgentRuntimeState): void;
+  requestConversationReply(
+    agentId: string,
+    task: import('../../../../packages/conversation-runtime/src/index.ts').ReplyTask,
+  ): Promise<import('../../../../packages/conversation-runtime/src/index.ts').ReplyResult>;
+  cancelConversationReply(agentId: string, taskId: string, attemptId: string): void;
+  getConversationAgentState(): Promise<ConversationAgentState>;
   listTtsMcpTools(): Promise<McpToolDescriptor[]>;
   callTtsMcpTool(name: string, args: Record<string, unknown>, options?: { timeoutMs?: number }): Promise<McpCallToolResult>;
   getMcpServicesState(): Promise<McpServicesState>;
@@ -98,12 +112,37 @@ export interface DesktopCharApi {
   testAllMcpServices(): Promise<Record<McpServiceId, McpServiceTest>>;
   onMcpServicesState(callback: (state: McpServicesState) => void): () => void;
   onDesktopConfigState(callback: (state: DesktopWindowState) => void): () => void;
+  onConversationAgentState(callback: (state: ConversationAgentState) => void): () => void;
   onAgentCommand(callback: (command: AgentCommand) => void): () => void;
   onBoundsChanged(callback: (bounds: DesktopRectangle) => void): () => void;
   onCursorPoint(callback: (point: DesktopPoint) => void): () => void;
 }
 
 export type DesktopWindowCommand = 'restore-default-position' | 'hide-avatar' | 'show-avatar' | 'quit';
+
+export interface ConversationAgentActivityState {
+  activityId: string;
+  logicalAgentId: string;
+  providerKind: 'managed';
+  providerAgentId: string;
+  providerInstanceId: string;
+  state: 'running' | 'completed' | 'failed' | 'cancelled';
+  input: string;
+  reply: string | null;
+  startedAt: string;
+  completedAt: string | null;
+  error: string | null;
+}
+
+export interface ConversationAgentState {
+  maxAssistants: number;
+  managed: {
+    phase: 'standby' | 'active' | 'ready' | 'stopping';
+    active: number;
+    requestTimeoutMs: number;
+  };
+  activities: ConversationAgentActivityState[];
+}
 
 export type AgentCommand =
   | { type: 'performance.submit'; plan: import('../../../../packages/contracts/src/index.ts').PerformancePlan }

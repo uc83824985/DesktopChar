@@ -66,7 +66,7 @@ export async function loadDesktopConfig(options = {}) {
 
 export function normalizeDesktopConfig(fileConfig = {}, env = {}, options = {}) {
   if (!isRecord(fileConfig)) throw new TypeError('Desktop config root must be an object');
-  assertKnownKeys(fileConfig, ['$schema', 'version', 'interaction', 'window', 'agentHttp', 'character', 'performanceInference', 'ttsMcp', 'characterMcp'], 'Desktop config');
+  assertKnownKeys(fileConfig, ['$schema', 'version', 'interaction', 'window', 'conversation', 'agentHttp', 'character', 'performanceInference', 'ttsMcp', 'characterMcp'], 'Desktop config');
   if (fileConfig.$schema !== undefined) text(fileConfig.$schema, '$schema');
   const version = fileConfig.version ?? 1;
   if (version !== 1) throw new TypeError('Desktop config version must be 1');
@@ -78,6 +78,10 @@ export function normalizeDesktopConfig(fileConfig = {}, env = {}, options = {}) 
   assertKnownKeys(window, ['defaultSize', 'defaultMarginDip', 'alwaysOnTop'], 'window');
   const defaultSize = optionalRecord(window.defaultSize, 'window.defaultSize');
   assertKnownKeys(defaultSize, ['width', 'height'], 'window.defaultSize');
+  const conversation = optionalRecord(fileConfig.conversation, 'conversation');
+  assertKnownKeys(conversation, ['maxAssistants', 'reply'], 'conversation');
+  const conversationReply = optionalRecord(conversation.reply, 'conversation.reply');
+  assertKnownKeys(conversationReply, ['requestTimeoutMs'], 'conversation.reply');
   const agentHttp = optionalRecord(fileConfig.agentHttp, 'agentHttp');
   assertKnownKeys(agentHttp, ['enabled', 'host', 'port'], 'agentHttp');
   const characterProfile = optionalRecord(fileConfig.character, 'character');
@@ -198,6 +202,24 @@ export function normalizeDesktopConfig(fileConfig = {}, env = {}, options = {}) 
       },
       defaultMarginDip: nonNegative(window.defaultMarginDip, 24, 'window.defaultMarginDip'),
       alwaysOnTop: boolean(window.alwaysOnTop, true, 'window.alwaysOnTop'),
+    },
+    conversation: {
+      maxAssistants: boundedInteger(
+        conversation.maxAssistants,
+        2,
+        1,
+        8,
+        'conversation.maxAssistants',
+      ),
+      reply: {
+        requestTimeoutMs: boundedInteger(
+          conversationReply.requestTimeoutMs,
+          180_000,
+          1_000,
+          600_000,
+          'conversation.reply.requestTimeoutMs',
+        ),
+      },
     },
     agentHttp: {
       enabled: boolean(agentHttp.enabled, true, 'agentHttp.enabled'),

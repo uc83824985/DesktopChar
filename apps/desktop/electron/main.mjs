@@ -10,6 +10,8 @@ import {
   parseLoopbackDevUrl,
 } from './window-policy.mjs';
 import { createAgentHttpServer } from './agent-http-server.mjs';
+import { createCodexConversationReplyExecutor } from './codex-conversation-agent.mjs';
+import { createConversationReplyGateway } from './conversation-reply-gateway.mjs';
 import { createNativeCursorRefresh } from './cursor-refresh.mjs';
 import { createNativeWindowPosition } from './native-window-position.mjs';
 import { createNativeWindowTopmost } from './native-window-topmost.mjs';
@@ -51,6 +53,10 @@ const channels = {
   windowCommand: 'avatar-window:command',
   agentCommand: 'agent-http:command',
   agentState: 'agent-http:state',
+  conversationReply: 'conversation:reply',
+  conversationCancel: 'conversation:cancel',
+  conversationAgentsGet: 'conversation:agents:get-state',
+  conversationAgentsState: 'conversation:agents:state',
   mcpListTools: 'tts-mcp:list-tools',
   mcpCallTool: 'tts-mcp:call-tool',
   mcpServicesGet: 'mcp-services:get-state',
@@ -106,6 +112,23 @@ let agentServerSignature = '';
 let agentServerOperation = Promise.resolve();
 let desktopStarted = false;
 let agentRuntimeState = { ready: false, snapshot: null };
+const conversationReplyControllers = new Map();
+const conversationReplyGateway = createConversationReplyGateway({
+  config: desktopConfig.conversation,
+  createManagedExecutor(timeoutMs) {
+    return createCodexConversationReplyExecutor({
+      cwd: process.cwd(),
+      timeoutMs,
+      schemaPath: path.resolve(
+        app.isPackaged ? process.resourcesPath : process.cwd(),
+        'packages/conversation-runtime/src/codex-reply.schema.json',
+      ),
+    });
+  },
+  onStateChanged() {
+    publishConversationReplyState();
+  },
+});
 let pointerPresentation = { passthrough: true, cursor: 'default' };
 let pointerPresentationApplied = false;
 const nativeCursorRefresh = createNativeCursorRefresh();
@@ -223,8 +246,13 @@ const shutdown = createShutdownCoordinator({
     cursorTimer = undefined;
     if (cursorRefreshTimer) clearTimeout(cursorRefreshTimer);
     cursorRefreshTimer = undefined;
+    for (const controller of conversationReplyControllers.values()) {
+      controller.abort(new Error('DesktopChar is shutting down'));
+    }
+    conversationReplyControllers.clear();
     await Promise.allSettled([
       agentServer?.close().catch(() => {}),
+      conversationReplyGateway.close().catch(() => {}),
       mcpServices.close().catch(() => {}),
       performanceModel.close().catch(() => {}),
     ]);
@@ -672,6 +700,30 @@ function registerIpc() {
     agentServer?.updateState(state);
     mcpServices.updateAvatarState(state);
   });
+  ipcMain.handle(channels.conversationReply, async (event, agentId, task) => {
+    requireAvatarSender(event);
+    const key = conversationReplyKey(agentId, task);
+    if (conversationReplyControllers.has(key)) throw new Error(`Conversation reply is already active: ${key}`);
+    const controller = new AbortController();
+    conversationReplyControllers.set(key, controller);
+    try {
+      return await conversationReplyGateway.execute(agentId, task, controller.signal);
+    }
+    finally {
+      if (conversationReplyControllers.get(key) === controller) {
+        conversationReplyControllers.delete(key);
+      }
+    }
+  });
+  ipcMain.on(channels.conversationCancel, (event, agentId, taskId, attemptId) => {
+    requireAvatarSender(event);
+    const key = conversationReplyKey(agentId, { taskId, attemptId });
+    conversationReplyControllers.get(key)?.abort(new DOMException('Conversation reply cancelled', 'AbortError'));
+  });
+  ipcMain.handle(channels.conversationAgentsGet, event => {
+    requireAvatarSender(event);
+    return conversationReplyGateway.snapshot();
+  });
   ipcMain.handle(channels.mcpListTools, async event => {
     requireAvatarSender(event);
     const tools = await mcpServices.listTtsTools({ timeoutMs: 10_000 });
@@ -804,6 +856,12 @@ function windowState() {
       dragHoldDelayMs: desktopConfig.interaction.drag.holdDelayMs,
       dragWindowApi,
     },
+    conversation: {
+      maxAssistants: desktopConfig.conversation.maxAssistants,
+      reply: {
+        requestTimeoutMs: desktopConfig.conversation.reply.requestTimeoutMs,
+      },
+    },
     character: { profileUrl: desktopConfig.characterProfile.url },
     performanceInference: performanceModel.snapshot(),
     tts: mcpServices.currentTtsConfig(),
@@ -813,6 +871,7 @@ function windowState() {
 
 function applyDesktopConfig(config, metadata = {}) {
   desktopConfig = config;
+  conversationReplyGateway.configure(config.conversation);
   void performanceModel.replace(config.performanceInference).catch(error => {
     safeError('[performance-model] config apply failed', error);
   });
@@ -834,6 +893,11 @@ function applyDesktopConfig(config, metadata = {}) {
 function publishDesktopConfigState() {
   if (!avatarWindow || avatarWindow.isDestroyed()) return;
   avatarWindow.webContents.send(channels.desktopConfigState, windowState());
+}
+
+function publishConversationReplyState() {
+  if (!avatarWindow || avatarWindow.isDestroyed()) return;
+  avatarWindow.webContents.send(channels.conversationAgentsState, conversationReplyGateway.snapshot());
 }
 
 async function rebindAgentServer(reason) {
@@ -879,6 +943,14 @@ function requireAvatarSender(event) {
 function isAgentState(value) {
   return value && typeof value === 'object' && typeof value.ready === 'boolean'
     && (value.snapshot === null || (typeof value.snapshot === 'object' && typeof value.snapshot.state === 'string'));
+}
+
+function conversationReplyKey(agentId, task) {
+  if (typeof agentId !== 'string' || !agentId.trim()) throw new TypeError('Conversation reply agentId is invalid');
+  if (!task || typeof task !== 'object') throw new TypeError('Conversation reply task is invalid');
+  if (typeof task.taskId !== 'string' || !task.taskId.trim()) throw new TypeError('Conversation reply taskId is invalid');
+  if (typeof task.attemptId !== 'string' || !task.attemptId.trim()) throw new TypeError('Conversation reply attemptId is invalid');
+  return `${agentId}\u0000${task.taskId}\u0000${task.attemptId}`;
 }
 
 function serviceLogFacts(state) {
