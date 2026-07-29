@@ -25,7 +25,12 @@ Desktop / Voice / Scene Interaction
     Performance Queue -> TTS -> Player facts
 ```
 
-单 Agent 只作为 endpoint 不足或调度故障时的兼容降级路径，不作为高频桌面交互的目标形态。上下文、任务和提交协议从一开始按多 Agent 建模，目标架构验收必须覆盖至少两个 reply Agent 对不同 Turn 的并发任务、乱序返回、取消和唯一提交。当前多 Agent 主要用于降低连续输入的等待时间，并把提交后的上下文维护移出响应关键路径；表情和动作不再分派给外部 Agent，而由本地表现模型处理。它不能改变“规范上下文由应用持有、用户可见回复单写提交、实际呈现由应用仲裁”的边界。
+单 worker 只作为并发额度不足或调度故障时的降级，不作为高频桌面交互的目标形态。上下文、
+任务和提交协议按多个 Char Agent worker 建模，目标架构验收必须覆盖至少两个 worker 对不同
+Turn 的并发任务、乱序返回、取消和唯一提交。所有 worker 都服务同一个桌面角色，获得完整且
+同版本的 Persona；并行不表示不同角色、不同人格或同一 Turn 的多候选仲裁。表情和动作继续
+由本地表现模型处理。它不能改变“规范上下文由应用持有、用户可见回复单写提交、实际呈现由
+应用仲裁”的边界。
 
 多 Agent 子系统按两层实现：
 
@@ -73,9 +78,11 @@ DesktopCharRuntime（组合根）
 跨领域协作必须通过有类型的事件完成。例如 `response.committed` 可以请求
 `AvatarRuntime` 接受一个 `PerformanceUnit`，`performance.completed` 再向
 `ConversationRuntime` 报告呈现完成；组合根不能直接修改任一子 Runtime 的内部字段。
-reply task、attempt 和 ResponseSlot 属于 `ConversationRuntime`；连接、进程和 endpoint
+Char reply task、attempt 和 ResponseSlot 属于 `ConversationRuntime`；连接、进程和 endpoint
 并发属于 `AgentConnectionManager`。两者通过 `ReplyTask` 与 `ReplyResult` 契约协作，
-任何一层都不能拥有第二份对话记录。
+任何一层都不能拥有第二份对话记录。`ReplyTask/ReplyResult` 是当前代码的过渡命名，目标
+契约改为携带 Persona revision 的 `CharReplyTask/CharReplyResult`，Runtime 内部的 reply
+状态名仍可保留。
 
 ## “完整上下文”的准确含义
 
@@ -188,6 +195,12 @@ interface AgentContextEnvelope {
 }
 ```
 
+`AgentContextEnvelope` 保留为后续通用 ContextCompiler 和多能力 Agent 的参考目标，不是首版
+Char Provider 的直接输入契约。首版使用 `CharReplyTask.context: CharContextEnvelope` 跑通
+流程；该角色专用 Envelope 只封装当前实际需要的 Persona、消息、焦点消息与 revision。后续
+若引入 summary、scene、memory 或统一上下文编译，再参考本节重构其内部结构。新增信息不再
+平铺到 `CharReplyTask` 外层。
+
 这里的“规范”包含三个层次：
 
 - Envelope schema 规定字段、revision、来源和可信级别；
@@ -195,12 +208,22 @@ interface AgentContextEnvelope {
 - 各 Provider Adapter 只负责把相同语义映射到其支持的 system/developer/user 角色或协议字段。
 
 用户消息始终保留为不可信的 `user` 内容。用户文本或旧摘要中出现的“修改系统设定”等文字，
-不能在压缩或 Adapter 映射时晋升为应用规则或 Persona。Agent 结果必须回传
-`turnId`、`taskId`、相关 revision 和 `injectionHash`，由 `ResponseCommitter`
-判断它是否仍可接受。不同 Agent 可以获得不同的最小投影，但核心 Persona 与应用协议必须来自
-同一 revision，不能依赖各 Agent 私有的隐藏会话维持角色设定。
+不能在压缩或 Adapter 映射时晋升为应用规则或 Persona。未来实际采用通用
+`AgentContextEnvelope` 的 Agent 结果才要求关联 `injectionHash`；首版 Char 结果只回传
+task/attempt/generation、`baseContextRevision` 与 `personaRevision`。不同 Agent 可以获得
+不同的最小投影，但核心 Persona 与应用协议必须来自同一 revision，不能依赖各 Agent 私有的
+隐藏会话维持角色设定。
 
 ## 用户输入与自动合并
+
+所有原始用户输入和 Task Manager 事件先形成不可变 `InteractionMessage`，再由
+`RouteCoordinator` 处理。原文拥有独立 `messageId`；Router 写入单独的 RouteRecord，Char
+Agent 生成的新消息通过 `references` 引用原始消息并附加派生信息，不覆盖原文。
+
+桌面 UI 提供 `Auto / Char / Session 1/2/3...` 目标选择：显式 Char 或 session 走直连，
+只有 Auto 调用 Router Agent。路由到角色后才投影为 ConversationRuntime 的用户 Turn；
+路由到 session 后生成 `TaskCommand`，不会把外部命令伪装成角色对话消息。详细结构与 session
+列表来源见 [Task Manager 与会话路由设计](task-manager-routing.md)。
 
 前台输入始终立即接受。自动合并只改变任务边界，不改变原始消息：
 
@@ -238,8 +261,9 @@ Turn
 AgentTask
   id
   turnId
-  agentId
+  capability: char-reply
   contextRevision
+  personaRevision
   attempt
   idempotencyKey
   state
@@ -253,46 +277,48 @@ AgentTask
 - `coveredMessageIds`；
 - deadline、取消信号和幂等键。
 
-Agent 返回的候选结果必须回传这些关联信息。基于旧 Persona、错误 Turn、已取消 generation 或不可接受 Context revision 的结果不能进入呈现队列。
+Char Agent 返回的结果必须回传这些关联信息。基于旧 Persona、错误 Turn、已取消 generation
+或超过 deadline 的结果不能进入呈现队列。任务运行期间 Ledger 因后续用户输入产生新
+revision，不会单独使旧任务失效：只要任务仍对应原 Turn、Persona 未改变、未取消且未超时，
+结果可以继续基于派发时冻结的 `baseContextRevision` 提交。
 
 多 Agent 需要区分两个互不排斥的并发维度：
 
 ```text
 Turn 级并发
-  ├─ Turn-7 -> 一个可独立完成回复的 Agent
-  ├─ Turn-8 -> 另一个可独立完成回复的 Agent
-  └─ Turn-9 -> 第三个可独立完成回复的 Agent
+  ├─ Turn-7 -> Char Worker A
+  ├─ Turn-8 -> Char Worker B
+  └─ Turn-9 -> Char Worker C
 
 单 Turn 内任务图
   └─ Turn-7
-      ├─ reply Agent（同步主干）
-      ├─ LocalPerformancePlanner（本地限时增强）
-      └─ context-maintenance Agent（提交后异步）
+      ├─ Char Agent（同步主干）
+      └─ LocalPerformancePlanner（本地限时增强）
 ```
 
 快速连续输入首先依赖 Turn 级并发：每条未被合并的输入都可以在自己的 Context
-revision 上立即分派，不必等待前一个 Agent 完成。单 Turn 内再按复杂度选择完整 Agent、
-专用 Agent 或本地规则，不能因为采用功能分工而重新把整个 conversation 串行化。
+revision 上立即分派，不必等待前一个 Char Agent 完成。本阶段不引入专家 Agent 或同一
+Turn 多候选；单 Turn 的用户可见文本只由一个 Char Agent 生成。
 
 同一 conversation 的多个 Turn 可以并行计算，但正式提交默认遵守用户输入顺序。较晚 Turn
-先完成时可暂存候选，不能越过仍可能影响其语义的前置 Turn。若后续输入明显补充或纠正前一条，
-调度器可以合并、supersede 或在前置结果提交后 rebase；若它们语义独立，则保留独立响应。
-因此“并行计算”不等于“乱序写入 Ledger 或乱序播放”。
+先完成时可暂存，不能越过前置 Turn 写 Ledger 或播放。新输入默认不会自动取消或 rebase
+正在运行的旧 Turn；只有明确取消、显式 supersede、Persona 更新或 deadline 到期才使结果
+失效。因此“并行计算”不等于“乱序写入 Ledger 或乱序播放”。
 
 调度器至少需要处理：
 
 - 用户任务优先于随机主动聊天；
-- 截止时间、超时、重试与 endpoint 退避；
+- 截止时间与超时；重试和 endpoint 退避属于后续策略；
 - 每个 Agent 的并发上限；
 - 全局和单 conversation 的 backpressure；
-- 相同 Turn 的幂等重试；
+- 为未来相同 Turn 重试预留稳定关联字段，但首版不执行重试；
 - 候选结果晚到、乱序和重复；
-- Agent 断开后的重新分派；
+- Agent 断开后的失败收敛；重新分派属于后续策略；
 - 长任务不得永久饿死后续高优先级输入。
 
-默认采用“每个 Turn 一个 reply task、多 Turn 并行”的调度。相同 Turn 的重复调用仅用于
-失败重试或 endpoint 迁移，不默认并行生成多个候选，也不引入 Arbiter。提交后的
-context-maintenance task 可以批处理多个已提交 Turn，但任何结果都不能绕过单一提交入口。
+默认采用“每个 Turn 一个 Char reply task、多 Turn 并行”的调度。相同 Turn 的重复调用仅用于
+未来失败重试或 endpoint 迁移；首版不进行重复调用，不默认并行生成多个候选，也不引入
+Arbiter。提交后的摘要/记忆维护留作后续独立阶段，本轮不实现专家 Agent。
 
 ## 同步、限时增强与异步任务
 
@@ -327,38 +353,39 @@ sealed 一个 segment 后即可进入校验和 TTS 准备，不必等待整段�
 revision；它们不能修改已经提交或正在播放的回复。下一次对话读取最新已提交 revision，
 无需等待所有后台维护任务清空。
 
-## 托管 Reply 与独立 Task Manager
+## 托管 Char Agent 与独立 Task Manager
 
-DesktopChar 的多 Turn Reply 执行面固定采用 managed 模式：一个由应用持有的 Codex App
-Server 为多个逻辑 reply endpoint 建立 ephemeral thread。它不注册用户已经打开的 CLI，
+DesktopChar 的多 Turn Char 执行面固定采用 managed 模式：一个由应用持有的 Codex App
+Server 为多个逻辑 Char worker 建立 ephemeral thread。它不注册用户已经打开的 CLI，
 也不依赖这些 CLI 的私有历史。`AgentConnectionManager` 管理的是应用内逻辑容量和请求
 关联，不再承担外部进程注册、租约或 callback 数据面。
 
 跨项目会话监控是独立业务域。Task Manager 可以作为非 Agent 的常驻服务，通过 Session
-Monitor 轮询原始会话状态，并向 DesktopChar 发送带稳定 `sessionId` 的原始事件。DesktopChar
-内部再分别调用 Router Agent 做无副作用的目标判断、调用 Char Agent 做角色化通知。Task
+ Monitor 轮询原始会话状态，并向 DesktopChar 发送带稳定 `sessionId` 的有界事实事件。DesktopChar
+内部使用 Router Agent 在角色与具体 session 之间做无副作用的目标判断，并调用同一
+Char Agent Pool 生成普通角色回复或角色化任务通知。Task
 Manager 只接受已解析完成的 `sessionId + text` 命令，不能自行理解“之前那个项目”等含糊
 目标。完整的用户可见时间线、二次确认和独立 Agent 配置见
 [Task Manager 与会话路由设计](task-manager-routing.md)。
 
-### 当前多 Agent 范围
+### 当前实现与目标命名
 
-同步 lane 只保留 `reply`：
+当前代码仍以 `ReplyAgentEndpoint/ReplyTask/ReplyResult` 命名；目标实现直接收窄为
+`CharAgentEndpoint/CharReplyTask/CharReplyResult`，不是在无角色 Reply 之后增加后处理。
+同步 lane 只保留单角色 `char-reply`：
 
-- 一个 Turn 默认只创建一个 reply task；
-- 多个 Turn 可以分派给不同 reply Agent 并行生成；
-- reply Agent 只返回文本 segment，不返回可直接执行的表情、动作或音频；
-- 同一 Turn 只有在超时、断开或明确失败后才迁移 endpoint，幂等键保持不变；
-- 旧 endpoint 晚到的结果由 task attempt 和 lease 校验丢弃。
+- 一个 Turn 默认只创建一个 Char reply task；
+- 多个 Turn 可以分派给同一角色的不同 Char worker 并行生成；
+- Char Agent 从任务开始就接收完整 Persona 与对话快照，只返回文本 segment，不返回可直接
+  执行的表情、动作或音频；
+- 首版超时、断开或明确失败后不迁移 endpoint、不重试，由应用在原 ResponseSlot sealed
+  预设的角色化 `application-fallback` segment；
+- 旧 endpoint 晚到的结果由 task attempt、generation、Persona revision 和 deadline 校验
+  丢弃；当前 Ledger revision 变大本身不构成拒绝理由。
 
-异步 lane 只保留 `context-maintenance`：
-
-- 输入仅来自已经提交的 Ledger 记录，不读取未采用 reply 候选；
-- 可以提出 SummaryRecord、长期记忆和关系事实的 Context patch；
-- 可以批量覆盖多个已提交 Turn，并使用低优先级、独立并发额度；
-- patch 经过 base revision、覆盖范围、来源哈希和 CAS 校验后才提交；
-- context patch 到达会生成新 revision，但不自动取消已经运行的 reply task；只有 Persona、
-  安全协议或当前 Turn 直接依赖事实发生不兼容变化时才要求 rebase。
+`application-fallback` 不是 Agent 输出。它保留原错误作为诊断，使用应用/Persona Profile
+提供的固定短文本，并继续进入正常的 TTS、表现准备、顺序提交和播放路径。这样失败的前置
+Turn 不会永久阻塞后续已准备回复；智能重试、迁移和隐藏失败的策略后续再设计。
 
 表情/动作由 [本地表现模型接入设计](performance-model-integration.md) 的
 `LocalPerformancePlanner` 完成。它使用独立本地推理 endpoint 和资源预算，不注册为
@@ -428,14 +455,14 @@ reply、speech、performance、commit 和 presentation 是正交状态，不合�
 - 前置槽位只有进入 `committed`、`superseded`、`expired` 或 `cancelled` 终态，后续槽位才能推进；
 - 队首超时不能无限造成队头阻塞：用户 Turn 应产生可见失败/降级结果，主动 Turn 可以直接过期；
 - 过时丢弃只清理 Agent 候选、TTS 预生成物和表现增强，绝不删除原始用户消息；
-- 后续 Turn 若补充或纠正前一 Turn，可以显式 `supersede`、合并覆盖范围或在最新 Context
-  revision 上重新分派，不能仅凭返回先后猜测；
+- 后续 Turn 默认独立并行；只有用户或上层策略明确 `supersede` 时才取消前一 Turn，不能
+  仅凭返回先后或 revision 增长猜测；
 - 已提交回复不因更晚回复到达而回滚；需要纠正时创建新的正式 Turn 和响应记录。
 
-文本是响应关键路径的最高优先级任务。调度器必须为 reply 能力保留并发额度，不能让
-context-maintenance 任务耗尽全部 Agent 槽位；本地表现模型使用独立任务池，但当它与 TTS
+文本是响应关键路径的最高优先级任务。调度器必须为 Char reply 能力保留并发额度；本地表现
+模型使用独立任务池，但当它与 TTS
 共享 GPU 时仍由应用级资源预算器协调。准备优先级依次为：当前播放缺失资源、队首响应、
-队首后续 segment、下一 Turn、更远推测任务、context-maintenance。响应被 supersede、取消
+队首后续 segment、下一 Turn、更远推测任务。响应被 supersede、取消
 或过期时立即取消对应 TTS/表现任务；预生成必须有并发、音频缓存时长和显存上限。
 
 ## 响应组装、依赖与冻结点
@@ -457,7 +484,7 @@ reply segment sealed
           PerformanceRuntime
 ```
 
-外部 reply Agent 不负责表情/动作。`LocalPerformancePlanner` 在 `segment.sealed`
+Char Agent 不负责表情/动作。`LocalPerformancePlanner` 在 `segment.sealed`
 后获得真实 segment 文本、Persona performance projection、Scene Projection 和
 Avatar capability projection，再进行段内编排。它只接收表现所需的最小投影，不复制
 完整会话。
@@ -516,7 +543,7 @@ sealed text segment
 2. **本地小模型**：`segment.sealed` 后与 TTS 同时运行，尽早覆盖回退结果；允许首包播放后再
    平滑加入表情，并把动作安排到仍满足提前量的后续时点；
 3. **本地延迟完善**：只把较晚返回的本地表现结果附加到后续尚未冻结的 segment；
-   迟到时不影响当前句，外部 reply Agent 不参与该路径。
+   迟到时不影响当前句，Char Agent 不参与该表现选择路径。
 
 本地分析器不是另一个 Runtime，而是可预热、可替换的纯推理服务。目标验收预算设为：
 
@@ -645,9 +672,11 @@ interface LocalPerformanceSuggestion {
 - 情绪、动作与语音表现提示；
 - `personaRevision` 与内容摘要/hash。
 
-每个 Agent 得到相同 revision 的核心 Persona；不同职责 Agent 可以获得不同的任务指令和最小上下文投影，但不得各自保存无法回收的角色真相。Persona 更新后，旧 revision 的未提交结果必须重新校验、重新生成或丢弃。
+每个并行 Char worker 得到同一 revision 的完整核心 Persona，不得各自保存无法回收的角色
+真相。Router 只得到完成目标判断所需的用户可见路由上下文，不生成用户可见内容。Persona
+更新后，旧 revision 的未提交 Char 结果必须重新生成或丢弃。
 
-如果多个 Agent 并行产生用户可见候选，系统必须遵守：
+如果多个 Char worker 为不同 Turn 并行生成，系统必须遵守：
 
 ```text
 many readers / many workers / one committed reply
@@ -704,29 +733,41 @@ Player 只报告 `buffering/started/progress/stalled/recovered/completed/failed`
 | 自动合并改变用户原话 | 原始消息不可变，合并只产生 `coveredMessageIds` |
 | 并行 Agent 覆盖正式历史 | 所有结果经过单一 ResponseCommitter |
 | Agent 私有记忆导致人格漂移 | Persona、摘要和长期记忆由应用版本化持有 |
-| 多 Agent 同时发送语音 | reply Agent 只返回文本 segment，应用持有唯一 PerformanceQueue |
+| 多 Char worker 同时发送语音 | Char Agent 只返回文本 segment，应用持有唯一 PerformanceQueue |
 | 主动聊天抢占用户输入 | 主动 Turn 低优先级、带 TTL，并受 pending-user/cooldown 门控 |
 | 只序列化音频导致动作和气泡错位 | 队列单位是完整 PerformanceUnit |
 | 旧任务晚到污染新对话 | 校验 Turn、Context、Persona revision 和 generation |
 | 重试造成重复回复 | request/task/turn 使用稳定幂等键 |
 | 向所有 Agent 泄露全部上下文 | ContextCompiler 按角色、能力和权限最小化投影 |
-| Turn 并行过多反而拖慢关键回复 | reply lane 设置并发预算、deadline、队首优先和 endpoint backpressure |
+| Turn 并行过多反而拖慢关键回复 | Char lane 设置并发预算、deadline、队首优先和 endpoint backpressure |
 | 慢速前置 Turn 永久阻塞后续响应 | ResponseQueue 设置 deadline；用户 Turn 显式降级，主动 Turn 可过期 |
 | 后续回复提前播放导致上下文错序 | 允许提前校验/TTS，但只有队首可正式提交和播放 |
 | 迟到表情或动作改写已发生表现 | segment revision、冻结点、lookahead 与 PerformanceRuntime 校验 |
 | 预生成 TTS 抢占当前响应资源 | 队首优先，并限制推测合成的并发、缓存和可取消生命周期 |
 
-## 下一阶段仍需明确的策略
+## 实现前结论与验收项
 
-已经确定采用多 Turn reply 并发、managed Reply 执行面、应用单写提交、本地表现规划，并将
-摘要/记忆作为可回滚的异步 Context patch。最小内存调度框架已验证双 reply Agent、
-乱序结果提前准备和顺序播放；继续扩展前仍需依次决定：
+已经确定采用单角色、多 Turn Char worker 并发、managed Char 执行面、应用单写提交和本地
+表现规划。最小内存调度框架已验证双 worker、乱序结果提前准备和顺序播放；新用户输入默认
+不会让已运行 Turn 失效。并发配置已经确定使用 `agentRoles.char.maxConcurrency`；当前
+`conversation.maxAssistants` 在 Agent Role schema 落地时一次性迁移，不保留兼容别名。
+进入实现前已经定案：
 
-1. 如何判断后续输入与前置 Turn 语义独立、补充或纠正，以选择暂存、rebase 或 supersede；
-2. 新用户输入到达时，正在运行的 reply task 默认继续、取消重启还是降级为过期候选；
-3. Persona 合规采用结构校验、规则评分还是提交前轻量复核；
-4. endpoint 自报的并发/延迟提示与应用实际观测指标如何共同进入 reply 路由；
-5. RTX 3070 上 TTS、LocalPerformancePlanner 和推测 TTS 的并发、显存与 lookahead 预算；
-6. 后台 Context patch 的冲突合并、人工纠正和数据保留策略。
+1. Auto 模式下，单个候选同时超过可配置的最低置信度与领先幅度时直接提交；只有多个合理
+   候选接近时二次确认。Router 调用或结构校验失败直接向前台报错，不回退 Char、不产生
+   session 副作用；`no-match` 提示用户改写输入或显式选择目标。
+2. 首版使用嵌套 `CharReplyTask.context: CharContextEnvelope`；通用
+   `AgentContextEnvelope` 仅保留为后续重构参考。新增 summary、scene 等信息不再平铺到
+   `CharReplyTask`。
+3. Char Agent MCP 固定为初期测试 Adapter，不进入生产 Provider 路线；首版契约完成后不再
+   扩展能力，只保留必要的兼容修复。
+
+首版 Char 失败策略已经确定为“不重试，由应用提交预设角色通知并放行后续 Turn”。Task
+Manager 持久化也不阻塞跑通：首版仅保证单进程生命周期内的 cursor/ack、submission
+generation 和命令幂等，跨重启恢复与持久化格式标记为后续待设计。
+
+仍需通过实际目标 CLI 验证 Session Monitor 在 `active` 状态下调用 `/input` 究竟表示运行中
+补充还是下一轮排队，并确认现有提示符启发式是否足以判断最后一次 submission 完成。这是
+实现验收项，不再阻塞领域接口和模块拆分。
 
 在这些策略确定前，不实现让多个 Agent 直接调用播放器或并发写正式 ConversationLedger 的路径。

@@ -28,13 +28,21 @@ Electron 壳层在领域链路之外：main 独占原生窗口位置、包围盒
 
 应用接入层包含语音合成 MCP Client（技术标识 TTS）、角色接入 MCP Server（技术标识 `characterMcp`）和模型无关的表现推理端口。Electron main 的服务控制器独占连接、配置 revision、热重载与重连状态；角色接入 MCP 和兼容 Agent HTTP 最终只向 renderer 发送相同的白名单命令。表现规划 v2 已拆成领域 `ExpressionCatalogPlanningAdapter` 与通用 `PerformanceModelTransport`：前者只处理 affect/ranked logical key，后者才处理 OpenAI-compatible HTTP。Qwen、llama.cpp、规则实现和未来进程内模型均不能看到角色 binding；旧角色保留 v1 emotion/action。完整边界见 [本地表现模型接入设计](performance-model-integration.md) 和 [角色动态表情目录与选择设计](expression-catalog.md)，MCP 生命周期与工具见 [MCP 服务生命周期与角色接入接口](mcp-services.md)。
 
-面向高频桌面交互和后续多 Agent 接入，目标架构在 Avatar Runtime 上游增加独立 `ConversationRuntime`，并以 `AgentConnectionManager` 管理逻辑 Agent 实例和容量：应用以不可变 Ledger、Context revision、版本化 Persona 和 Turn/Task 状态持有规范上下文；多个 reply Agent 只为不同 Turn 并发生成文本，sealed 文本立即扇出到 TTS 与本地表现准备队列；提交后的 context-maintenance Agent 异步提出摘要/记忆 patch。当前 Reply 执行面由一个 managed Codex App Server 承载，不注册外部 CLI。所有用户可见回复经过单一提交入口，Avatar/Presentation Runtime 持有覆盖文本、气泡、语音、情绪和动作的唯一播放队列。自动合并只能合并任务覆盖范围，不能改写原始消息；随机主动聊天也是受优先级、冷却和 TTL 约束的应用 Turn。完整边界见 [对话上下文与任务编排设计](conversation-orchestration.md)，实现入口见 [多 Agent 回复流水线开发说明](multi-agent-development.md)。
+面向高频桌面交互，目标架构在 Avatar Runtime 上游增加独立 `ConversationRuntime`，并以 `AgentConnectionManager` 管理单角色 Char Agent worker 和容量：应用以不可变 Ledger、Context revision、版本化 Persona 和 Turn/Task 状态持有规范上下文；多个 worker 使用同一完整 Persona，只为不同 Turn 并发生成文本，sealed 文本立即扇出到 TTS 与本地表现准备队列。新输入增加 Ledger revision 不自动取消已运行 Turn；Persona 更新、明确取消、generation 失效或 deadline 到期才拒绝结果。当前代码仍使用 Reply 命名，目标直接收窄为 Char Agent 契约；执行面由一个 managed Codex App Server 承载，不注册外部 CLI。所有用户可见回复经过单一提交入口，Avatar/Presentation Runtime 持有覆盖文本、气泡、语音、情绪和动作的唯一播放队列。完整边界见 [对话上下文与任务编排设计](conversation-orchestration.md)，实现入口见 [单角色多 Agent 回复流水线开发说明](multi-agent-development.md)。
 
-跨项目 CLI 任务管理不属于上述 Reply 执行面。独立 Task Manager 通过 Session Monitor
-读取原始会话状态并只执行明确的 `sessionId + text` 命令；DesktopChar 维护用户可见时间线，
-以无副作用 Router Agent 选择候选会话，再用独立 Char Agent 生成角色化通知。两个 Agent
-角色允许绑定不同 Provider/Profile，具体边界见
+Router 当前只在 `character` 与具体 `task-session` 之间选择：角色目标进入可并行的 Char
+Agent Pool；session 目标由独立 Task Manager 默认立即提交。对同一 session 的新补充会递增
+submission generation，完成通知只采用最后一次提交后恢复 `waiting_input` 的最终稳定结果；
+首版不实现等待上一轮完成再发送的串行策略。Task Manager 通过 Session Monitor 读取原始
+会话状态并只执行明确的 `sessionId + text` 命令；普通角色回复和任务通知都由同一个 Char
+Agent 角色生成。Router 与 Char 允许绑定不同 Provider/Profile，具体边界见
 [Task Manager 与会话路由设计](task-manager-routing.md)。
+
+原始用户输入和 Task Manager 有界事实事件先保存为不可变 `InteractionMessage`，Router/Char
+通过引用产生 RouteRecord 和派生消息。
+桌面 UI 提供 `Auto / Char / 已连接 Session` 半自动目标选择；显式目标直连，Auto 才调用
+Router Agent。用户可见上下文区分 `showing` 与 `shown`：正在渐进显示的真实文本前缀已经
+参与 Router，尚未显示的完整正文不能进入其上下文。
 
 ## 运行链路
 
@@ -133,7 +141,7 @@ conversation-runtime -> no domain package dependency
 4. 已完成角色级 GazeProfile，并对 Mao 的纵向非对称表现做运行时校准。
 5. 已完成 Electron 透明窗口、安全 preload、透明区穿透、角色点击/拖动和 bounds 同步。
 6. 已接入可动态启停的语音合成 MCP Client、角色接入 MCP Server 与兼容 Agent HTTP；后续 ASR/真实 Agent 仍只通过 Event/Effect 端口连接。
-7. 已实现首个内存多 Agent 框架：`AgentConnectionManager` 管理逻辑 reply 实例与并发额度，`ConversationRuntime` 支持多 Turn 并行、sealed 文本提前扇出 TTS/表现准备、顺序提交和单消费者播放。Electron 已提供左键“角色对话”前台和安全 IPC；`ConversationReplyGateway` 使用 managed 单 Codex App Server，前台可观察 ReplyTask 输入/回复审计。`conversation.maxAssistants` 控制 1–8 个逻辑并发槽。当前 preparation 仍是 provider/health handoff，真实 TTS 与表现推理在获得播放槽后开始。持久化、可复用的预合成 artifact、流式 segment、失败自动迁移和 context-maintenance 仍待实现。外部 Reply 注册原型已按最新边界移除。
+7. 已实现首个内存多 Agent 框架：`AgentConnectionManager` 管理逻辑 reply 实例与并发额度，`ConversationRuntime` 支持多 Turn 并行、sealed 文本提前扇出 TTS/表现准备、顺序提交和单消费者播放。Electron 已提供左键“角色对话”前台和安全 IPC；`ConversationReplyGateway` 使用 managed 单 Codex App Server，前台可观察 ReplyTask 输入/回复审计。当前 `conversation.maxAssistants` 控制 1–8 个逻辑并发槽，目标 Agent Role schema 将其一次性迁移为 `agentRoles.char.maxConcurrency`。当前 `ReplyAgentEndpoint` 尚未收窄为带 Persona revision 的单角色 `CharAgentEndpoint`，Router、Task Manager、真实预合成 artifact、流式 segment 和失败迁移也尚未实现。外部 Reply 注册原型已按最新边界移除。
 8. 已接入角色动态 ExpressionCatalog、确定性 Resolver、performance-planning v2、Adapter/Transport 分层和 Runtime `expressionKey` 主状态；Mao 八项资源均有可达性回归。Qwen3.5-2B 是可选 Transport 后端，关闭或失败时使用确定性目录规则；v1 `emotionBindings` 只作旧角色兼容。安全表情插值、大目录 shortlist、动态动作 schema 和 3070 并发压测仍待实现。
 
 外部 Agent 可通过角色接入 MCP 或兼容的 `127.0.0.1` HTTP 控制面发送完整 `PerformancePlan` 和中断请求，由 Electron main 转为白名单 IPC，再由 renderer 提交 Runtime；Agent 通过 Runtime snapshot 判断实际播放完成。角色接入 MCP 工具与动态服务管理见 [MCP 服务生命周期](mcp-services.md)，HTTP 请求结构见 [外部 Agent 本地 HTTP 接入指南](external-agent-http.md)。

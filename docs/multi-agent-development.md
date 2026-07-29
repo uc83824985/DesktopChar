@@ -1,10 +1,15 @@
-# 多 Agent 回复流水线开发说明
+# 单角色多 Agent 回复流水线开发说明
 
 ## 当前范围
 
-多 Agent 只负责跨 Turn 并行生成回复文本。表情、动作和语音不由 reply Agent 生成：
+多 Agent 只负责为同一个桌面角色跨 Turn 并行生成回复文本，不表示多个角色或多种人格。
+所有 worker 都必须接收同一 Persona revision 的完整角色上下文。当前代码仍使用
+`ReplyAgentEndpoint/ReplyTask/ReplyResult` 过渡命名；目标直接替换为
+`CharAgentEndpoint/CharReplyTask/CharReplyResult`，不是让无角色 Agent 先回复后再润色：
 
-- reply Agent 返回一个或多个 sealed 文本 segment；
+- `CharReplyTask` 外层保留 task/attempt/generation/deadline，Persona、消息与 revision
+  从首版开始封装在 `CharContextEnvelope`，后续新增上下文不再平铺；
+- Char Agent 返回一个或多个 sealed 文本 segment；
 - TTS 和 `LocalPerformancePlanner` 在 sealed 后立即并行准备；
 - `ConversationRuntime` 统一提交正式 assistant 消息；
 - Avatar/Presentation Runtime 仍是唯一播放器和角色表现状态所有者。
@@ -19,8 +24,8 @@
 连接管理层负责：
 
 - 注册 `agentId + instanceId`；
-- reply 能力和最大并发额度；
-- endpoint 生命周期、AbortSignal 和租约；
+- Char reply 能力和最大并发额度；
+- endpoint 生命周期、健康状态和 AbortSignal；
 - 在可用实例间路由任务；
 - 返回实际执行实例及带 task/attempt 相关性的结果。
 
@@ -31,7 +36,7 @@
 任务编排层负责：
 
 - 追加不可变用户消息并创建 Turn；
-- 在创建 Turn 时编译本次 reply task 的上下文快照；
+- 在创建 Turn 时编译本次 Char reply task 的对话与 Persona 快照；
 - 并发分派多个 Turn；
 - 校验 `conversationId + turnId + taskId + attemptId`；
 - 收到 sealed 文本后立即扇出 TTS/表现准备任务；
@@ -53,7 +58,15 @@
 - 可替换的 reply endpoint，以及生产前台使用的单进程 Codex App Server client。
 
 首版暂不包含持久化、Context patch、流式 token/segment、失败自动迁移和语义
-supersede/rebase。这些能力在领域状态机和数据面稳定后增量加入。
+supersede/rebase。新用户输入增加 Ledger revision 时不会自动使运行中的旧 Turn 失效；
+Persona 改变、明确取消、generation 变化或 deadline 到期才硬拒绝结果。本阶段不加入
+专家 Agent 或同一 Turn 多候选。
+
+首版也不执行 Turn 重试。Char 请求超时、断开或返回非法结果时，应用在原 ResponseSlot 中
+记录错误，并 sealed 一条来自 `application-fallback` 的预设角色通知，例如“上一轮的回复
+没有收到，可以再说一次吗？”。该 fallback 继续经过正常 TTS/表现准备、顺序提交和播放，
+随后放行已经准备好的后续 Turn。失败诊断不伪装成 Agent 输出；更智能的重试、endpoint
+迁移和无感失败恢复留到后续阶段。
 
 ## Electron 前台验证入口
 
@@ -62,8 +75,10 @@ supersede/rebase。这些能力在领域状态机和数据面稳定后增量加�
 - `角色对话`：默认页，提供多行输入框和发送按钮；Enter 换行，Ctrl+Enter 发送；
 - `资源调试`：保留原有表情、动作、Neutral/Reset 与基准姿态锁定能力。
 
-桌面端按 `conversation.maxAssistants` 注册 1–8 个容量均为 1 的逻辑 endpoint，默认
-`assistant-1`、`assistant-2`。所有 endpoint 通过 Electron main 共享一个隐藏的官方
+当前桌面端仍按 `conversation.maxAssistants` 注册 1–8 个容量均为 1 的逻辑 endpoint，默认
+`assistant-1`、`assistant-2`。实现 Agent Role 配置时该字段一次性迁移为
+`agentRoles.char.maxConcurrency`，逻辑实例的目标命名同步改为 `char-worker-1/2...`。所有
+endpoint 通过 Electron main 共享一个隐藏的官方
 `codex app-server` 进程，不为每个助手或每个 Turn 启动 CLI/窗口。每次回复请求在该
 进程内建立独立 ephemeral thread，并通过 `turn/start` 的 JSON `outputSchema` 得到结构化
 回复；应用的 ConversationLedger 仍是规范上下文。
@@ -121,18 +136,22 @@ Abort 活跃 Turn，再统一关闭 App Server。Windows 下启动 npm 安装的
 设置 `ELECTRON_RUN_AS_NODE=1`，避免把 Electron 的 `process.execPath` 当成 Node 后新建
 前台窗口。
 
-`conversation.maxAssistants` 是整数并发上限，不是 checkbox。配置热重载时，如果仍有
-回复或播放任务，只记录目标值；等 Conversation 空闲后再增减逻辑 endpoint，不中断现有
-Turn。
+目标字段 `agentRoles.char.maxConcurrency` 是整数并发上限，不是 checkbox。当前实现的
+`conversation.maxAssistants` 不作为长期兼容别名；实施迁移时同步更新 schema、示例配置、
+快照、UI 和测试。配置热重载时，如果仍有回复或播放任务，只记录目标值；等 Conversation
+空闲后再增减逻辑 endpoint，不中断现有 Turn。
 
-当前生产 Reply Provider 只有 `managed`：DesktopChar 只拥有一个 Codex App Server，
-所有逻辑助手共享该隐藏进程，并以独立 ephemeral thread 隔离每次任务。此前探索的
+当前生产 Char Provider 只有 `managed`：DesktopChar 只拥有一个 Codex App Server，
+所有逻辑 Char worker 共享该隐藏进程，并以独立 ephemeral thread 隔离每次任务。此前探索的
 External Reply Agent 注册、租约和 callback 数据面不再保留；它既会增加生命周期与鉴权
 复杂度，也不能比 App Server 更好地满足“受控多次对话请求”。
 
 `ConversationReplyGateway` 继续统一输入/输出审计和 Renderer IPC。前台“连接与请求”区
-显示实际 Provider、输入、回复和错误。外部 Task Manager、现有 CLI 会话监控和
-Router/Char Agent 属于另一条应用链路，不复用 ReplyTask 协议，见
+显示实际 Provider、输入、回复和错误。Router 后续在 `character` 与具体
+`task-session` 之间选择：角色目标复用这里的 Char Agent Pool 和 ConversationRuntime；
+session 目标进入 Task Manager 并默认立即提交。Task Manager 按 session 维护
+submission generation，只把最后一次提交后恢复 `waiting_input` 的稳定结果作为完成事实。
+两条目标链路共享消息入口与审计，但 Task Manager 命令不复用 CharReplyTask，见
 [Task Manager 与会话路由设计](task-manager-routing.md)。
 
 运行单进程、双 thread 的真实官方服务验收：
@@ -183,9 +202,36 @@ npm run test:codex-agent
 该验收复用本机 Codex 登录状态，会产生实际模型调用；它必须使用只读 sandbox，不进入
 默认 `npm test`。
 
+## 轻量 Char Agent 与 MCP 测试
+
+模块拆分不能迫使默认测试启动整套 DesktopChar。目标测试结构为：
+
+```text
+纯单元测试
+  ConversationRuntime -> FakeCharAgent
+
+MCP 契约测试
+  Official MCP Client -> char_generate_reply -> FakeCharAgent
+
+真实 smoke
+  CharAgentEndpoint -> managed Codex App Server
+```
+
+`conversation-runtime` 只依赖 `CharAgentEndpoint`，不导入 MCP SDK。初期测试用
+`CharAgentMcpAdapter` 只映射一个 `char_generate_reply` 工具及
+`CharReplyTask/CharReplyResult` 的 schema、UTF-8、取消、超时和错误；它与现有负责
+状态、`PerformancePlan` 和中断的 `characterMcp` 不是同一接口。
+
+默认测试直接注入确定性 Fake；`test:char-mcp` 使用随机 loopback 端口和官方 MCP Client，
+但不调用真实模型；真实 managed Provider 继续使用独立 smoke 命令，不进入默认
+`npm test`。另保留只传文本、由脚本装配固定 Persona fixture 的一条手动命令，确保复杂
+模块仍有简单可重复的 Char 调用入口。Char MCP 不作为生产 Provider，也不在首版契约完成后
+继续增加流式、发现、配置或生命周期能力；后续只做保持测试可用的兼容修复。
+
 ## 2026-07-28 验收
 
-- 纯内存回归使用两个受控 reply endpoint，强制第二个 Turn 先返回；后续 Turn 的 speech/
+- 纯内存回归使用两个受控 reply endpoint（目标命名为 Char worker），强制第二个 Turn
+  先返回；后续 Turn 的 speech/
   performance 准备立即启动，但 commit 保持 blocked，最终提交和 Presentation 顺序均为
   `0 -> 1`。
 - 官方 Codex App Server 验收由一个隐藏进程同时处理两个 ephemeral thread，分别返回
