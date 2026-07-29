@@ -1,4 +1,4 @@
-import { randomBytes } from 'node:crypto';
+import { randomBytes, randomUUID } from 'node:crypto';
 import { mkdir, rm, writeFile } from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
@@ -39,6 +39,7 @@ try {
   await writeFile(markerPath, JSON.stringify({
     version: 1,
     role: 'desktop_char_task_manager',
+    instanceId: randomUUID(),
     pid: process.pid,
     httpBaseUrl: address.baseUrl,
     httpTokenFile: tokenPath,

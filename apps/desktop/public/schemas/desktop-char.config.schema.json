@@ -79,6 +79,18 @@
         "profile": { "$ref": "#/$defs/applicationAssetPath" }
       }
     },
+    "taskManager": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "enabled": { "type": "boolean" },
+        "markerPath": { "type": "string", "minLength": 1 },
+        "pollIntervalMs": { "type": "integer", "minimum": 250, "maximum": 60000 },
+        "requestTimeoutMs": { "type": "integer", "minimum": 100, "maximum": 60000 },
+        "eventPageSize": { "type": "integer", "minimum": 1, "maximum": 1000 },
+        "maxEvents": { "type": "integer", "minimum": 10, "maximum": 2000 }
+      }
+    },
     "performanceInference": { "$ref": "#/$defs/performanceInference" },
     "ttsMcp": { "$ref": "#/$defs/ttsMcp" },
     "characterMcp": { "$ref": "#/$defs/characterMcp" }

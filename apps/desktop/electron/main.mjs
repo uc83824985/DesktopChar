@@ -19,6 +19,7 @@ import { createMcpServicesController } from './mcp-services-controller.mjs';
 import { normalizeDesktopConfig, resolveDesktopConfigPath } from './mcp-services-config.mjs';
 import { createPerformanceModelController } from './performance-model-controller.mjs';
 import { createShutdownCoordinator } from './shutdown-coordinator.mjs';
+import { createTaskManagerController } from './task-manager-controller.mjs';
 import { createTopmostEventMonitor } from './topmost-event-monitor.mjs';
 import {
   effectiveAvatarVisibility,
@@ -57,6 +58,8 @@ const channels = {
   conversationCancel: 'conversation:cancel',
   conversationAgentsGet: 'conversation:agents:get-state',
   conversationAgentsState: 'conversation:agents:state',
+  taskManagerGet: 'task-manager:get-state',
+  taskManagerState: 'task-manager:state',
   mcpListTools: 'tts-mcp:list-tools',
   mcpCallTool: 'tts-mcp:call-tool',
   mcpServicesGet: 'mcp-services:get-state',
@@ -185,13 +188,18 @@ const mcpServices = createMcpServicesController({
     });
   },
 });
+const taskManager = createTaskManagerController(desktopConfig.taskManager, {
+  onStateChanged(state) {
+    avatarWindow?.webContents.send(channels.taskManagerState, state);
+  },
+});
 
 const hasSingleInstanceLock = app.requestSingleInstanceLock();
 if (!hasSingleInstanceLock) app.quit();
 else {
   app.on('second-instance', () => setAvatarVisibility(true));
   app.whenReady().then(async () => {
-    await mcpServices.start();
+    await Promise.all([mcpServices.start(), taskManager.start()]);
     if (!devUrl) registerRendererProtocol();
     registerIpc();
     createAvatarWindow();
@@ -254,6 +262,7 @@ const shutdown = createShutdownCoordinator({
       agentServer?.close().catch(() => {}),
       conversationReplyGateway.close().catch(() => {}),
       mcpServices.close().catch(() => {}),
+      taskManager.close().catch(() => {}),
       performanceModel.close().catch(() => {}),
     ]);
     safeLog('[desktop-char] shutdown complete', { reason });
@@ -724,6 +733,10 @@ function registerIpc() {
     requireAvatarSender(event);
     return conversationReplyGateway.snapshot();
   });
+  ipcMain.handle(channels.taskManagerGet, event => {
+    requireAvatarSender(event);
+    return taskManager.snapshot();
+  });
   ipcMain.handle(channels.mcpListTools, async event => {
     requireAvatarSender(event);
     const tools = await mcpServices.listTtsTools({ timeoutMs: 10_000 });
@@ -866,12 +879,14 @@ function windowState() {
     performanceInference: performanceModel.snapshot(),
     tts: mcpServices.currentTtsConfig(),
     mcpServices: mcpServices.snapshot(),
+    taskManager: taskManager.snapshot(),
   };
 }
 
 function applyDesktopConfig(config, metadata = {}) {
   desktopConfig = config;
   conversationReplyGateway.configure(resolvedCharRole(config));
+  taskManager.configure(config.taskManager);
   void performanceModel.replace(config.performanceInference).catch(error => {
     safeError('[performance-model] config apply failed', error);
   });

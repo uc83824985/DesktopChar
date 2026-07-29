@@ -96,6 +96,12 @@ test('desktop config owns interaction, window, char agent and character profile 
       },
     },
     agentHttp: { enabled: false, port: 0 },
+    taskManager: {
+      enabled: true,
+      markerPath: 'C:\\TaskManager\\task_manager.json',
+      pollIntervalMs: 2_000,
+      maxEvents: 50,
+    },
     character: { profile: 'models/Test/DesktopChar.character.json' },
   }, {
     DESKTOP_CHAR_DRAG_HOLD_DELAY_MS: '300',
@@ -110,6 +116,10 @@ test('desktop config owns interaction, window, char agent and character profile 
   assert.equal(config.agentRoles.char.persona.name, 'DesktopChar');
   assert.equal(config.agentHttp.enabled, false);
   assert.equal(config.agentHttp.port, 0);
+  assert.equal(config.taskManager.enabled, true);
+  assert.equal(config.taskManager.markerPath, 'C:\\TaskManager\\task_manager.json');
+  assert.equal(config.taskManager.pollIntervalMs, 2_000);
+  assert.equal(config.taskManager.maxEvents, 50);
   assert.equal(config.characterProfile.url, 'models/Test/DesktopChar.character.json');
   assert.equal(config.performanceInference.enabled, false);
   assert.equal(config.performanceInference.lifecycle.type, 'external');
@@ -137,6 +147,10 @@ test('desktop config path prefers the new bootstrap variable and validates appli
   }), /must be managed/);
   assert.throws(() => normalizeDesktopConfig({ interaction: { drag: { holdDelyMs: 100 } } }), /unknown field/);
   assert.throws(() => normalizeDesktopConfig({ agentHttp: { host: '0.0.0.0' } }), /loopback/);
+  assert.throws(() => normalizeDesktopConfig({ taskManager: { enabled: true } }), /requires markerPath/);
+  assert.throws(() => normalizeDesktopConfig({
+    taskManager: { enabled: true, markerPath: 'relative.json' },
+  }), /absolute path/);
   assert.throws(() => normalizeDesktopConfig({ character: { profile: '../escape.json' } }), /parent traversal/);
   assert.throws(() => normalizeDesktopConfig({ performanceInference: { temperature: 3 } }), /0 to 2/);
   assert.throws(() => normalizeDesktopConfig({ performanceInference: { maxOutputTokens: 0 } }), /positive integer/);

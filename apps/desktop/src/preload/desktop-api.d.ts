@@ -45,6 +45,7 @@ export interface DesktopWindowState {
   performanceInference: DesktopPerformanceInferenceConfig;
   tts: DesktopTtsConfig;
   mcpServices: McpServicesState;
+  taskManager: TaskManagerState;
 }
 
 export interface DesktopCharacterConfig {
@@ -107,6 +108,7 @@ export interface DesktopCharApi {
   ): Promise<import('../../../../packages/conversation-runtime/src/index.ts').CharReplyResult>;
   cancelConversationReply(agentId: string, taskId: string, attemptId: string): void;
   getConversationAgentState(): Promise<ConversationAgentState>;
+  getTaskManagerState(): Promise<TaskManagerState>;
   listTtsMcpTools(): Promise<McpToolDescriptor[]>;
   callTtsMcpTool(name: string, args: Record<string, unknown>, options?: { timeoutMs?: number }): Promise<McpCallToolResult>;
   getMcpServicesState(): Promise<McpServicesState>;
@@ -118,6 +120,7 @@ export interface DesktopCharApi {
   onMcpServicesState(callback: (state: McpServicesState) => void): () => void;
   onDesktopConfigState(callback: (state: DesktopWindowState) => void): () => void;
   onConversationAgentState(callback: (state: ConversationAgentState) => void): () => void;
+  onTaskManagerState(callback: (state: TaskManagerState) => void): () => void;
   onAgentCommand(callback: (command: AgentCommand) => void): () => void;
   onBoundsChanged(callback: (bounds: DesktopRectangle) => void): () => void;
   onCursorPoint(callback: (point: DesktopPoint) => void): () => void;
@@ -147,6 +150,57 @@ export interface ConversationAgentState {
     requestTimeoutMs: number;
   };
   activities: ConversationAgentActivityState[];
+}
+
+export type TaskManagerPhase =
+  | 'disabled'
+  | 'standby'
+  | 'connecting'
+  | 'ready'
+  | 'degraded'
+  | 'reconnecting'
+  | 'closed';
+
+export interface TaskManagerSessionState {
+  sessionId: string;
+  state: 'running' | 'exited' | 'closed' | 'stale';
+  monitorState: 'pending' | 'observed' | 'unreadable' | 'closed';
+  agentState: 'waiting_input' | 'active' | 'idle_unknown' | 'unknown' | 'closed';
+  title?: string;
+  workDir?: string;
+  lastVisibleLine?: string;
+  lastScreenChangedAtUtc?: string;
+}
+
+export interface TaskManagerEventState {
+  sourceInstanceId: string;
+  eventId: string;
+  cursor: number;
+  sessionId: string;
+  type: 'session-changed' | 'task-completed' | 'task-failed' | 'task-unavailable';
+  observedAtMs: number;
+  status: string;
+  submissionGeneration?: number;
+  commandId?: string;
+  title?: string;
+  lastVisibleLine?: string;
+  visibleTextTail?: string;
+  resultArtifactPath?: string;
+  openArtifactOnCompletion?: boolean;
+  error?: string;
+}
+
+export interface TaskManagerState {
+  enabled: boolean;
+  phase: TaskManagerPhase;
+  markerPath: string;
+  instanceId: string | null;
+  cursor: number;
+  pendingAckCount: number;
+  lastPollAtMs: number | null;
+  lastError: string | null;
+  sessions: TaskManagerSessionState[];
+  events: TaskManagerEventState[];
 }
 
 export type AgentCommand =

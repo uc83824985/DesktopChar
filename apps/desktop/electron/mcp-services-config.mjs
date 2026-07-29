@@ -79,7 +79,7 @@ export function normalizeDesktopConfig(fileConfig = {}, env = {}, options = {}) 
   if (!isRecord(fileConfig)) throw new TypeError('Desktop config root must be an object');
   assertKnownKeys(fileConfig, [
     '$schema', 'version', 'interaction', 'window', 'agentProviders', 'agentRoles',
-    'agentHttp', 'character', 'performanceInference', 'ttsMcp', 'characterMcp',
+    'agentHttp', 'taskManager', 'character', 'performanceInference', 'ttsMcp', 'characterMcp',
   ], 'Desktop config');
   if (fileConfig.$schema !== undefined) text(fileConfig.$schema, '$schema');
   const version = fileConfig.version ?? 1;
@@ -116,6 +116,24 @@ export function normalizeDesktopConfig(fileConfig = {}, env = {}, options = {}) 
   );
   const agentHttp = optionalRecord(fileConfig.agentHttp, 'agentHttp');
   assertKnownKeys(agentHttp, ['enabled', 'host', 'port'], 'agentHttp');
+  const taskManager = optionalRecord(fileConfig.taskManager, 'taskManager');
+  assertKnownKeys(
+    taskManager,
+    ['enabled', 'markerPath', 'pollIntervalMs', 'requestTimeoutMs', 'eventPageSize', 'maxEvents'],
+    'taskManager',
+  );
+  const taskManagerMarkerPath = optionalText(
+    taskManager.markerPath ?? env.DESKTOP_CHAR_TASK_MANAGER_MARKER,
+    'taskManager.markerPath',
+  );
+  const taskManagerEnabled = boolean(
+    taskManager.enabled ?? env.DESKTOP_CHAR_TASK_MANAGER_ENABLED,
+    Boolean(taskManagerMarkerPath),
+    'taskManager.enabled',
+  );
+  if (taskManagerEnabled && !taskManagerMarkerPath) {
+    throw new TypeError('Enabled taskManager requires markerPath');
+  }
   const characterProfile = optionalRecord(fileConfig.character, 'character');
   assertKnownKeys(characterProfile, ['profile'], 'character');
   const performanceInference = optionalRecord(fileConfig.performanceInference, 'performanceInference');
@@ -274,6 +292,40 @@ export function normalizeDesktopConfig(fileConfig = {}, env = {}, options = {}) 
       enabled: boolean(agentHttp.enabled, true, 'agentHttp.enabled'),
       host: loopbackHost(agentHttp.host ?? '127.0.0.1', 'agentHttp.host'),
       port: port(agentHttp.port ?? env.DESKTOP_CHAR_AGENT_PORT, 17_373, 'agentHttp.port'),
+    },
+    taskManager: {
+      enabled: taskManagerEnabled,
+      markerPath: taskManagerMarkerPath
+        ? absoluteFilePath(taskManagerMarkerPath, 'taskManager.markerPath')
+        : '',
+      pollIntervalMs: boundedInteger(
+        taskManager.pollIntervalMs,
+        1_000,
+        250,
+        60_000,
+        'taskManager.pollIntervalMs',
+      ),
+      requestTimeoutMs: boundedInteger(
+        taskManager.requestTimeoutMs,
+        5_000,
+        100,
+        60_000,
+        'taskManager.requestTimeoutMs',
+      ),
+      eventPageSize: boundedInteger(
+        taskManager.eventPageSize,
+        100,
+        1,
+        1_000,
+        'taskManager.eventPageSize',
+      ),
+      maxEvents: boundedInteger(
+        taskManager.maxEvents,
+        200,
+        10,
+        2_000,
+        'taskManager.maxEvents',
+      ),
     },
     characterProfile: {
       url: assetPath(characterProfile.profile ?? 'models/Mao/DesktopChar.character.json', 'character.profile'),
@@ -717,6 +769,12 @@ function boundedInteger(value, fallback, minimum, maximum, label) {
     throw new TypeError(`${label} must be an integer from ${minimum} to ${maximum}`);
   }
   return result;
+}
+
+function absoluteFilePath(value, label) {
+  const result = text(value, label);
+  if (!path.isAbsolute(result)) throw new TypeError(`${label} must be an absolute path`);
+  return path.resolve(result);
 }
 
 function defaultCharPromptProfile() {

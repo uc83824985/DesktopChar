@@ -113,6 +113,8 @@ import type {
   McpServiceTest,
   McpServicesState,
   PointerPresentation,
+  TaskManagerEventState,
+  TaskManagerState,
 } from '../preload/desktop-api.d.ts';
 
 installCspShaderCompiler({ ShaderSystem });
@@ -578,6 +580,11 @@ let conversationRuntime: ConversationRuntime | undefined;
 let conversationConnections: AgentConnectionManager | undefined;
 let conversationAgentState: ConversationAgentState | undefined;
 let conversationAgentStateUnsubscribe: (() => void) | undefined;
+let taskManagerStateUnsubscribe: (() => void) | undefined;
+let taskNotificationPresenting = false;
+let activeTaskNotificationController: AbortController | undefined;
+const seenTaskManagerEventIds = new Set<string>();
+const pendingTaskNotifications: TaskManagerEventState[] = [];
 let charMaxConcurrency = 2;
 const conversationAgentDisposers: Array<() => void> = [];
 let gazeFrameDriverAttached = false;
@@ -909,6 +916,7 @@ try {
     renderSpeechBubble(snapshot);
     contextMenuHost.refresh();
     interactionPanelHost.refresh();
+    if (snapshot.state === 'idle') void pumpTaskNotifications();
   });
   void reloadableTtsAdapter.health().then(report => {
     document.body.dataset.ttsHealth = report.status;
@@ -955,6 +963,11 @@ try {
       document.body.dataset.conversationProvider = 'managed';
       interactionPanelHost.refresh();
     }).catch(error => console.error('[conversation] failed to read Agent state', error));
+    taskManagerStateUnsubscribe = desktopShell.onTaskManagerState(applyTaskManagerState);
+    if (shellState) applyTaskManagerState(shellState.taskManager);
+    void desktopShell.getTaskManagerState()
+      .then(applyTaskManagerState)
+      .catch(error => console.error('[task-manager] failed to read state', error));
   }
   registerDevelopmentUi();
   if (motionAuditRequested) installMotionAuditApi(characterConfig.id);
@@ -986,6 +999,12 @@ try {
     conversationConnections?.close();
     conversationAgentStateUnsubscribe?.();
     conversationAgentStateUnsubscribe = undefined;
+    taskManagerStateUnsubscribe?.();
+    taskManagerStateUnsubscribe = undefined;
+    activeTaskNotificationController?.abort(
+      new DOMException('Task notification presentation disposed', 'AbortError'),
+    );
+    activeTaskNotificationController = undefined;
     cubismUpdatePipeline?.restore();
     cubismUpdatePipeline = undefined;
     contextMenuHost.dispose();
@@ -1797,55 +1816,199 @@ function reconcileConversationAgentSlots(): void {
   interactionPanelHost.refresh();
 }
 
+function applyTaskManagerState(state: TaskManagerState): void {
+  document.body.dataset.taskManagerPhase = state.phase;
+  document.body.dataset.taskManagerSessions = state.sessions.length.toString();
+  document.body.dataset.taskManagerEvents = state.events.length.toString();
+  for (const event of state.events) {
+    if (!isTaskNotificationEvent(event)) continue;
+    const identity = taskManagerEventIdentity(event);
+    if (seenTaskManagerEventIds.has(identity)) continue;
+    seenTaskManagerEventIds.add(identity);
+    pendingTaskNotifications.push(event);
+  }
+  void pumpTaskNotifications();
+}
+
+function isTaskNotificationEvent(event: TaskManagerEventState): boolean {
+  return event.type === 'task-completed'
+    || event.type === 'task-failed'
+    || event.type === 'task-unavailable';
+}
+
+function taskManagerEventIdentity(event: TaskManagerEventState): string {
+  return `${event.sourceInstanceId}:${event.eventId}`;
+}
+
+function fixedTaskNotificationText(event: TaskManagerEventState): string {
+  const subject = event.title?.trim() || event.sessionId;
+  if (event.type === 'task-completed') {
+    const artifact = event.resultArtifactPath ? '结果文档已准备好。' : '';
+    return `「${subject}」已完成。${artifact}`;
+  }
+  if (event.type === 'task-failed') return `「${subject}」处理失败。`;
+  return `「${subject}」当前不可用。`;
+}
+
+async function pumpTaskNotifications(): Promise<void> {
+  if (taskNotificationPresenting || !runtime) return;
+  const event = pendingTaskNotifications.shift();
+  if (!event) return;
+  taskNotificationPresenting = true;
+  const identity = taskManagerEventIdentity(event);
+  const text = fixedTaskNotificationText(event);
+  const controller = new AbortController();
+  activeTaskNotificationController = controller;
+  document.body.dataset.taskNotification = 'presenting';
+  document.body.dataset.taskNotificationEvent = identity;
+  document.body.dataset.taskNotificationText = text;
+  try {
+    await presentAvatarTextPlan(
+      `task-manager:${identity}`,
+      [{ id: event.eventId, text, bubbleMode: 'complete' }],
+      controller.signal,
+    );
+    document.body.dataset.taskNotification = 'completed';
+  }
+  catch (error) {
+    if (!controller.signal.aborted) {
+      console.error('[task-manager] notification presentation failed', error);
+      document.body.dataset.taskNotification = 'failed';
+    }
+  }
+  finally {
+    if (activeTaskNotificationController === controller) {
+      activeTaskNotificationController = undefined;
+    }
+    taskNotificationPresenting = false;
+    void pumpTaskNotifications();
+  }
+}
+
 async function presentConversationUnit(unit: PresentationUnit, signal: AbortSignal): Promise<void> {
-  await waitForAvatarIdle(signal);
-  if (signal.aborted) throw signal.reason;
-  const avatar = runtime;
-  if (!avatar) throw new Error('AvatarRuntime is unavailable');
-  stopAssetPreviewMotion('conversation-started');
-  if (assetPreviewIsolation?.locked) setAssetPreviewIsolationLocked(false);
-  const planId = `conversation:${unit.responseId}`;
-  return new Promise((resolve, reject) => {
-    let seenPlan = false;
-    let settled = false;
-    const finish = (error?: unknown) => {
-      if (settled) return;
-      settled = true;
-      unsubscribe();
-      signal.removeEventListener('abort', onAbort);
-      if (error === undefined) resolve();
-      else reject(error);
-    };
-    const onAbort = () => {
-      if (avatar.getSnapshot().planId === planId) {
-        avatar.dispatch({ type: 'user.interrupt-requested' });
-      }
-      finish(signal.reason ?? new DOMException('Conversation presentation cancelled', 'AbortError'));
-    };
-    const unsubscribe = avatar.subscribe(snapshot => {
-      if (snapshot.planId === planId) seenPlan = true;
-      if (seenPlan && snapshot.planId === null && snapshot.state === 'idle') finish();
-    });
-    signal.addEventListener('abort', onAbort, { once: true });
-    try {
-      avatar.dispatch({
-        type: 'plan.submitted',
-        plan: {
-          id: planId,
-          segments: unit.segments.map((segment, sequence) => ({
-            id: segment.segmentId,
-            sequence,
-            displayText: segment.text,
-            speechText: segment.text,
-            bubble: { mode: 'stream' },
-          })),
-        },
+  return presentAvatarTextPlan(
+    `conversation:${unit.responseId}`,
+    unit.segments.map(segment => ({ id: segment.segmentId, text: segment.text })),
+    signal,
+  );
+}
+
+interface AvatarTextSegment {
+  id: string;
+  text: string;
+  bubbleMode?: SpeechBubbleMode;
+}
+
+interface AvatarPresentationWaiter {
+  signal: AbortSignal;
+  resolve: (release: () => void) => void;
+  reject: (error: unknown) => void;
+  onAbort: () => void;
+}
+
+let avatarPresentationLocked = false;
+const avatarPresentationWaiters: AvatarPresentationWaiter[] = [];
+
+async function presentAvatarTextPlan(
+  planId: string,
+  segments: AvatarTextSegment[],
+  signal: AbortSignal,
+): Promise<void> {
+  const release = await acquireAvatarPresentation(signal);
+  try {
+    await waitForAvatarIdle(signal);
+    if (signal.aborted) throw signal.reason;
+    const avatar = runtime;
+    if (!avatar) throw new Error('AvatarRuntime is unavailable');
+    stopAssetPreviewMotion('text-presentation-started');
+    if (assetPreviewIsolation?.locked) setAssetPreviewIsolationLocked(false);
+    await new Promise<void>((resolve, reject) => {
+      let seenPlan = false;
+      let settled = false;
+      const finish = (error?: unknown) => {
+        if (settled) return;
+        settled = true;
+        unsubscribe();
+        signal.removeEventListener('abort', onAbort);
+        if (error === undefined) resolve();
+        else reject(error);
+      };
+      const onAbort = () => {
+        if (avatar.getSnapshot().planId === planId) {
+          avatar.dispatch({ type: 'user.interrupt-requested' });
+        }
+        finish(signal.reason ?? new DOMException('Avatar presentation cancelled', 'AbortError'));
+      };
+      const unsubscribe = avatar.subscribe(snapshot => {
+        if (snapshot.planId === planId) seenPlan = true;
+        if (seenPlan && snapshot.planId === null && snapshot.state === 'idle') finish();
       });
-    }
-    catch (error) {
-      finish(error);
-    }
+      signal.addEventListener('abort', onAbort, { once: true });
+      try {
+        avatar.dispatch({
+          type: 'plan.submitted',
+          plan: {
+            id: planId,
+            segments: segments.map((segment, sequence) => ({
+              id: segment.id,
+              sequence,
+              displayText: segment.text,
+              speechText: segment.text,
+              bubble: { mode: segment.bubbleMode ?? 'stream' },
+            })),
+          },
+        });
+      }
+      catch (error) {
+        finish(error);
+      }
+    });
+  }
+  finally {
+    release();
+  }
+}
+
+function acquireAvatarPresentation(signal: AbortSignal): Promise<() => void> {
+  if (signal.aborted) return Promise.reject(signal.reason);
+  if (!avatarPresentationLocked) {
+    avatarPresentationLocked = true;
+    return Promise.resolve(singleUseAvatarPresentationRelease());
+  }
+  return new Promise((resolve, reject) => {
+    const waiter: AvatarPresentationWaiter = {
+      signal,
+      resolve,
+      reject,
+      onAbort: () => {
+        const index = avatarPresentationWaiters.indexOf(waiter);
+        if (index >= 0) avatarPresentationWaiters.splice(index, 1);
+        reject(signal.reason ?? new DOMException('Avatar presentation cancelled', 'AbortError'));
+      },
+    };
+    avatarPresentationWaiters.push(waiter);
+    signal.addEventListener('abort', waiter.onAbort, { once: true });
   });
+}
+
+function singleUseAvatarPresentationRelease(): () => void {
+  let released = false;
+  return () => {
+    if (released) return;
+    released = true;
+    releaseAvatarPresentation();
+  };
+}
+
+function releaseAvatarPresentation(): void {
+  while (avatarPresentationWaiters.length > 0) {
+    const waiter = avatarPresentationWaiters.shift()!;
+    waiter.signal.removeEventListener('abort', waiter.onAbort);
+    if (waiter.signal.aborted) continue;
+    waiter.resolve(singleUseAvatarPresentationRelease());
+    return;
+  }
+  avatarPresentationLocked = false;
 }
 
 async function waitForAvatarIdle(signal: AbortSignal): Promise<void> {

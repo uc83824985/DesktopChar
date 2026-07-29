@@ -30,6 +30,13 @@
     "host": "127.0.0.1",
     "port": 17373
   },
+  "taskManager": {
+    "enabled": false,
+    "pollIntervalMs": 1000,
+    "requestTimeoutMs": 5000,
+    "eventPageSize": 100,
+    "maxEvents": 200
+  },
   "character": {
     "profile": "models/Mao/DesktopChar.character.json"
   },
