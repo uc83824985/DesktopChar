@@ -46,7 +46,6 @@ export interface DesktopWindowState {
   tts: DesktopTtsConfig;
   mcpServices: McpServicesState;
   taskManager: TaskManagerState;
-  routing: DesktopRoutingConfig;
 }
 
 export interface DesktopCharacterConfig {
@@ -58,13 +57,6 @@ export interface DesktopInteractionConfig {
   dragWindowApi: 'native-set-window-pos' | 'setBounds';
 }
 
-export interface DesktopRoutingConfig {
-  autoSubmitMinConfidence: number;
-  autoSubmitMinMargin: number;
-  maxTimelineEntries: number;
-  maxCandidates: number;
-}
-
 export interface DesktopAgentRolesConfig {
   char: {
     provider: string;
@@ -74,6 +66,21 @@ export interface DesktopAgentRolesConfig {
     personaRevision: number;
     persona: import('../../../../packages/conversation-runtime/src/index.ts').PersonaProjection;
     applicationFallbackText: string;
+  };
+  router: {
+    provider: string;
+    promptProfile: string;
+    requestTimeoutMs: number;
+    profileRevision: number;
+    profile: {
+      name: string;
+      instructions: string[];
+    };
+    temperature: number;
+    autoSubmitMinConfidence: number;
+    autoSubmitMinMargin: number;
+    maxTimelineEntries: number;
+    maxCandidates: number;
   };
 }
 

@@ -879,13 +879,16 @@ function windowState() {
         ...desktopConfig.agentRoles.char,
         requestTimeoutMs: resolvedCharRole(desktopConfig).requestTimeoutMs,
       },
+      router: {
+        ...desktopConfig.agentRoles.router,
+        requestTimeoutMs: resolvedRouterRole(desktopConfig).requestTimeoutMs,
+      },
     },
     character: { profileUrl: desktopConfig.characterProfile.url },
     performanceInference: performanceModel.snapshot(),
     tts: mcpServices.currentTtsConfig(),
     mcpServices: mcpServices.snapshot(),
     taskManager: taskManager.snapshot(),
-    routing: { ...desktopConfig.routing },
   };
 }
 
@@ -917,6 +920,17 @@ function resolvedCharRole(config) {
   if (!provider) throw new Error(`Char Agent Provider is not configured: ${role.provider}`);
   return {
     ...role,
+    requestTimeoutMs: provider.requestTimeoutMs,
+  };
+}
+
+function resolvedRouterRole(config) {
+  const role = config.agentRoles.router;
+  const provider = config.agentProviders[role.provider];
+  if (!provider) throw new Error(`Router Agent Provider is not configured: ${role.provider}`);
+  return {
+    ...role,
+    providerConfig: provider,
     requestTimeoutMs: provider.requestTimeoutMs,
   };
 }

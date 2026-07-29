@@ -87,12 +87,28 @@ test('desktop config owns interaction, window, char agent and character profile 
         lifecycle: 'managed',
         requestTimeoutMs: 90_000,
       },
+      'router-test': {
+        adapter: 'openai-compatible',
+        baseUrl: 'https://router.example/v1',
+        model: 'router-model',
+        apiKeyEnv: 'DESKTOP_CHAR_ROUTER_API_KEY',
+        requestTimeoutMs: 8_000,
+      },
     },
     agentRoles: {
       char: {
         provider: 'codex-managed',
         promptProfile: 'profiles/char/default.json',
         maxConcurrency: 4,
+      },
+      router: {
+        provider: 'router-test',
+        promptProfile: 'profiles/router/session-routing.json',
+        temperature: 0,
+        autoSubmitMinConfidence: 0.84,
+        autoSubmitMinMargin: 0.12,
+        maxTimelineEntries: 10,
+        maxCandidates: 4,
       },
     },
     agentHttp: { enabled: false, port: 0 },
@@ -102,16 +118,11 @@ test('desktop config owns interaction, window, char agent and character profile 
       pollIntervalMs: 2_000,
       maxEvents: 50,
     },
-    routing: {
-      autoSubmitMinConfidence: 0.84,
-      autoSubmitMinMargin: 0.12,
-      maxTimelineEntries: 10,
-      maxCandidates: 4,
-    },
     character: { profile: 'models/Test/DesktopChar.character.json' },
   }, {
     DESKTOP_CHAR_DRAG_HOLD_DELAY_MS: '300',
     DESKTOP_CHAR_AGENT_PORT: '18000',
+    DESKTOP_CHAR_ROUTER_API_KEY: 'must-not-enter-config',
   });
   assert.equal(config.interaction.drag.holdDelayMs, 120);
   assert.deepEqual(config.window.defaultSize, { width: 512, height: 768 });
@@ -120,13 +131,23 @@ test('desktop config owns interaction, window, char agent and character profile 
   assert.equal(config.agentRoles.char.provider, 'codex-managed');
   assert.equal(config.agentProviders['codex-managed'].requestTimeoutMs, 90_000);
   assert.equal(config.agentRoles.char.persona.name, 'DesktopChar');
+  assert.equal(config.agentRoles.router.provider, 'router-test');
+  assert.equal(config.agentRoles.router.profile.name, 'session-routing');
+  assert.equal(config.agentProviders['router-test'].apiKeyEnv, 'DESKTOP_CHAR_ROUTER_API_KEY');
+  assert.equal(config.agentProviders['router-test'].baseUrl, 'https://router.example/v1');
+  assert.doesNotMatch(JSON.stringify(config), /must-not-enter-config/);
   assert.equal(config.agentHttp.enabled, false);
   assert.equal(config.agentHttp.port, 0);
   assert.equal(config.taskManager.enabled, true);
   assert.equal(config.taskManager.markerPath, 'C:\\TaskManager\\task_manager.json');
   assert.equal(config.taskManager.pollIntervalMs, 2_000);
   assert.equal(config.taskManager.maxEvents, 50);
-  assert.deepEqual(config.routing, {
+  assert.deepEqual({
+    autoSubmitMinConfidence: config.agentRoles.router.autoSubmitMinConfidence,
+    autoSubmitMinMargin: config.agentRoles.router.autoSubmitMinMargin,
+    maxTimelineEntries: config.agentRoles.router.maxTimelineEntries,
+    maxCandidates: config.agentRoles.router.maxCandidates,
+  }, {
     autoSubmitMinConfidence: 0.84,
     autoSubmitMinMargin: 0.12,
     maxTimelineEntries: 10,
@@ -164,11 +185,23 @@ test('desktop config path prefers the new bootstrap variable and validates appli
     taskManager: { enabled: true, markerPath: 'relative.json' },
   }), /absolute path/);
   assert.throws(() => normalizeDesktopConfig({
-    routing: { autoSubmitMinConfidence: 1.1 },
+    agentRoles: { router: { autoSubmitMinConfidence: 1.1 } },
   }), /0 to 1/);
   assert.throws(() => normalizeDesktopConfig({
-    routing: { maxCandidates: 0 },
+    agentRoles: { router: { maxCandidates: 0 } },
   }), /1 to 50/);
+  assert.throws(() => normalizeDesktopConfig({ routing: {} }), /unknown field/);
+  assert.throws(() => normalizeDesktopConfig({
+    agentProviders: {
+      remote: {
+        adapter: 'openai-compatible',
+        baseUrl: 'https://router.example/v1',
+        model: 'router-model',
+        apiKeyEnv: 'NOT-AN-ENV-NAME',
+      },
+    },
+    agentRoles: { router: { provider: 'remote' } },
+  }), /environment variable name/);
   assert.throws(() => normalizeDesktopConfig({ character: { profile: '../escape.json' } }), /parent traversal/);
   assert.throws(() => normalizeDesktopConfig({ performanceInference: { temperature: 3 } }), /0 to 2/);
   assert.throws(() => normalizeDesktopConfig({ performanceInference: { maxOutputTokens: 0 } }), /positive integer/);

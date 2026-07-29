@@ -16,6 +16,11 @@
       "adapter": "codex-app-server",
       "lifecycle": "managed",
       "requestTimeoutMs": 180000
+    },
+    "router-codex-managed": {
+      "adapter": "codex-app-server",
+      "lifecycle": "managed",
+      "requestTimeoutMs": 180000
     }
   },
   "agentRoles": {
@@ -23,6 +28,15 @@
       "provider": "codex-managed",
       "promptProfile": "profiles/char/default.json",
       "maxConcurrency": 2
+    },
+    "router": {
+      "provider": "router-codex-managed",
+      "promptProfile": "profiles/router/session-routing.json",
+      "temperature": 0,
+      "autoSubmitMinConfidence": 0.78,
+      "autoSubmitMinMargin": 0.18,
+      "maxTimelineEntries": 12,
+      "maxCandidates": 6
     }
   },
   "agentHttp": {
@@ -36,12 +50,6 @@
     "requestTimeoutMs": 5000,
     "eventPageSize": 100,
     "maxEvents": 200
-  },
-  "routing": {
-    "autoSubmitMinConfidence": 0.78,
-    "autoSubmitMinMargin": 0.18,
-    "maxTimelineEntries": 12,
-    "maxCandidates": 6
   },
   "character": {
     "profile": "models/Mao/DesktopChar.character.json"

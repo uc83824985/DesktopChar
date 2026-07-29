@@ -9,6 +9,8 @@ const DEFAULT_TTS_PROFILE_NAME = 'local';
 const DEFAULT_DESKTOP_CONFIG_EXAMPLE = 'desktop-char.config.example.json';
 const DEFAULT_CHAR_PROVIDER_NAME = 'codex-managed';
 const DEFAULT_CHAR_PROMPT_PROFILE = 'profiles/char/default.json';
+const DEFAULT_ROUTER_PROVIDER_NAME = 'router-codex-managed';
+const DEFAULT_ROUTER_PROMPT_PROFILE = 'profiles/router/session-routing.json';
 
 export function resolveDesktopConfigPath(env = process.env, cwd = process.cwd(), defaultFilePath) {
   const configuredPath = env.DESKTOP_CHAR_CONFIG_PATH ?? env.DESKTOP_CHAR_MCP_CONFIG_PATH;
@@ -58,6 +60,12 @@ export async function loadDesktopConfig(options = {}) {
     'agentRoles.char.promptProfile',
   );
   const charPromptProfile = await loadCharPromptProfile(charPromptProfilePath, { cwd });
+  const routerRole = optionalRecord(agentRoles.router, 'agentRoles.router');
+  const routerPromptProfilePath = assetPath(
+    routerRole.promptProfile ?? DEFAULT_ROUTER_PROMPT_PROFILE,
+    'agentRoles.router.promptProfile',
+  );
+  const routerPromptProfile = await loadRouterPromptProfile(routerPromptProfilePath, { cwd });
   return {
     filePath,
     exists,
@@ -71,6 +79,8 @@ export async function loadDesktopConfig(options = {}) {
       configFilePath: filePath,
       charPromptProfilePath,
       charPromptProfileConfig: charPromptProfile,
+      routerPromptProfilePath,
+      routerPromptProfileConfig: routerPromptProfile,
     }),
   };
 }
@@ -79,7 +89,7 @@ export function normalizeDesktopConfig(fileConfig = {}, env = {}, options = {}) 
   if (!isRecord(fileConfig)) throw new TypeError('Desktop config root must be an object');
   assertKnownKeys(fileConfig, [
     '$schema', 'version', 'interaction', 'window', 'agentProviders', 'agentRoles',
-    'agentHttp', 'taskManager', 'routing', 'character', 'performanceInference', 'ttsMcp',
+    'agentHttp', 'taskManager', 'character', 'performanceInference', 'ttsMcp',
     'characterMcp',
   ], 'Desktop config');
   if (fileConfig.$schema !== undefined) text(fileConfig.$schema, '$schema');
@@ -94,26 +104,41 @@ export function normalizeDesktopConfig(fileConfig = {}, env = {}, options = {}) 
   const defaultSize = optionalRecord(window.defaultSize, 'window.defaultSize');
   assertKnownKeys(defaultSize, ['width', 'height'], 'window.defaultSize');
   const agentProviders = optionalRecord(fileConfig.agentProviders, 'agentProviders');
-  const charRole = optionalRecord(optionalRecord(fileConfig.agentRoles, 'agentRoles').char, 'agentRoles.char');
+  const agentRoles = optionalRecord(fileConfig.agentRoles, 'agentRoles');
+  assertKnownKeys(agentRoles, ['char', 'router'], 'agentRoles');
+  const charRole = optionalRecord(agentRoles.char, 'agentRoles.char');
   assertKnownKeys(charRole, ['provider', 'promptProfile', 'maxConcurrency'], 'agentRoles.char');
   const charProviderName = text(charRole.provider ?? DEFAULT_CHAR_PROVIDER_NAME, 'agentRoles.char.provider');
-  const charProvider = optionalRecord(agentProviders[charProviderName], `agentProviders.${charProviderName}`);
-  assertKnownKeys(
-    charProvider,
-    ['adapter', 'lifecycle', 'requestTimeoutMs'],
-    `agentProviders.${charProviderName}`,
+  const charProvider = normalizeAgentProvider(
+    charProviderName,
+    optionalRecord(agentProviders[charProviderName], `agentProviders.${charProviderName}`),
+    'char',
   );
-  const charAdapter = text(charProvider.adapter ?? 'codex-app-server', `agentProviders.${charProviderName}.adapter`);
-  if (charAdapter !== 'codex-app-server') {
-    throw new TypeError(`agentProviders.${charProviderName}.adapter must be codex-app-server for the char role`);
-  }
-  const charLifecycle = text(charProvider.lifecycle ?? 'managed', `agentProviders.${charProviderName}.lifecycle`);
-  if (charLifecycle !== 'managed') {
-    throw new TypeError(`agentProviders.${charProviderName}.lifecycle must be managed for the char role`);
-  }
   const charPromptProfile = normalizeCharPromptProfile(
     options.charPromptProfileConfig ?? defaultCharPromptProfile(),
     options.charPromptProfilePath ?? charRole.promptProfile ?? DEFAULT_CHAR_PROMPT_PROFILE,
+  );
+  const routerRole = optionalRecord(agentRoles.router, 'agentRoles.router');
+  assertKnownKeys(
+    routerRole,
+    [
+      'provider', 'promptProfile', 'temperature', 'autoSubmitMinConfidence',
+      'autoSubmitMinMargin', 'maxTimelineEntries', 'maxCandidates',
+    ],
+    'agentRoles.router',
+  );
+  const routerProviderName = text(
+    routerRole.provider ?? DEFAULT_ROUTER_PROVIDER_NAME,
+    'agentRoles.router.provider',
+  );
+  const routerProvider = normalizeAgentProvider(
+    routerProviderName,
+    optionalRecord(agentProviders[routerProviderName], `agentProviders.${routerProviderName}`),
+    'router',
+  );
+  const routerPromptProfile = normalizeRouterPromptProfile(
+    options.routerPromptProfileConfig ?? defaultRouterPromptProfile(),
+    options.routerPromptProfilePath ?? routerRole.promptProfile ?? DEFAULT_ROUTER_PROMPT_PROFILE,
   );
   const agentHttp = optionalRecord(fileConfig.agentHttp, 'agentHttp');
   assertKnownKeys(agentHttp, ['enabled', 'host', 'port'], 'agentHttp');
@@ -135,12 +160,6 @@ export function normalizeDesktopConfig(fileConfig = {}, env = {}, options = {}) 
   if (taskManagerEnabled && !taskManagerMarkerPath) {
     throw new TypeError('Enabled taskManager requires markerPath');
   }
-  const routing = optionalRecord(fileConfig.routing, 'routing');
-  assertKnownKeys(
-    routing,
-    ['autoSubmitMinConfidence', 'autoSubmitMinMargin', 'maxTimelineEntries', 'maxCandidates'],
-    'routing',
-  );
   const characterProfile = optionalRecord(fileConfig.character, 'character');
   assertKnownKeys(characterProfile, ['profile'], 'character');
   const performanceInference = optionalRecord(fileConfig.performanceInference, 'performanceInference');
@@ -261,17 +280,8 @@ export function normalizeDesktopConfig(fileConfig = {}, env = {}, options = {}) 
       alwaysOnTop: boolean(window.alwaysOnTop, true, 'window.alwaysOnTop'),
     },
     agentProviders: {
-      [charProviderName]: {
-        adapter: charAdapter,
-        lifecycle: charLifecycle,
-        requestTimeoutMs: boundedInteger(
-          charProvider.requestTimeoutMs,
-          180_000,
-          1_000,
-          600_000,
-          `agentProviders.${charProviderName}.requestTimeoutMs`,
-        ),
-      },
+      [charProviderName]: charProvider,
+      [routerProviderName]: routerProvider,
     },
     agentRoles: {
       char: {
@@ -293,6 +303,53 @@ export function normalizeDesktopConfig(fileConfig = {}, env = {}, options = {}) 
           instructions: [...charPromptProfile.instructions],
         },
         applicationFallbackText: charPromptProfile.applicationFallbackText,
+      },
+      router: {
+        provider: routerProviderName,
+        promptProfile: assetPath(
+          routerRole.promptProfile ?? DEFAULT_ROUTER_PROMPT_PROFILE,
+          'agentRoles.router.promptProfile',
+        ),
+        profileRevision: routerPromptProfile.version,
+        profile: {
+          name: routerPromptProfile.name,
+          instructions: [...routerPromptProfile.instructions],
+        },
+        temperature: boundedNumber(
+          routerRole.temperature,
+          0,
+          0,
+          2,
+          'agentRoles.router.temperature',
+        ),
+        autoSubmitMinConfidence: boundedNumber(
+          routerRole.autoSubmitMinConfidence,
+          0.78,
+          0,
+          1,
+          'agentRoles.router.autoSubmitMinConfidence',
+        ),
+        autoSubmitMinMargin: boundedNumber(
+          routerRole.autoSubmitMinMargin,
+          0.18,
+          0,
+          1,
+          'agentRoles.router.autoSubmitMinMargin',
+        ),
+        maxTimelineEntries: boundedInteger(
+          routerRole.maxTimelineEntries,
+          12,
+          1,
+          100,
+          'agentRoles.router.maxTimelineEntries',
+        ),
+        maxCandidates: boundedInteger(
+          routerRole.maxCandidates,
+          6,
+          1,
+          50,
+          'agentRoles.router.maxCandidates',
+        ),
       },
     },
     agentHttp: {
@@ -332,36 +389,6 @@ export function normalizeDesktopConfig(fileConfig = {}, env = {}, options = {}) 
         10,
         2_000,
         'taskManager.maxEvents',
-      ),
-    },
-    routing: {
-      autoSubmitMinConfidence: boundedNumber(
-        routing.autoSubmitMinConfidence,
-        0.78,
-        0,
-        1,
-        'routing.autoSubmitMinConfidence',
-      ),
-      autoSubmitMinMargin: boundedNumber(
-        routing.autoSubmitMinMargin,
-        0.18,
-        0,
-        1,
-        'routing.autoSubmitMinMargin',
-      ),
-      maxTimelineEntries: boundedInteger(
-        routing.maxTimelineEntries,
-        12,
-        1,
-        100,
-        'routing.maxTimelineEntries',
-      ),
-      maxCandidates: boundedInteger(
-        routing.maxCandidates,
-        6,
-        1,
-        50,
-        'routing.maxCandidates',
       ),
     },
     characterProfile: {
@@ -522,6 +549,13 @@ export async function loadCharPromptProfile(profilePath, options = {}) {
   return parsed;
 }
 
+export async function loadRouterPromptProfile(profilePath, options = {}) {
+  const safePath = assetPath(profilePath, 'agentRoles.router.promptProfile');
+  const filePath = path.resolve(options.cwd ?? process.cwd(), safePath);
+  const parsed = await readConfigObject(filePath, `Router prompt profile ${safePath}`);
+  return normalizeRouterPromptProfile(parsed, safePath);
+}
+
 export async function loadTtsProfileConfig(profileName, options = {}) {
   const candidates = ttsProfileCandidates(profileName, options);
   let lastError;
@@ -613,6 +647,26 @@ function normalizeCharPromptProfile(value, profilePath) {
       profile.applicationFallbackText ?? '上一轮的回复没有收到，可以再说一次吗？',
       `${label}.applicationFallbackText`,
     ),
+  };
+}
+
+export function normalizeRouterPromptProfile(value, profilePath = DEFAULT_ROUTER_PROMPT_PROFILE) {
+  const label = `Router prompt profile ${profilePath}`;
+  const profile = optionalRecord(value, label);
+  assertKnownKeys(profile, ['$schema', 'version', 'name', 'instructions'], label);
+  if (profile.$schema !== undefined) text(profile.$schema, `${label}.$schema`);
+  const version = profile.version ?? 1;
+  if (!Number.isInteger(version) || version < 1) {
+    throw new TypeError(`${label}.version must be a positive integer`);
+  }
+  const instructions = profile.instructions === undefined
+    ? defaultRouterPromptProfile().instructions
+    : stringArray(profile.instructions, `${label}.instructions`).map((item, index) =>
+      text(item, `${label}.instructions[${index}]`));
+  return {
+    version,
+    name: text(profile.name ?? 'session-routing', `${label}.name`),
+    instructions,
   };
 }
 
@@ -821,6 +875,69 @@ function defaultCharPromptProfile() {
     instructions: ['使用简短、自然、适合桌面角色说出的中文回复。'],
     applicationFallbackText: '上一轮的回复没有收到，可以再说一次吗？',
   };
+}
+
+function defaultRouterPromptProfile() {
+  return {
+    version: 1,
+    name: 'session-routing',
+    instructions: [
+      '判断当前消息应发送给桌面角色，还是发送给候选任务会话。',
+      '只能选择请求中给出的候选 sessionId；没有合适候选时返回 no-match。',
+      '仅在多个候选确实接近且无法可靠区分时请求用户确认。',
+    ],
+  };
+}
+
+function normalizeAgentProvider(providerName, provider, role) {
+  const label = `agentProviders.${providerName}`;
+  const adapter = text(provider.adapter ?? 'codex-app-server', `${label}.adapter`);
+  if (adapter === 'codex-app-server') {
+    assertKnownKeys(provider, ['adapter', 'lifecycle', 'requestTimeoutMs'], label);
+    const lifecycle = text(provider.lifecycle ?? 'managed', `${label}.lifecycle`);
+    if (lifecycle !== 'managed') {
+      throw new TypeError(`${label}.lifecycle must be managed`);
+    }
+    return {
+      adapter,
+      lifecycle,
+      requestTimeoutMs: boundedInteger(
+        provider.requestTimeoutMs,
+        180_000,
+        1_000,
+        600_000,
+        `${label}.requestTimeoutMs`,
+      ),
+    };
+  }
+  if (adapter === 'openai-compatible' && role === 'router') {
+    assertKnownKeys(provider, ['adapter', 'baseUrl', 'model', 'apiKeyEnv', 'requestTimeoutMs'], label);
+    return {
+      adapter,
+      baseUrl: httpUrl(provider.baseUrl, `${label}.baseUrl`),
+      model: text(provider.model, `${label}.model`),
+      apiKeyEnv: environmentVariableName(provider.apiKeyEnv, `${label}.apiKeyEnv`),
+      requestTimeoutMs: boundedInteger(
+        provider.requestTimeoutMs,
+        8_000,
+        1_000,
+        600_000,
+        `${label}.requestTimeoutMs`,
+      ),
+    };
+  }
+  if (role === 'char') {
+    throw new TypeError(`${label}.adapter must be codex-app-server for the char role`);
+  }
+  throw new TypeError(`${label}.adapter must be codex-app-server or openai-compatible for the router role`);
+}
+
+function environmentVariableName(value, label) {
+  const result = text(value, label);
+  if (!/^[A-Za-z_][A-Za-z0-9_]*$/u.test(result)) {
+    throw new TypeError(`${label} must be an environment variable name`);
+  }
+  return result;
 }
 
 function loopbackHttpUrl(value, label) {

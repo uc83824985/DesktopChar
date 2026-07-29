@@ -38,15 +38,7 @@
     },
     "agentProviders": {
       "type": "object",
-      "additionalProperties": {
-        "type": "object",
-        "additionalProperties": false,
-        "properties": {
-          "adapter": { "const": "codex-app-server" },
-          "lifecycle": { "const": "managed" },
-          "requestTimeoutMs": { "type": "integer", "minimum": 1000, "maximum": 600000 }
-        }
-      }
+      "additionalProperties": { "$ref": "#/$defs/agentProvider" }
     },
     "agentRoles": {
       "type": "object",
@@ -59,6 +51,19 @@
             "provider": { "type": "string", "minLength": 1 },
             "promptProfile": { "$ref": "#/$defs/applicationAssetPath" },
             "maxConcurrency": { "type": "integer", "minimum": 1, "maximum": 8 }
+          }
+        },
+        "router": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "provider": { "type": "string", "minLength": 1 },
+            "promptProfile": { "$ref": "#/$defs/applicationAssetPath" },
+            "temperature": { "type": "number", "minimum": 0, "maximum": 2 },
+            "autoSubmitMinConfidence": { "type": "number", "minimum": 0, "maximum": 1 },
+            "autoSubmitMinMargin": { "type": "number", "minimum": 0, "maximum": 1 },
+            "maxTimelineEntries": { "type": "integer", "minimum": 1, "maximum": 100 },
+            "maxCandidates": { "type": "integer", "minimum": 1, "maximum": 50 }
           }
         }
       }
@@ -91,21 +96,39 @@
         "maxEvents": { "type": "integer", "minimum": 10, "maximum": 2000 }
       }
     },
-    "routing": {
-      "type": "object",
-      "additionalProperties": false,
-      "properties": {
-        "autoSubmitMinConfidence": { "type": "number", "minimum": 0, "maximum": 1 },
-        "autoSubmitMinMargin": { "type": "number", "minimum": 0, "maximum": 1 },
-        "maxTimelineEntries": { "type": "integer", "minimum": 1, "maximum": 100 },
-        "maxCandidates": { "type": "integer", "minimum": 1, "maximum": 50 }
-      }
-    },
     "performanceInference": { "$ref": "#/$defs/performanceInference" },
     "ttsMcp": { "$ref": "#/$defs/ttsMcp" },
     "characterMcp": { "$ref": "#/$defs/characterMcp" }
   },
   "$defs": {
+    "agentProvider": {
+      "oneOf": [
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "adapter": { "const": "codex-app-server" },
+            "lifecycle": { "const": "managed" },
+            "requestTimeoutMs": { "type": "integer", "minimum": 1000, "maximum": 600000 }
+          }
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["adapter", "baseUrl", "model", "apiKeyEnv"],
+          "properties": {
+            "adapter": { "const": "openai-compatible" },
+            "baseUrl": { "type": "string", "format": "uri" },
+            "model": { "type": "string", "minLength": 1 },
+            "apiKeyEnv": {
+              "type": "string",
+              "pattern": "^[A-Za-z_][A-Za-z0-9_]*$"
+            },
+            "requestTimeoutMs": { "type": "integer", "minimum": 1000, "maximum": 600000 }
+          }
+        }
+      ]
+    },
     "applicationAssetPath": {
       "type": "string",
       "minLength": 1,

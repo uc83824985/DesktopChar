@@ -120,7 +120,6 @@ import type {
   DesktopAgentRolesConfig,
   DesktopTtsConfig,
   DesktopPerformanceInferenceConfig,
-  DesktopRoutingConfig,
   McpServiceId,
   McpServiceState,
   McpServiceTest,
@@ -1000,7 +999,7 @@ try {
     type: runtime.getSnapshot().gaze.active ? 'user.gaze-follow-disabled' : 'user.gaze-follow-enabled',
   }));
   reset.addEventListener('click', () => runtime?.dispatch({ type: 'user.interrupt-requested' }));
-  initializeConversationTestRuntime(shellState?.agentRoles.char, shellState?.routing);
+  initializeConversationTestRuntime(shellState?.agentRoles.char, shellState?.agentRoles.router);
   if (desktopShell) {
     conversationAgentStateUnsubscribe = desktopShell.onConversationAgentState(state => {
       conversationAgentState = state;
@@ -1789,7 +1788,7 @@ async function browserConversationReply(
 
 function initializeConversationTestRuntime(
   charRole?: DesktopAgentRolesConfig['char'],
-  routingConfig?: DesktopRoutingConfig,
+  routerRole?: DesktopAgentRolesConfig['router'],
 ): void {
   const connections = new AgentConnectionManager();
   conversationConnections = connections;
@@ -1830,8 +1829,8 @@ function initializeConversationTestRuntime(
       ?? '上一轮的回复没有收到，可以再说一次吗？',
   });
   routingContext = new VisibleRoutingContext({
-    maxTimelineEntries: routingConfig?.maxTimelineEntries ?? 12,
-    maxCandidates: routingConfig?.maxCandidates ?? 6,
+    maxTimelineEntries: routerRole?.maxTimelineEntries ?? 12,
+    maxCandidates: routerRole?.maxCandidates ?? 6,
   });
   routeCoordinator = new RouteCoordinator({
     router: {
@@ -1864,10 +1863,10 @@ function initializeConversationTestRuntime(
       },
     },
     config: {
-      autoSubmitMinConfidence: routingConfig?.autoSubmitMinConfidence ?? 0.78,
-      autoSubmitMinMargin: routingConfig?.autoSubmitMinMargin ?? 0.18,
-      maxTimelineEntries: routingConfig?.maxTimelineEntries ?? 12,
-      maxCandidates: routingConfig?.maxCandidates ?? 6,
+      autoSubmitMinConfidence: routerRole?.autoSubmitMinConfidence ?? 0.78,
+      autoSubmitMinMargin: routerRole?.autoSubmitMinMargin ?? 0.18,
+      maxTimelineEntries: routerRole?.maxTimelineEntries ?? 12,
+      maxCandidates: routerRole?.maxCandidates ?? 6,
     },
   });
   if (taskManagerState) updateRoutingCandidates(taskManagerState);
