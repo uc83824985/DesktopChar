@@ -127,8 +127,9 @@ RouteCoordinator 变成同时持有所有领域状态的 God Object。
 每次发送冻结可见 revision、`showing/shown` 投影和有界候选；显式 Char/session 保持 sticky
 并绕过 Router。Auto 对明显高分候选直接路由、只对达到合理分数且领先幅度不足的接近候选
 产生确认；弱且孤立的猜测收敛为 `no-match`。Provider 错误、未知 session、revision 不匹配
-或非法结构抛出可区分的路由错误，均不会回退 Char 或产生 session 副作用。当前仍使用注入
-端口测试，实际 Router Provider、Task Manager 和前台选择器按后续步骤接入。
+或非法结构抛出可区分的路由错误，均不会回退 Char 或产生 session 副作用。该领域门面现已
+接入 Task Manager、前台 sticky 选择器和主进程 Router Provider；纯端口测试继续负责覆盖
+阈值、确认、冻结 revision 与严格失败语义。
 
 不同目标采用不同的并发规则：
 
@@ -471,7 +472,7 @@ WorkAssistant 的 `start_*_agent` 启动器已经验证了可复用模式：每�
 entry script，不把 Provider 设置写入全局配置。DesktopChar 后续采用相同原则，但拆成
 “可复用 Provider Profile + Agent 角色绑定”，避免每个角色复制整份连接信息。
 
-下面是 Agent 配置形态。Char 部分已经支持；Router 部分将在路由实现阶段加入：
+下面是当前已经支持的 Agent 配置形态：
 
 ```json
 {
@@ -513,7 +514,7 @@ entry script，不把 Provider 设置写入全局配置。DesktopChar 后续采�
 - Char 与 Router 的 Provider、模型、base URL、超时、温度和 prompt profile 均可独立；
 - 独立配置不等于必须启动两个进程，同一 Provider Adapter 可以按 profile 复用连接池；
 - 所有并行 Char worker 绑定同一角色 Profile 和 Persona revision，不表示不同人格；
-- Router 优先选择低延迟、稳定结构化输出的远程轻量模型，DeepSeek 只是首个候选；
+- Router 可选择低延迟、稳定结构化输出的远程轻量模型；DeepSeek 只是候选而非硬编码依赖；
 - `autoSubmitMinConfidence` 和 `autoSubmitMinMargin` 由确定性的 RouteCoordinator 使用，
   Router 模型不能自行降低阈值；低于任一阈值且存在多个合理候选时进入二次确认；
 - Char 可以使用更强模型，且只接收生成角色化表达所需的有界事实事件和 Persona 投影；
@@ -522,10 +523,15 @@ entry script，不把 Provider 设置写入全局配置。DesktopChar 后续采�
 - 任何启动脚本、示例 JSON、审计快照和前台状态都不得输出 token 或 API key；
 - Profile 热重载只影响新请求；已经冻结的路由决策和正在呈现的通知继续使用原 revision。
 
-Char Provider/Profile 分层、脱敏快照和配置测试已经落地，生产 Char 仍固定使用 managed
-Codex App Server。旧 `conversation.maxAssistants` 已一次性迁移为
-`agentRoles.char.maxConcurrency`，不保留同义字段。Router Provider 与 Role 将沿用相同
-结构加入，不能把某个 DeepSeek endpoint 硬编码进业务逻辑。
+Char 与 Router 的 Provider/Profile 分层、脱敏快照和配置测试均已落地。生产 Char 固定
+使用 managed Codex App Server；默认 Router 也使用 managed Codex，并与 Char 共享同一
+进程、按请求建立独立 ephemeral thread。Router 还支持 OpenAI-compatible Provider：
+应用 JSON 只保存 `apiKeyEnv`，密钥值在请求开始时从环境读取，不进入快照或日志。
+`profiles/router/session-routing.json` 每次新请求开始时重新读取，已开始的请求继续使用冻结
+Profile。Provider 边界使用 Codex 严格 Schema 支持的扁平判别结构，主进程再还原为项目内
+`RouteDecision` 联合类型。旧 `conversation.maxAssistants` 已一次性迁移为
+`agentRoles.char.maxConcurrency`，根级 `routing` 也已迁入 `agentRoles.router`，均不保留
+同义字段。
 
 ## 轻量 Char Agent MCP 测试面
 
@@ -594,10 +600,12 @@ Char Agent 的建议只是用户可见内容，不自动转化为 TaskCommand。
 4. （已完成）DesktopChar 接收并保存有界事实事件，保存后 ack，并以不含终端尾部的固定文案
    完成无 Agent 的确定性通知与 Avatar Runtime/TTS 播放闭环。
 5. （已完成）增加 `VisibleRoutingContext`、候选 LRU、冻结 revision，以及现有对话框中的
-   sticky Auto/Char/Session 选择、候选状态和二次确认区域；Router Provider 未配置时严格
+   sticky Auto/Char/Session 选择、候选状态和二次确认区域；Router Provider 失败时严格
    报错，不回退到 Char 或任意 session。
 6. （已完成）实现 Char Agent 的角色化任务通知：只把标题、状态和结果文档可用性编译到
    `CharReplyTask`，不传终端尾部或绝对路径；每个任务 Turn 使用对应固定短句作为应用
    fallback，有界原始事件继续保留在 DesktopChar main 快照中供审计。
-7. 补齐 Router Provider Profile/Agent Role、密钥引用与热重载；Char Role 配置和首版应用
-   失败占位已随第 1 步落地。
+7. （已完成）补齐 Router Provider/Profile/Agent Role、`apiKeyEnv` 密钥引用和新请求边界
+   热重载；main 通过窄 IPC 提供结构化决策与取消，managed Router/Char 共用一个 App Server。
+   前台 smoke 已验证 sticky Session、Provider 严格失败、配置热切换、真实 Codex Auto 路由
+   和随后 Char 回复。

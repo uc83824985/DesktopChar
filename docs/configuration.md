@@ -161,6 +161,11 @@ Windows 通常对应 `%APPDATA%/DesktopChar/config.json`。程序只通过 Elect
       "adapter": "codex-app-server",
       "lifecycle": "managed",
       "requestTimeoutMs": 180000
+    },
+    "router-codex-managed": {
+      "adapter": "codex-app-server",
+      "lifecycle": "managed",
+      "requestTimeoutMs": 180000
     }
   },
   "agentRoles": {
@@ -168,6 +173,15 @@ Windows 通常对应 `%APPDATA%/DesktopChar/config.json`。程序只通过 Elect
       "provider": "codex-managed",
       "promptProfile": "profiles/char/default.json",
       "maxConcurrency": 2
+    },
+    "router": {
+      "provider": "router-codex-managed",
+      "promptProfile": "profiles/router/session-routing.json",
+      "temperature": 0,
+      "autoSubmitMinConfidence": 0.78,
+      "autoSubmitMinMargin": 0.18,
+      "maxTimelineEntries": 12,
+      "maxCandidates": 6
     }
   },
   "agentHttp": {
@@ -181,12 +195,6 @@ Windows 通常对应 `%APPDATA%/DesktopChar/config.json`。程序只通过 Elect
     "requestTimeoutMs": 5000,
     "eventPageSize": 100,
     "maxEvents": 200
-  },
-  "routing": {
-    "autoSubmitMinConfidence": 0.78,
-    "autoSubmitMinMargin": 0.18,
-    "maxTimelineEntries": 12,
-    "maxCandidates": 6
   },
   "character": {
     "profile": "models/Mao/DesktopChar.character.json"
@@ -208,21 +216,23 @@ Windows 通常对应 `%APPDATA%/DesktopChar/config.json`。程序只通过 Elect
 
 - 拖动长按延迟；
 - Char worker 并发上限 `agentRoles.char.maxConcurrency`，允许 `1–8`，默认 `2`；
-- managed Char Provider 请求超时 `agentProviders.codex-managed.requestTimeoutMs`；所有
-  Char worker 共享 DesktopChar 托管的单个 Codex App Server；
+- managed Char/Router Provider 请求超时；两种角色共享 DesktopChar 托管的单个 Codex
+  App Server，并为每次请求建立独立 ephemeral thread；
 - `agentRoles.char.promptProfile` 指向角色提示 Profile；首版包含 Persona instructions 和
   应用 fallback 文本；
 - Agent HTTP 启停、loopback host 和端口；
 - DesktopChar 到独立 Task Manager 的启停、marker 绝对路径、轮询周期、请求超时和有界事件
   数量；
-- Auto 路由的最低自动提交置信度、领先幅度、可见时间线与候选上限；
+- `agentRoles.router` 下 Auto 路由的最低自动提交置信度、领先幅度、可见时间线与候选上限；
 - 语音合成 MCP、角色接入 MCP、重连与内置本地语音合成参数；
 - 窗口默认尺寸、边距、置顶策略等用户偏好；
 - 当前角色资产 Profile 路径。
 
-Char Agent 已采用“可复用 Provider Profile + Agent 角色绑定”。Router Agent 的独立
-Provider/Profile 会在 Router 实现时加入；密钥只能通过环境变量或后续 secret reference
-传递，不能在应用 JSON 中硬编码 DeepSeek 或其他 Provider 凭据。目标示例和角色边界见
+Char 与 Router Agent 均采用“可复用 Provider + Agent 角色绑定”。Router 支持
+`codex-app-server` 和 `openai-compatible` Adapter；后者只在配置中保存 `apiKeyEnv`，密钥值
+在每次请求开始时解析，不进入状态快照。`agentRoles.router.promptProfile` 在每个新请求开始
+时重新读取，因此 Profile 修改不改变正在运行或已经冻结的决策。不能在应用 JSON 中硬编码
+DeepSeek 或其他 Provider 凭据。目标示例和角色边界见
 [Task Manager 与会话路由设计](task-manager-routing.md)。
 
 独立 Task Manager 使用环境变量启动，不把 Session Monitor token 写入应用 JSON：
@@ -243,10 +253,11 @@ DesktopChar 侧通过应用 JSON 的 `taskManager` 读取该发现 marker。启�
 加载应用 JSON 后仍以 JSON 所有权为准。DesktopChar 不读取 Session Monitor token，也不把
 Task Manager marker/token 内容转发给 renderer。
 
-`routing.autoSubmitMinConfidence` 和 `routing.autoSubmitMinMargin` 均为 `0–1`；前者要求最高
-候选达到足够置信度，后者要求它相对第二候选有明显领先。未达到明显领先、但存在多个合理
-候选时进入二次确认。`maxTimelineEntries` 与 `maxCandidates` 分别限制每次冻结给 Router 的
-用户可见投影和 LRU/相关性候选数量。阈值只决定新请求，不会改变已经冻结的 RouteRecord。
+`agentRoles.router.autoSubmitMinConfidence` 和
+`agentRoles.router.autoSubmitMinMargin` 均为 `0–1`；前者要求最高候选达到足够置信度，
+后者要求它相对第二候选有明显领先。未达到明显领先、但存在多个合理候选时进入二次确认。
+同一 role 下的 `maxTimelineEntries` 与 `maxCandidates` 分别限制每次冻结给 Router 的用户
+可见投影和 LRU/相关性候选数量。阈值只决定新请求，不会改变已经冻结的 RouteRecord。
 
 `performanceInference.lifecycle` 接受 `external`、`managed` 字符串简写，或带启动和
 健康检查策略的对象。`external` 的动态开关只改变 Adapter 是否向现有 endpoint 发请求；

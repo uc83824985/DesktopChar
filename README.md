@@ -48,8 +48,9 @@ Task Manager 首个内存版本位于 `task-manager/`。设置 `SESSION_MONITOR_
 fallback。`npm run test:task-manager-foreground` 使用隔离服务和真实 managed Codex 验证这条
 链路，不提交任务命令，也不把终端尾部或结果绝对路径交给 Char。
 现有角色对话框已增加 sticky 的 Auto/Char/Session 目标选择、候选状态与二次确认区域；
-`npm run test:routing-foreground` 会用隔离 Session 验证两次直接提交、Router 严格失败边界，
-再切换 Char 通过 managed Codex 完成一轮真实前台回复。
+`npm run test:routing-foreground` 会用隔离 Session 验证两次 sticky 直接提交、Router 严格
+失败边界，再热切换到 managed Codex 完成真实 Auto 路由，最后切换 Char 并由同一 App Server
+完成一轮前台回复。
 
 表情和已有 Live2D 动作的语义选择暂由本地表现推理端口完成，Qwen3.5-2B non-thinking 只是首个验证 Profile，不进入外部 Agent 关键路径；同协议模型只需替换 Profile，不同协议通过新 Adapter 接入。首个模型使用 OpenAI-compatible HTTP，不新增 MCP；`external` 只连接现有 endpoint，`managed` 由 Electron Supervisor 启停入口进程，两者复用同一 Adapter。边界与生命周期见 [本地表现模型接入设计](docs/performance-model-integration.md)，实现新 Provider 时遵循 [表现模型 Provider 接入指南](docs/performance-model-provider-integration.md)，官方模型配置阅读结论见 [Qwen3.5-2B 阅读记录](docs/references/qwen3.5-2b.md)。
 

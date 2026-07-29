@@ -145,7 +145,7 @@ External Reply Agent 注册、租约和 callback 数据面不再保留；它既�
 复杂度，也不能比 App Server 更好地满足“受控多次对话请求”。
 
 `ConversationReplyGateway` 继续统一输入/输出审计和 Renderer IPC。前台“连接与请求”区
-显示实际 Provider、输入、回复和错误。Router 后续在 `character` 与具体
+显示实际 Provider、输入、回复和错误。Router 已在 `character` 与具体
 `task-session` 之间选择：角色目标复用这里的 Char Agent Pool 和 ConversationRuntime；
 session 目标进入 Task Manager 并默认立即提交。Task Manager 按 session 维护
 submission generation，只把最后一次提交后恢复 `waiting_input` 的稳定结果作为完成事实。
