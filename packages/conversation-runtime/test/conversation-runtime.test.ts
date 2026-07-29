@@ -88,7 +88,7 @@ test('multi-agent replies prepare out of order but commit and present in turn or
   manager.close();
 });
 
-test('failed char reply seals an application fallback and unblocks later turns', async () => {
+test('failed char reply seals its turn-specific application fallback and unblocks later turns', async () => {
   const manager = new AgentConnectionManager();
   const first = new ControlledAgent();
   const second = new ControlledAgent();
@@ -109,7 +109,7 @@ test('failed char reply seals an application fallback and unblocks later turns',
     idFactory: kind => `${kind}-${id++}`,
   });
 
-  runtime.submitUserMessage('第一条');
+  runtime.submitUserMessage('第一条', { applicationFallbackText: '「任务一」已完成。' });
   runtime.submitUserMessage('第二条');
   await waitUntil(() => first.calls.length === 1 && second.calls.length === 1);
   second.complete(0, '第二条回复');
@@ -120,7 +120,7 @@ test('failed char reply seals an application fallback and unblocks later turns',
   assert.equal(failed?.reply, 'sealed');
   assert.equal(failed?.error, 'provider unavailable');
   assert.equal(failed?.segments[0]?.source, 'application-fallback');
-  assert.equal(failed?.segments[0]?.text, '上一轮的回复没有收到，可以再说一次吗？');
+  assert.equal(failed?.segments[0]?.text, '「任务一」已完成。');
 
   presentation.complete(0);
   await waitUntil(() => presentation.started.length === 2);
@@ -128,7 +128,7 @@ test('failed char reply seals an application fallback and unblocks later turns',
   await runtime.waitForIdle();
   assert.deepEqual(
     runtime.getSnapshot().messages.filter(message => message.role === 'assistant').map(message => message.text),
-    ['上一轮的回复没有收到，可以再说一次吗？', '第二条回复'],
+    ['「任务一」已完成。', '第二条回复'],
   );
   runtime.dispose();
   manager.close();

@@ -179,6 +179,10 @@ export interface SubmittedTurn {
   responseId: string;
 }
 
+export interface ConversationSubmissionOptions {
+  applicationFallbackText?: string;
+}
+
 export interface ConversationRuntimeOptions {
   conversationId: string;
   connections: {

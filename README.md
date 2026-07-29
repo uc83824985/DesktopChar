@@ -43,8 +43,10 @@ Task Manager 首个内存版本位于 `task-manager/`。设置 `SESSION_MONITOR_
 `node task-manager/server.mjs`；服务只监听 loopback，并在本机状态目录写入临时 marker/token。
 `npm run test:task-manager-monitor` 与 `npm run test:task-manager-service` 分别执行真实 Monitor
 只读发现和完整常驻服务只读验收，不会向任何 CLI 提交输入。DesktopChar 已可通过
-`taskManager.markerPath` 接收有界事件、在 main 保存后 ack，并由前台 Avatar Runtime 播放固定
-终态通知；`npm run test:task-manager-foreground` 使用隔离服务验证这条链路，不提交任务命令。
+`taskManager.markerPath` 接收有界事件、在 main 保存后 ack，再把标题、状态和结果文档是否可用
+编译为精简 CharReplyTask；角色化短句由前台 Avatar Runtime 播放，每个 Turn 自带固定终态
+fallback。`npm run test:task-manager-foreground` 使用隔离服务和真实 managed Codex 验证这条
+链路，不提交任务命令，也不把终端尾部或结果绝对路径交给 Char。
 现有角色对话框已增加 sticky 的 Auto/Char/Session 目标选择、候选状态与二次确认区域；
 `npm run test:routing-foreground` 会用隔离 Session 验证两次直接提交、Router 严格失败边界，
 再切换 Char 通过 managed Codex 完成一轮真实前台回复。

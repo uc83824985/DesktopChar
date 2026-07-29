@@ -125,7 +125,7 @@ try {
   await page.waitForFunction(() => {
     const state = document.body.dataset.taskNotification;
     return state === 'presenting' || state === 'completed';
-  }, undefined, { timeout: 10_000 });
+  }, undefined, { timeout: 180_000 });
   const presenting = await page.evaluate(async () => ({
     notificationState: document.body.dataset.taskNotification,
     notificationText: document.body.dataset.taskNotificationText,
@@ -133,22 +133,38 @@ try {
     bubbleText: document.querySelector('#speech-bubble')?.textContent?.trim() ?? '',
     taskManager: await window.desktopChar?.getTaskManagerState(),
   }));
-  await page.locator('body[data-task-notification="completed"]').waitFor({ timeout: 15_000 });
+  await page.locator('body[data-task-notification="completed"]').waitFor({ timeout: 30_000 });
+  const final = await page.evaluate(async () => ({
+    notificationText: document.body.dataset.taskNotificationText ?? '',
+    notificationSource: document.body.dataset.taskNotificationSource,
+    agentState: await window.desktopChar?.getConversationAgentState(),
+  }));
 
-  const expectedText = '「隔离前台任务」已完成。结果文档已准备好。';
-  if (presenting.notificationText !== expectedText
-    || !presenting.notificationEvent?.endsWith(`:${event.eventId}`)
+  const activity = final.agentState?.activities.find(item =>
+    item.input.includes('"title":"隔离前台任务"'));
+  if (!presenting.notificationEvent?.endsWith(`:${event.eventId}`)
     || presenting.taskManager?.instanceId !== instanceId
     || presenting.taskManager?.cursor !== 1
     || presenting.taskManager?.pendingAckCount !== 0
-    || presenting.taskManager?.events.length !== 1) {
-    throw new Error(`Unexpected foreground Task Manager state: ${JSON.stringify(presenting)}`);
+    || presenting.taskManager?.events.length !== 1
+    || final.notificationSource !== 'char'
+    || !activity
+    || activity.providerAgentId !== 'codex-app-server'
+    || activity.state !== 'completed'
+    || !activity.reply
+    || final.notificationText !== activity.reply) {
+    throw new Error(
+      `Unexpected foreground Task Manager/Char state: ${JSON.stringify({ presenting, final })}`,
+    );
   }
   if (
     presenting.notificationText.includes(event.visibleTextTail)
     || presenting.bubbleText.includes(event.visibleTextTail)
+    || final.notificationText.includes(event.visibleTextTail)
+    || activity.input.includes(event.visibleTextTail)
+    || activity.input.includes(event.resultArtifactPath)
   ) {
-    throw new Error('Task notification leaked the terminal visibleTextTail');
+    throw new Error('Task notification leaked terminal text or the result path into Char context');
   }
   if (ackCount < 1 || commandCount !== 0) {
     throw new Error(`Unexpected Task Manager side effects: ${JSON.stringify({ ackCount, commandCount })}`);
@@ -156,7 +172,7 @@ try {
   if (rendererErrors.length) {
     throw new Error(`Foreground Task Manager renderer errors:\n${rendererErrors.join('\n')}`);
   }
-  console.log(`Foreground Task Manager notification smoke passed: ${expectedText}`);
+  console.log(`Foreground Task Manager Char notification smoke passed: ${final.notificationText}`);
 }
 finally {
   await application?.close().catch(() => {});

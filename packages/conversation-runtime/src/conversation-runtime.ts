@@ -3,6 +3,7 @@ import type {
   CharReplyTask,
   CommitState,
   ConversationMessage,
+  ConversationSubmissionOptions,
   ConversationRuntimeOptions,
   ConversationSnapshot,
   PerformancePreparationState,
@@ -44,6 +45,7 @@ interface ResponseRecord {
   commit: CommitState;
   presentation: PresentationState;
   controller: AbortController;
+  applicationFallbackText: string;
   agentId?: string;
   instanceId?: string;
   error?: string;
@@ -77,11 +79,19 @@ export class ConversationRuntime {
     this.options = options;
   }
 
-  submitUserMessage(text: string): SubmittedTurn {
+  submitUserMessage(
+    text: string,
+    submission: ConversationSubmissionOptions = {},
+  ): SubmittedTurn {
     if (this.disposed) throw new Error('ConversationRuntime is disposed');
     const normalized = text.trim();
     if (!normalized) throw new TypeError('User message must not be empty');
-
+    const applicationFallbackText = (
+      submission.applicationFallbackText ?? this.options.applicationFallbackText
+    ).trim();
+    if (!applicationFallbackText) {
+      throw new TypeError('Turn applicationFallbackText must not be empty');
+    }
     const turnId = this.id('turn');
     const taskId = this.id('task');
     const attemptId = this.id('attempt');
@@ -112,6 +122,7 @@ export class ConversationRuntime {
       commit: 'waiting',
       presentation: 'waiting',
       controller: new AbortController(),
+      applicationFallbackText,
       segments: [],
     };
     this.responses.push(response);
@@ -224,7 +235,7 @@ export class ConversationRuntime {
       response.segments = [{
         segmentId: this.id('segment'),
         segmentRevision: 0,
-        text: this.options.applicationFallbackText.trim(),
+        text: response.applicationFallbackText,
         source: 'application-fallback',
         speech: 'none',
         performance: 'none',

@@ -125,12 +125,26 @@ try {
   await input.fill(firstText);
   await input.press('Control+Enter');
   await page.locator('body[data-routing-phase="sent"]').waitFor({ timeout: 5_000 });
+  await page.waitForFunction(() =>
+    document.querySelector('.conversation-panel__form textarea')?.value === '');
   await input.fill(secondText);
   await input.press('Control+Enter');
   await page.waitForFunction(expected => {
     const status = document.querySelector('.conversation-panel__route-status')?.textContent ?? '';
     return document.body.dataset.routingPhase === 'sent' && status.includes(expected);
-  }, secondText, { timeout: 5_000 });
+  }, secondText, { timeout: 5_000 }).catch(async error => {
+    const diagnostics = await page.evaluate(() => ({
+      routingPhase: document.body.dataset.routingPhase,
+      routingSelection: document.body.dataset.routingSelection,
+      routeStatus: document.querySelector('.conversation-panel__route-status')?.textContent,
+      input: document.querySelector('.conversation-panel__form textarea')?.value,
+      panelPhase: document.body.dataset.interactionPanel,
+    }));
+    throw new Error(
+      `Second sticky submission did not settle: ${JSON.stringify({ diagnostics, commands, rendererErrors })}`,
+      { cause: error },
+    );
+  });
   if (
     commands.length !== 2
     || commands.some(command => command.sessionId !== sessionId || command.mode !== 'submit')
@@ -197,7 +211,15 @@ async function openConversationPanel(page, bounds, pointer) {
     if (await page.locator('body').getAttribute('data-pixel-selection') !== 'covered') continue;
     pointer.click();
     try {
-      await page.locator('.scene-interaction-panel').waitFor({ state: 'visible', timeout: 3_000 });
+      const panel = page.locator('.scene-interaction-panel');
+      await panel.waitFor({ state: 'visible', timeout: 3_000 });
+      const panelBounds = await panel.boundingBox();
+      if (panelBounds) {
+        pointer.move({
+          x: bounds.x + panelBounds.x + panelBounds.width / 2,
+          y: bounds.y + panelBounds.y + Math.min(24, panelBounds.height / 2),
+        });
+      }
       return;
     }
     catch {

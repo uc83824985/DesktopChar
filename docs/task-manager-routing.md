@@ -596,6 +596,8 @@ Char Agent 的建议只是用户可见内容，不自动转化为 TaskCommand。
 5. （已完成）增加 `VisibleRoutingContext`、候选 LRU、冻结 revision，以及现有对话框中的
    sticky Auto/Char/Session 选择、候选状态和二次确认区域；Router Provider 未配置时严格
    报错，不回退到 Char 或任意 session。
-6. 实现 Char Agent 的角色化任务通知，并保持有界事实事件可审计、可重新处理。
+6. （已完成）实现 Char Agent 的角色化任务通知：只把标题、状态和结果文档可用性编译到
+   `CharReplyTask`，不传终端尾部或绝对路径；每个任务 Turn 使用对应固定短句作为应用
+   fallback，有界原始事件继续保留在 DesktopChar main 快照中供审计。
 7. 补齐 Router Provider Profile/Agent Role、密钥引用与热重载；Char Role 配置和首版应用
    失败占位已随第 1 步落地。

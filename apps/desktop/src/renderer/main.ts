@@ -84,6 +84,7 @@ import type {
   PresentationUnit,
 } from '../../../../packages/conversation-runtime/src/types.ts';
 import {
+  compileTaskNotification,
   RouteCoordinator,
   RouteCoordinatorError,
   VisibleRoutingContext,
@@ -91,6 +92,7 @@ import {
 import type {
   RouteOutcome,
   TargetSelection,
+  TaskNotificationType,
   TaskSessionRouteCandidate,
 } from '../../../../packages/interaction-routing/src/index.ts';
 import {
@@ -592,6 +594,13 @@ interface RoutingUiState {
   targetLabel?: string;
 }
 
+interface TaskNotificationTurn {
+  event: TaskManagerEventState;
+  displayText: string;
+  turnId: string;
+  responseId: string;
+}
+
 let model: Live2DModel<Cubism4InternalModel> | undefined;
 let assetPreviewCatalog: Live2dAssetPreviewCatalog = { expressions: [], motions: [] };
 let assetPreviewIsolation: AssetPreviewIsolationController | undefined;
@@ -613,10 +622,11 @@ let routingInFlight = false;
 let routingUiState: RoutingUiState = { phase: 'idle', text: '选择目标后发送消息。' };
 let taskManagerState: TaskManagerState | undefined;
 let taskManagerStateUnsubscribe: (() => void) | undefined;
-let taskNotificationPresenting = false;
-let activeTaskNotificationController: AbortController | undefined;
+let activeTaskNotification: TaskNotificationTurn | undefined;
 const seenTaskManagerEventIds = new Set<string>();
 const pendingTaskNotifications: TaskManagerEventState[] = [];
+const taskNotificationTurns = new Map<string, TaskNotificationTurn>();
+const taskNotificationResponses = new Map<string, TaskNotificationTurn>();
 const taskSessionVisibleEvents = new Map<string, string>();
 const exposureStates = new Map<string, {
   phase: 'showing' | 'shown';
@@ -1040,10 +1050,6 @@ try {
     conversationAgentStateUnsubscribe = undefined;
     taskManagerStateUnsubscribe?.();
     taskManagerStateUnsubscribe = undefined;
-    activeTaskNotificationController?.abort(
-      new DOMException('Task notification presentation disposed', 'AbortError'),
-    );
-    activeTaskNotificationController = undefined;
     cubismUpdatePipeline?.restore();
     cubismUpdatePipeline = undefined;
     contextMenuHost.dispose();
@@ -1870,6 +1876,7 @@ function initializeConversationTestRuntime(
     document.body.dataset.conversationPending = pending.toString();
     document.body.dataset.conversationTurns = snapshot.responses.length.toString();
     if (pending === 0) reconcileConversationAgentSlots();
+    updateActiveTaskNotification(snapshot);
     interactionPanelHost.refresh();
   });
 }
@@ -1967,58 +1974,86 @@ function taskManagerEventIdentity(event: TaskManagerEventState): string {
   return `${event.sourceInstanceId}:${event.eventId}`;
 }
 
-function fixedTaskNotificationText(event: TaskManagerEventState): string {
-  const subject = event.title?.trim() || event.sessionId;
-  if (event.type === 'task-completed') {
-    const artifact = event.resultArtifactPath ? '结果文档已准备好。' : '';
-    return `「${subject}」已完成。${artifact}`;
-  }
-  if (event.type === 'task-failed') return `「${subject}」处理失败。`;
-  return `「${subject}」当前不可用。`;
-}
-
-async function pumpTaskNotifications(): Promise<void> {
-  if (taskNotificationPresenting || !runtime) return;
+function pumpTaskNotifications(): void {
+  if (activeTaskNotification || !conversationRuntime) return;
   const event = pendingTaskNotifications.shift();
   if (!event) return;
-  taskNotificationPresenting = true;
   const identity = taskManagerEventIdentity(event);
-  const text = fixedTaskNotificationText(event);
-  const controller = new AbortController();
-  activeTaskNotificationController = controller;
-  document.body.dataset.taskNotification = 'presenting';
+  const compiled = compileTaskNotification({
+    type: event.type as TaskNotificationType,
+    subject: event.title?.trim() || event.sessionId,
+    status: event.status,
+    resultArtifactAvailable: Boolean(event.resultArtifactPath),
+  });
+  const submitted = conversationRuntime.submitUserMessage(
+    compiled.focusText,
+    { applicationFallbackText: compiled.fallbackText },
+  );
+  const work: TaskNotificationTurn = {
+    event,
+    displayText: compiled.displayText,
+    turnId: submitted.turnId,
+    responseId: submitted.responseId,
+  };
+  activeTaskNotification = work;
+  taskNotificationTurns.set(work.turnId, work);
+  taskNotificationResponses.set(work.responseId, work);
+  trimOldestMapEntries(taskNotificationTurns, 200);
+  document.body.dataset.taskNotification = 'generating';
   document.body.dataset.taskNotificationEvent = identity;
-  document.body.dataset.taskNotificationText = text;
-  try {
-    await presentAvatarTextPlan(
-      `task-manager:${identity}`,
-      [{ id: event.eventId, text, bubbleMode: 'complete' }],
-      controller.signal,
-      { messageId: `task-event:${identity}`, relatedSessionId: event.sessionId },
-    );
-    document.body.dataset.taskNotification = 'completed';
+  document.body.dataset.taskNotificationText = compiled.fallbackText;
+  document.body.dataset.taskNotificationSource = 'char-pending';
+}
+
+function updateActiveTaskNotification(snapshot: ConversationSnapshot): void {
+  const active = activeTaskNotification;
+  if (!active) {
+    pumpTaskNotifications();
+    return;
   }
-  catch (error) {
-    if (!controller.signal.aborted) {
-      console.error('[task-manager] notification presentation failed', error);
-      document.body.dataset.taskNotification = 'failed';
-    }
+  const response = snapshot.responses.find(item => item.responseId === active.responseId);
+  if (!response) return;
+  const assistant = snapshot.messages.find(
+    message => message.turnId === active.turnId && message.role === 'assistant',
+  );
+  if (assistant?.text) document.body.dataset.taskNotificationText = assistant.text;
+  const fallback = response.segments.some(segment => segment.source === 'application-fallback');
+  document.body.dataset.taskNotificationSource = fallback ? 'application-fallback' : 'char';
+  if (response.presentation === 'presenting') {
+    document.body.dataset.taskNotification = 'presenting';
+    return;
   }
-  finally {
-    if (activeTaskNotificationController === controller) {
-      activeTaskNotificationController = undefined;
-    }
-    taskNotificationPresenting = false;
-    void pumpTaskNotifications();
+  if (response.presentation === 'waiting' || response.presentation === 'queued') {
+    document.body.dataset.taskNotification =
+      response.reply === 'pending' || response.reply === 'running' ? 'generating' : 'preparing';
+    return;
+  }
+  if (!terminalConversationPresentation(response.presentation)) return;
+  document.body.dataset.taskNotification =
+    response.presentation === 'completed' ? 'completed' : 'failed';
+  taskNotificationResponses.delete(active.responseId);
+  activeTaskNotification = undefined;
+  queueMicrotask(pumpTaskNotifications);
+}
+
+function trimOldestMapEntries<K, V>(map: Map<K, V>, maximum: number): void {
+  while (map.size > maximum) {
+    const oldest = map.keys().next().value as K | undefined;
+    if (oldest === undefined) return;
+    map.delete(oldest);
   }
 }
 
 async function presentConversationUnit(unit: PresentationUnit, signal: AbortSignal): Promise<void> {
+  const taskNotification = taskNotificationResponses.get(unit.responseId);
   return presentAvatarTextPlan(
     `conversation:${unit.responseId}`,
     unit.segments.map(segment => ({ id: segment.segmentId, text: segment.text })),
     signal,
-    { messageId: unit.responseId },
+    {
+      messageId: unit.responseId,
+      ...(taskNotification ? { relatedSessionId: taskNotification.event.sessionId } : {}),
+    },
   );
 }
 
@@ -2688,7 +2723,14 @@ function renderConversationTranscript(transcript: HTMLOListElement, snapshot: Co
   for (const response of snapshot.responses.slice(-6)) {
     const user = snapshot.messages.find(message => message.turnId === response.turnId && message.role === 'user');
     const assistant = snapshot.messages.find(message => message.turnId === response.turnId && message.role === 'assistant');
-    if (user) transcript.append(conversationMessageElement('你', user.text, 'user'));
+    const taskNotification = taskNotificationTurns.get(response.turnId);
+    if (user) {
+      transcript.append(conversationMessageElement(
+        taskNotification ? 'Task Manager' : '你',
+        taskNotification?.displayText ?? user.text,
+        'user',
+      ));
+    }
     if (assistant) {
       recordVisibleExposure(
         response.responseId,
