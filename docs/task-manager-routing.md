@@ -123,6 +123,13 @@ accept InteractionMessage
 它不自己实现模型调用、Session Monitor 轮询或 Char 生成；这些仍通过端口委托，避免把
 RouteCoordinator 变成同时持有所有领域状态的 God Object。
 
+当前 `packages/interaction-routing` 已实现这层纯领域门面：原始用户消息先进入内存审计，
+每次发送冻结可见 revision、`showing/shown` 投影和有界候选；显式 Char/session 保持 sticky
+并绕过 Router。Auto 对明显高分候选直接路由、只对达到合理分数且领先幅度不足的接近候选
+产生确认；弱且孤立的猜测收敛为 `no-match`。Provider 错误、未知 session、revision 不匹配
+或非法结构抛出可区分的路由错误，均不会回退 Char 或产生 session 副作用。当前仍使用注入
+端口测试，实际 Router Provider、Task Manager 和前台选择器按后续步骤接入。
+
 不同目标采用不同的并发规则：
 
 | 目标 | 执行者 | 并发规则 | 上下文来源 |
@@ -560,7 +567,8 @@ Char Agent 的建议只是用户可见内容，不自动转化为 TaskCommand。
 
 1. （已完成）把过渡的 Reply 契约收窄为单角色 `CharAgentEndpoint`，保持 Fake 注入、轻量
    MCP 契约测试和现有 managed Codex 实现。
-2. 增加 Router 领域端口和确定性快速路径，只实现 `character/task-session` 两类目标。
+2. （已完成）增加 Router 领域端口和确定性快速路径，只实现
+   `character/task-session` 两类目标；Provider 与前台接线留在后续步骤。
 3. 先实现 Task Manager 的 marker/token 发现、Session Monitor 轮询、内存有界事实事件日志、
    cursor/ack、按 session 的 submission generation 和精确命令接口。
 4. DesktopChar 接收并保存有界事实事件，完成无 Agent 的确定性通知与播放闭环。

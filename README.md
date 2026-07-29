@@ -10,6 +10,8 @@
 - `packages/scene-runtime`：通用 Scene Actor、关系约束、原子事务、Behavior 路由与 2.5D 渲染计划。
 - `packages/live2d-renderer`：模型无关端口、生命周期和 Live2D 适配边界。
 - `packages/audio-runtime`：真实播放时钟与原始 PCM 电平事实接口；角色级口型增益由 Runtime 应用。
+- `packages/conversation-runtime`：单角色 Char worker、多 Turn 回复、提前准备与有序呈现。
+- `packages/interaction-routing`：不可变交互消息、sticky 目标、Router 结果校验与无副作用裁决。
 - `packages/tts-mcp-adapter`：语音合成 MCP（技术标识 TTS）输出适配。
 - `packages/transport`、`packages/config`：传输和配置边界。
 - `tts-mcp-profiles`：可提交的跨设备 TTS Provider Profile；设备专属启动配置使用被忽略的 `*.local.json`。

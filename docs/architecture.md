@@ -69,6 +69,7 @@ Router Agent。用户可见上下文区分 `showing` 与 `shown`：正在渐进�
 ```text
 apps/desktop -> transport, config, avatar-runtime, audio-runtime, live2d-renderer
 apps/desktop -> conversation-runtime
+apps/desktop -> interaction-routing
 apps/desktop -> scene-runtime
 apps/desktop -> scene-ui-dom -> scene-runtime
 web test/application host -> scene-ui-dom -> scene-runtime
@@ -79,6 +80,7 @@ tts-mcp-adapter -> contracts
 transport -> contracts
 config -> contracts
 conversation-runtime -> no domain package dependency
+interaction-routing -> no domain package dependency
 ```
 
 - `contracts` 不依赖任何其他项目包。
@@ -141,7 +143,7 @@ conversation-runtime -> no domain package dependency
 4. 已完成角色级 GazeProfile，并对 Mao 的纵向非对称表现做运行时校准。
 5. 已完成 Electron 透明窗口、安全 preload、透明区穿透、角色点击/拖动和 bounds 同步。
 6. 已接入可动态启停的语音合成 MCP Client、角色接入 MCP Server 与兼容 Agent HTTP；后续 ASR/真实 Agent 仍只通过 Event/Effect 端口连接。
-7. 已实现首个内存多 Agent 框架：`AgentConnectionManager` 管理逻辑 Char worker 与并发额度，`ConversationRuntime` 支持多 Turn 并行、sealed 文本提前扇出 TTS/表现准备、顺序提交和单消费者播放。Electron 已提供左键“角色对话”前台和安全 IPC；`ConversationReplyGateway` 使用 managed 单 Codex App Server，前台可观察 `CharReplyTask` 输入/回复审计。配置已迁移到 `agentProviders + agentRoles.char.maxConcurrency`，旧 `conversation` 字段直接拒绝；Char 契约已包含嵌套 Persona/消息/revision 上下文、deadline 校验和应用失败占位。Router、Task Manager、真实预合成 artifact、流式 segment 和智能失败迁移尚未实现。外部 Reply 注册原型已按最新边界移除。
+7. 已实现首个内存多 Agent 框架：`AgentConnectionManager` 管理逻辑 Char worker 与并发额度，`ConversationRuntime` 支持多 Turn 并行、sealed 文本提前扇出 TTS/表现准备、顺序提交和单消费者播放。Electron 已提供左键“角色对话”前台和安全 IPC；`ConversationReplyGateway` 使用 managed 单 Codex App Server，前台可观察 `CharReplyTask` 输入/回复审计。配置已迁移到 `agentProviders + agentRoles.char.maxConcurrency`，旧 `conversation` 字段直接拒绝；Char 契约已包含嵌套 Persona/消息/revision 上下文、deadline 校验和应用失败占位。`interaction-routing` 已实现 Router 领域端口、sticky 直连、冻结投影、候选阈值裁决和严格无回退错误边界；Router Provider/前台接线、Task Manager、真实预合成 artifact、流式 segment 和智能失败迁移尚未实现。外部 Reply 注册原型已按最新边界移除。
 8. 已接入角色动态 ExpressionCatalog、确定性 Resolver、performance-planning v2、Adapter/Transport 分层和 Runtime `expressionKey` 主状态；Mao 八项资源均有可达性回归。Qwen3.5-2B 是可选 Transport 后端，关闭或失败时使用确定性目录规则；v1 `emotionBindings` 只作旧角色兼容。安全表情插值、大目录 shortlist、动态动作 schema 和 3070 并发压测仍待实现。
 
 外部 Agent 可通过角色接入 MCP 或兼容的 `127.0.0.1` HTTP 控制面发送完整 `PerformancePlan` 和中断请求，由 Electron main 转为白名单 IPC，再由 renderer 提交 Runtime；Agent 通过 Runtime snapshot 判断实际播放完成。角色接入 MCP 工具与动态服务管理见 [MCP 服务生命周期](mcp-services.md)，HTTP 请求结构见 [外部 Agent 本地 HTTP 接入指南](external-agent-http.md)。
