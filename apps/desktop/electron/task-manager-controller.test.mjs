@@ -86,10 +86,42 @@ test('a new Task Manager instance resets its cursor without discarding saved Des
   await controller.close();
 });
 
+test('Task Manager controller validates and submits one exact routed command', async () => {
+  const client = new FakeClient();
+  const controller = createTaskManagerController(config(), {
+    createClient: () => client,
+  });
+  const command = await controller.submitCommand({
+    commandId: 'task-command:interaction-1',
+    sessionId: 'session-a',
+    text: '继续完成最后请求',
+    mode: 'submit',
+    contextRevision: 7,
+  });
+  assert.equal(command.status, 'observing');
+  assert.deepEqual(client.commands, [{
+    commandId: 'task-command:interaction-1',
+    sessionId: 'session-a',
+    text: '继续完成最后请求',
+    mode: 'submit',
+    contextRevision: 7,
+  }]);
+  await assert.rejects(controller.submitCommand({
+    commandId: 'bad',
+    sessionId: 'session-a',
+    text: 'bad',
+    mode: 'submit',
+    contextRevision: 7,
+    target: 'not-allowed',
+  }), /unknown fields/);
+  await controller.close();
+});
+
 class FakeClient {
   instanceId = 'instance-a';
   pages = [];
   acked = [];
+  commands = [];
   ackFailures = 0;
 
   async discover() {
@@ -129,6 +161,11 @@ class FakeClient {
     }
     this.acked.push(eventId);
     return { eventId };
+  }
+
+  async submitCommand(command) {
+    this.commands.push(structuredClone(command));
+    return { ...command, submissionGeneration: 1, status: 'observing' };
   }
 }
 

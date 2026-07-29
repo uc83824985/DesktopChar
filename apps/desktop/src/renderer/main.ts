@@ -84,6 +84,16 @@ import type {
   PresentationUnit,
 } from '../../../../packages/conversation-runtime/src/types.ts';
 import {
+  RouteCoordinator,
+  RouteCoordinatorError,
+  VisibleRoutingContext,
+} from '../../../../packages/interaction-routing/src/index.ts';
+import type {
+  RouteOutcome,
+  TargetSelection,
+  TaskSessionRouteCandidate,
+} from '../../../../packages/interaction-routing/src/index.ts';
+import {
   DomContextMenuHost,
   DomInteractionPanelHost,
   ImmediateUiRegistry,
@@ -108,6 +118,7 @@ import type {
   DesktopAgentRolesConfig,
   DesktopTtsConfig,
   DesktopPerformanceInferenceConfig,
+  DesktopRoutingConfig,
   McpServiceId,
   McpServiceState,
   McpServiceTest,
@@ -565,6 +576,22 @@ function performanceErrorDetails(error: unknown): Record<string, unknown> {
     : { message: String(error) };
 }
 
+type RoutingUiPhase =
+  | 'idle'
+  | 'routing'
+  | 'sent'
+  | 'confirm'
+  | 'no-match'
+  | 'cancelled'
+  | 'error';
+
+interface RoutingUiState {
+  phase: RoutingUiPhase;
+  text: string;
+  messageId?: string;
+  targetLabel?: string;
+}
+
 let model: Live2DModel<Cubism4InternalModel> | undefined;
 let assetPreviewCatalog: Live2dAssetPreviewCatalog = { expressions: [], motions: [] };
 let assetPreviewIsolation: AssetPreviewIsolationController | undefined;
@@ -580,11 +607,23 @@ let conversationRuntime: ConversationRuntime | undefined;
 let conversationConnections: AgentConnectionManager | undefined;
 let conversationAgentState: ConversationAgentState | undefined;
 let conversationAgentStateUnsubscribe: (() => void) | undefined;
+let routingContext: VisibleRoutingContext | undefined;
+let routeCoordinator: RouteCoordinator | undefined;
+let routingInFlight = false;
+let routingUiState: RoutingUiState = { phase: 'idle', text: '选择目标后发送消息。' };
+let taskManagerState: TaskManagerState | undefined;
 let taskManagerStateUnsubscribe: (() => void) | undefined;
 let taskNotificationPresenting = false;
 let activeTaskNotificationController: AbortController | undefined;
 const seenTaskManagerEventIds = new Set<string>();
 const pendingTaskNotifications: TaskManagerEventState[] = [];
+const taskSessionVisibleEvents = new Map<string, string>();
+const exposureStates = new Map<string, {
+  phase: 'showing' | 'shown';
+  visibleText: string;
+  complete: boolean;
+  revision: number;
+}>();
 let charMaxConcurrency = 2;
 const conversationAgentDisposers: Array<() => void> = [];
 let gazeFrameDriverAttached = false;
@@ -951,7 +990,7 @@ try {
     type: runtime.getSnapshot().gaze.active ? 'user.gaze-follow-disabled' : 'user.gaze-follow-enabled',
   }));
   reset.addEventListener('click', () => runtime?.dispatch({ type: 'user.interrupt-requested' }));
-  initializeConversationTestRuntime(shellState?.agentRoles.char);
+  initializeConversationTestRuntime(shellState?.agentRoles.char, shellState?.routing);
   if (desktopShell) {
     conversationAgentStateUnsubscribe = desktopShell.onConversationAgentState(state => {
       conversationAgentState = state;
@@ -1744,6 +1783,7 @@ async function browserConversationReply(
 
 function initializeConversationTestRuntime(
   charRole?: DesktopAgentRolesConfig['char'],
+  routingConfig?: DesktopRoutingConfig,
 ): void {
   const connections = new AgentConnectionManager();
   conversationConnections = connections;
@@ -1783,6 +1823,48 @@ function initializeConversationTestRuntime(
     applicationFallbackText: charRole?.applicationFallbackText
       ?? '上一轮的回复没有收到，可以再说一次吗？',
   });
+  routingContext = new VisibleRoutingContext({
+    maxTimelineEntries: routingConfig?.maxTimelineEntries ?? 12,
+    maxCandidates: routingConfig?.maxCandidates ?? 6,
+  });
+  routeCoordinator = new RouteCoordinator({
+    router: {
+      async decide() {
+        throw new Error('Router Agent Provider 尚未配置；请显式选择 Char 或 Session。');
+      },
+    },
+    context: routingContext,
+    character: {
+      async submit(message) {
+        if (!conversationRuntime) throw new Error('ConversationRuntime is unavailable');
+        conversationRuntime.submitUserMessage(message.text);
+      },
+    },
+    taskSessions: {
+      isAvailable: taskSessionIsAvailable,
+      async submit(sessionId, message, visibleContextRevision) {
+        if (!desktopShell) throw new Error('Desktop shell is unavailable');
+        const command = await desktopShell.submitTaskManagerCommand({
+          commandId: `task-command:${message.messageId}`,
+          sessionId,
+          text: message.text,
+          mode: 'submit',
+          contextRevision: visibleContextRevision,
+        });
+        if (command.status === 'failed' || command.status === 'unavailable') {
+          throw new Error(command.error ?? `Task Manager returned ${command.status}`);
+        }
+        routingContext?.touchSession(sessionId);
+      },
+    },
+    config: {
+      autoSubmitMinConfidence: routingConfig?.autoSubmitMinConfidence ?? 0.78,
+      autoSubmitMinMargin: routingConfig?.autoSubmitMinMargin ?? 0.18,
+      maxTimelineEntries: routingConfig?.maxTimelineEntries ?? 12,
+      maxCandidates: routingConfig?.maxCandidates ?? 6,
+    },
+  });
+  if (taskManagerState) updateRoutingCandidates(taskManagerState);
   conversationRuntime.subscribe(snapshot => {
     const pending = snapshot.responses.filter(response => !terminalConversationPresentation(response.presentation)).length;
     document.body.dataset.conversationPending = pending.toString();
@@ -1817,9 +1899,11 @@ function reconcileConversationAgentSlots(): void {
 }
 
 function applyTaskManagerState(state: TaskManagerState): void {
+  taskManagerState = state;
   document.body.dataset.taskManagerPhase = state.phase;
   document.body.dataset.taskManagerSessions = state.sessions.length.toString();
   document.body.dataset.taskManagerEvents = state.events.length.toString();
+  updateRoutingCandidates(state);
   for (const event of state.events) {
     if (!isTaskNotificationEvent(event)) continue;
     const identity = taskManagerEventIdentity(event);
@@ -1827,7 +1911,50 @@ function applyTaskManagerState(state: TaskManagerState): void {
     seenTaskManagerEventIds.add(identity);
     pendingTaskNotifications.push(event);
   }
+  interactionPanelHost.refresh();
   void pumpTaskNotifications();
+}
+
+function updateRoutingCandidates(state: TaskManagerState): void {
+  const candidates: TaskSessionRouteCandidate[] = state.sessions.map(session => {
+    const lastVisibleEvent = taskSessionVisibleEvents.get(session.sessionId);
+    return {
+      sessionId: session.sessionId,
+      ...(session.title ? { title: session.title } : {}),
+      ...(session.workDir ? { summary: session.workDir } : {}),
+      status: taskSessionRouteStatus(session),
+      ...(lastVisibleEvent !== undefined ? { lastVisibleEvent } : {}),
+    };
+  });
+  routingContext?.replaceCandidates(candidates);
+  const frozen = routingContext?.freeze();
+  if (frozen) {
+    document.body.dataset.visibleContextRevision = frozen.visibleContextRevision.toString();
+    document.body.dataset.routingCandidates = frozen.candidates.length.toString();
+    document.body.dataset.routingExposures = frozen.exposures.length.toString();
+  }
+}
+
+function taskSessionRouteStatus(
+  session: TaskManagerState['sessions'][number],
+): TaskSessionRouteCandidate['status'] {
+  if (
+    session.state !== 'running'
+    || session.monitorState === 'closed'
+    || session.agentState === 'closed'
+  ) {
+    return 'unavailable';
+  }
+  if (session.agentState === 'waiting_input') return 'waiting-input';
+  if (session.agentState === 'active') return 'active';
+  return 'idle-unknown';
+}
+
+function taskSessionIsAvailable(sessionId: string): boolean {
+  const state = taskManagerState;
+  if (!state?.enabled || !['ready', 'degraded'].includes(state.phase)) return false;
+  const session = state.sessions.find(item => item.sessionId === sessionId);
+  return Boolean(session && taskSessionRouteStatus(session) !== 'unavailable');
 }
 
 function isTaskNotificationEvent(event: TaskManagerEventState): boolean {
@@ -1867,6 +1994,7 @@ async function pumpTaskNotifications(): Promise<void> {
       `task-manager:${identity}`,
       [{ id: event.eventId, text, bubbleMode: 'complete' }],
       controller.signal,
+      { messageId: `task-event:${identity}`, relatedSessionId: event.sessionId },
     );
     document.body.dataset.taskNotification = 'completed';
   }
@@ -1890,6 +2018,7 @@ async function presentConversationUnit(unit: PresentationUnit, signal: AbortSign
     `conversation:${unit.responseId}`,
     unit.segments.map(segment => ({ id: segment.segmentId, text: segment.text })),
     signal,
+    { messageId: unit.responseId },
   );
 }
 
@@ -1897,6 +2026,11 @@ interface AvatarTextSegment {
   id: string;
   text: string;
   bubbleMode?: SpeechBubbleMode;
+}
+
+interface AvatarPresentationExposure {
+  messageId: string;
+  relatedSessionId?: string;
 }
 
 interface AvatarPresentationWaiter {
@@ -1913,6 +2047,7 @@ async function presentAvatarTextPlan(
   planId: string,
   segments: AvatarTextSegment[],
   signal: AbortSignal,
+  exposure?: AvatarPresentationExposure,
 ): Promise<void> {
   const release = await acquireAvatarPresentation(signal);
   try {
@@ -1941,6 +2076,9 @@ async function presentAvatarTextPlan(
       };
       const unsubscribe = avatar.subscribe(snapshot => {
         if (snapshot.planId === planId) seenPlan = true;
+        if (snapshot.planId === planId && exposure) {
+          publishAvatarPresentationExposure(snapshot, segments, exposure);
+        }
         if (seenPlan && snapshot.planId === null && snapshot.state === 'idle') finish();
       });
       signal.addEventListener('abort', onAbort, { once: true });
@@ -1966,6 +2104,68 @@ async function presentAvatarTextPlan(
   }
   finally {
     release();
+  }
+}
+
+function publishAvatarPresentationExposure(
+  snapshot: import('../../../../packages/contracts/src/index.ts').AvatarSnapshot,
+  segments: AvatarTextSegment[],
+  exposure: AvatarPresentationExposure,
+): void {
+  const bubble = projectSpeechBubble(snapshot.speechBubble);
+  if (!bubble.visible || !snapshot.speechBubble.segmentId) return;
+  const segmentIndex = segments.findIndex(
+    segment => segment.id === snapshot.speechBubble.segmentId,
+  );
+  if (segmentIndex < 0) return;
+  const visibleText = segments.slice(0, segmentIndex).map(segment => segment.text).join('')
+    + bubble.visibleText;
+  if (!visibleText.trim()) return;
+  const complete = segmentIndex === segments.length - 1
+    && visibleText === segments.map(segment => segment.text).join('');
+  if (exposure.relatedSessionId && complete) {
+    taskSessionVisibleEvents.set(exposure.relatedSessionId, visibleText);
+    if (taskManagerState) updateRoutingCandidates(taskManagerState);
+  }
+  recordVisibleExposure(
+    exposure.messageId,
+    complete ? 'shown' : 'showing',
+    visibleText,
+    complete,
+    exposure.relatedSessionId,
+  );
+}
+
+function recordVisibleExposure(
+  messageId: string,
+  phase: 'showing' | 'shown',
+  visibleText: string,
+  complete: boolean,
+  relatedSessionId?: string,
+): void {
+  const previous = exposureStates.get(messageId);
+  if (previous?.phase === 'shown') return;
+  if (
+    previous
+    && previous.phase === phase
+    && previous.visibleText === visibleText
+    && previous.complete === complete
+  ) {
+    return;
+  }
+  const revision = (previous?.revision ?? 0) + 1;
+  routingContext?.recordExposure({
+    messageId,
+    phase,
+    visibleText,
+    complete,
+    exposureRevision: revision,
+  }, relatedSessionId);
+  exposureStates.set(messageId, { phase, visibleText, complete, revision });
+  const frozen = routingContext?.freeze();
+  if (frozen) {
+    document.body.dataset.visibleContextRevision = frozen.visibleContextRevision.toString();
+    document.body.dataset.routingExposures = frozen.exposures.length.toString();
   }
 }
 
@@ -2036,9 +2236,24 @@ function mountConversationPanel(container: HTMLElement): DomInteractionPanelView
   const header = document.createElement('header');
   header.className = 'conversation-panel__header';
   const title = document.createElement('strong');
-  title.textContent = '多 Agent 对话测试';
+  title.textContent = '角色对话与任务路由';
   const summary = document.createElement('span');
   header.append(title, summary);
+
+  const routeControls = document.createElement('div');
+  routeControls.className = 'conversation-panel__route-controls';
+  const targetLabel = document.createElement('label');
+  targetLabel.textContent = '目标';
+  const target = document.createElement('select');
+  target.setAttribute('aria-label', '消息目标');
+  targetLabel.append(target);
+  const routeStatus = document.createElement('div');
+  routeStatus.className = 'conversation-panel__route-status';
+  routeStatus.setAttribute('role', 'status');
+  const confirmation = document.createElement('div');
+  confirmation.className = 'conversation-panel__route-confirmation';
+  confirmation.setAttribute('aria-live', 'polite');
+  routeControls.append(targetLabel, routeStatus, confirmation);
 
   const agentAudit = document.createElement('details');
   agentAudit.className = 'conversation-panel__agent-audit';
@@ -2062,7 +2277,7 @@ function mountConversationPanel(container: HTMLElement): DomInteractionPanelView
   input.rows = 2;
   input.maxLength = 600;
   input.placeholder = '输入消息；Enter 换行，Ctrl+Enter 发送…';
-  input.setAttribute('aria-label', '发送给桌面角色的消息');
+  input.setAttribute('aria-label', '发送给所选目标的消息');
   const submit = document.createElement('button');
   submit.type = 'submit';
   submit.textContent = '发送';
@@ -2071,25 +2286,75 @@ function mountConversationPanel(container: HTMLElement): DomInteractionPanelView
   form.addEventListener('submit', event => {
     event.preventDefault();
     const text = input.value.trim();
-    if (!text || !conversationRuntime) return;
-    conversationRuntime.submitUserMessage(text);
-    input.value = '';
-    refreshConversationPanel(summary, agentAuditSummary, agentAuditContent, transcript, queue, submit);
-    input.focus();
+    if (!text || !routeCoordinator || routingInFlight) return;
+    void submitRoutedMessage(text).then(accepted => {
+      if (accepted) input.value = '';
+      refreshConversationPanel(
+        summary,
+        agentAuditSummary,
+        agentAuditContent,
+        target,
+        routeStatus,
+        confirmation,
+        transcript,
+        queue,
+        submit,
+      );
+      input.focus();
+    });
+  }, { signal: abort.signal });
+  target.addEventListener('change', () => {
+    if (!routeCoordinator) return;
+    const selection = targetSelectionFromValue(target.value);
+    routeCoordinator.setSelection(selection);
+    const pending = routeCoordinator.getSnapshot().pendingConfirmation;
+    if (pending) routeCoordinator.cancelPendingConfirmation(pending.messageId);
+    if (selection.mode === 'direct' && selection.target.kind === 'task-session') {
+      routingContext?.touchSession(selection.target.sessionId);
+    }
+    routingUiState = {
+      phase: 'idle',
+      text: `后续消息将发送到 ${targetSelectionLabel(selection)}，直到你主动切换。`,
+    };
+    publishRoutingSelection(selection);
+    refreshConversationPanel(
+      summary,
+      agentAuditSummary,
+      agentAuditContent,
+      target,
+      routeStatus,
+      confirmation,
+      transcript,
+      queue,
+      submit,
+    );
   }, { signal: abort.signal });
   input.addEventListener('keydown', event => {
     if (event.key !== 'Enter' || !event.ctrlKey || event.isComposing) return;
     event.preventDefault();
     form.requestSubmit();
   }, { signal: abort.signal });
-  container.append(header, agentAudit, transcript, queue, form);
-  refreshConversationPanel(summary, agentAuditSummary, agentAuditContent, transcript, queue, submit);
+  container.append(header, routeControls, agentAudit, transcript, queue, form);
+  refreshConversationPanel(
+    summary,
+    agentAuditSummary,
+    agentAuditContent,
+    target,
+    routeStatus,
+    confirmation,
+    transcript,
+    queue,
+    submit,
+  );
   queueMicrotask(() => input.focus());
   return {
     refresh: () => refreshConversationPanel(
       summary,
       agentAuditSummary,
       agentAuditContent,
+      target,
+      routeStatus,
+      confirmation,
       transcript,
       queue,
       submit,
@@ -2102,6 +2367,9 @@ function refreshConversationPanel(
   summary: HTMLElement,
   agentAuditSummary: HTMLElement,
   agentAuditContent: HTMLElement,
+  target: HTMLSelectElement,
+  routeStatus: HTMLElement,
+  confirmation: HTMLElement,
   transcript: HTMLOListElement,
   queue: HTMLElement,
   submit: HTMLButtonElement,
@@ -2116,10 +2384,250 @@ function refreshConversationPanel(
   const assistantCount = conversationConnections?.getSnapshot().length ?? charMaxConcurrency;
   const providerLabel = desktopShell ? 'Codex App Server' : '浏览器回显';
   summary.textContent = `${providerLabel} · ${assistantCount} 个 Char worker · ${pending} 个处理中`;
-  submit.disabled = pending >= 6;
+  submit.disabled = routingInFlight || pending >= 6;
+  renderRoutingControls(target, routeStatus, confirmation);
   renderConversationAgentAudit(agentAuditSummary, agentAuditContent);
   renderConversationTranscript(transcript, snapshot);
   renderConversationQueue(queue, snapshot);
+}
+
+function renderRoutingControls(
+  target: HTMLSelectElement,
+  routeStatus: HTMLElement,
+  confirmation: HTMLElement,
+): void {
+  const coordinator = routeCoordinator;
+  if (!coordinator) {
+    target.disabled = true;
+    routeStatus.textContent = '路由初始化中…';
+    confirmation.replaceChildren();
+    return;
+  }
+  const selection = coordinator.getSelection();
+  const selectedValue = targetSelectionValue(selection);
+  const options: Array<{ value: string; label: string }> = [
+    { value: 'auto', label: 'Auto（自动判断）' },
+    { value: 'character', label: 'Char（桌面角色）' },
+  ];
+  for (const session of taskManagerState?.sessions ?? []) {
+    options.push({
+      value: `session:${session.sessionId}`,
+      label: `${session.title?.trim() || session.sessionId} · ${taskSessionRouteStatus(session)}`,
+    });
+  }
+  if (!options.some(option => option.value === selectedValue)) {
+    const sessionId = selection.mode === 'direct' && selection.target.kind === 'task-session'
+      ? selection.target.sessionId
+      : undefined;
+    if (sessionId) {
+      options.push({
+        value: selectedValue,
+        label: `${sessionId} · unavailable`,
+      });
+    }
+  }
+  target.replaceChildren(...options.map(item => {
+    const option = document.createElement('option');
+    option.value = item.value;
+    option.textContent = item.label;
+    return option;
+  }));
+  target.value = selectedValue;
+  target.disabled = routingInFlight;
+  routeStatus.dataset.phase = routingUiState.phase;
+  routeStatus.textContent = routingUiState.text;
+  publishRoutingSelection(selection);
+  renderPendingRouteConfirmation(confirmation);
+}
+
+function renderPendingRouteConfirmation(container: HTMLElement): void {
+  container.replaceChildren();
+  const pending = routeCoordinator?.getSnapshot().pendingConfirmation;
+  document.body.dataset.routingPendingConfirmation = pending ? pending.messageId : 'none';
+  if (!pending) {
+    container.hidden = true;
+    return;
+  }
+  container.hidden = false;
+  const prompt = document.createElement('span');
+  prompt.textContent = '候选接近，请确认目标：';
+  container.append(prompt);
+  for (const sessionId of pending.candidateSessionIds) {
+    const session = taskManagerState?.sessions.find(item => item.sessionId === sessionId);
+    const button = document.createElement('button');
+    button.type = 'button';
+    button.dataset.sessionId = sessionId;
+    button.textContent = session?.title?.trim() || sessionId;
+    button.disabled = routingInFlight;
+    button.onclick = () => { void confirmPendingRoute(sessionId); };
+    container.append(button);
+  }
+  const cancel = document.createElement('button');
+  cancel.type = 'button';
+  cancel.dataset.action = 'cancel';
+  cancel.textContent = '取消';
+  cancel.disabled = routingInFlight;
+  cancel.onclick = () => {
+    routeCoordinator?.cancelPendingConfirmation(pending.messageId);
+    routingUiState = { phase: 'cancelled', text: '已取消，本条消息未发送。' };
+    interactionPanelHost.refresh();
+  };
+  container.append(cancel);
+}
+
+async function submitRoutedMessage(text: string): Promise<boolean> {
+  const coordinator = routeCoordinator;
+  if (!coordinator) return false;
+  routingInFlight = true;
+  routingUiState = { phase: 'routing', text: '正在冻结可见上下文并判断目标…' };
+  publishRoutingPhase();
+  interactionPanelHost.refresh();
+  try {
+    const outcome = await coordinator.acceptUserMessage(text);
+    applyRouteOutcome(outcome);
+    if (outcome.record.decision.decision !== 'confirm') {
+      recordVisibleExposure(outcome.message.messageId, 'shown', outcome.message.text, true);
+    }
+    return true;
+  }
+  catch (error) {
+    const code = error instanceof RouteCoordinatorError ? error.code : 'unknown';
+    routingUiState = {
+      phase: 'error',
+      text: routeErrorText(code, error),
+    };
+    return false;
+  }
+  finally {
+    routingInFlight = false;
+    publishRoutingPhase();
+    interactionPanelHost.refresh();
+  }
+}
+
+function applyRouteOutcome(outcome: RouteOutcome): void {
+  const decision = outcome.record.decision;
+  if (decision.decision === 'confirm') {
+    routingUiState = {
+      phase: 'confirm',
+      text: `没有明显高概率候选，消息尚未发送：“${outcome.message.text}”`,
+      messageId: outcome.message.messageId,
+    };
+    return;
+  }
+  if (decision.decision === 'no-match') {
+    routingUiState = {
+      phase: 'no-match',
+      text: `“${outcome.message.text}”无法安全判断目标；请改写消息或显式选择 Char/Session。`,
+      messageId: outcome.message.messageId,
+    };
+    return;
+  }
+  const targetLabel = decision.target.kind === 'character'
+    ? 'Char'
+    : taskSessionLabel(decision.target.sessionId);
+  routingUiState = {
+    phase: 'sent',
+    text: `已发送到 ${targetLabel}：“${outcome.message.text}”`,
+    messageId: outcome.message.messageId,
+    targetLabel,
+  };
+  document.body.dataset.routingLastTarget = decision.target.kind === 'character'
+    ? 'character'
+    : `task-session:${decision.target.sessionId}`;
+}
+
+async function confirmPendingRoute(sessionId: string): Promise<void> {
+  const coordinator = routeCoordinator;
+  const pending = coordinator?.getSnapshot().pendingConfirmation;
+  if (!coordinator || !pending || routingInFlight) return;
+  routingInFlight = true;
+  routingUiState = { phase: 'routing', text: `正在重新校验 ${taskSessionLabel(sessionId)}…` };
+  publishRoutingPhase();
+  interactionPanelHost.refresh();
+  try {
+    await coordinator.confirmPendingRoute(
+      pending.messageId,
+      sessionId,
+      pending.visibleContextRevision,
+    );
+    const message = coordinator.getSnapshot().messages.find(
+      item => item.messageId === pending.messageId,
+    );
+    if (message) recordVisibleExposure(message.messageId, 'shown', message.text, true);
+    routingUiState = {
+      phase: 'sent',
+      text: `已确认并发送到 ${taskSessionLabel(sessionId)}：“${message?.text ?? ''}”`,
+      messageId: pending.messageId,
+      targetLabel: taskSessionLabel(sessionId),
+    };
+    document.body.dataset.routingLastTarget = `task-session:${sessionId}`;
+  }
+  catch (error) {
+    const code = error instanceof RouteCoordinatorError ? error.code : 'unknown';
+    routingUiState = { phase: 'error', text: routeErrorText(code, error) };
+  }
+  finally {
+    routingInFlight = false;
+    publishRoutingPhase();
+    interactionPanelHost.refresh();
+  }
+}
+
+function targetSelectionFromValue(value: string): TargetSelection {
+  if (value === 'auto') return { mode: 'auto' };
+  if (value === 'character') return { mode: 'direct', target: { kind: 'character' } };
+  if (value.startsWith('session:') && value.slice('session:'.length).trim()) {
+    return {
+      mode: 'direct',
+      target: { kind: 'task-session', sessionId: value.slice('session:'.length) },
+    };
+  }
+  throw new Error(`Unsupported target selection: ${value}`);
+}
+
+function targetSelectionValue(selection: TargetSelection): string {
+  if (selection.mode === 'auto') return 'auto';
+  return selection.target.kind === 'character'
+    ? 'character'
+    : `session:${selection.target.sessionId}`;
+}
+
+function targetSelectionLabel(selection: TargetSelection): string {
+  if (selection.mode === 'auto') return 'Auto';
+  return selection.target.kind === 'character'
+    ? 'Char'
+    : taskSessionLabel(selection.target.sessionId);
+}
+
+function taskSessionLabel(sessionId: string): string {
+  const session = taskManagerState?.sessions.find(item => item.sessionId === sessionId);
+  return session?.title?.trim() || sessionId;
+}
+
+function routeErrorText(code: string, error: unknown): string {
+  if (code === 'router-failed' || code === 'router-invalid-result') {
+    return 'Router 失败，消息未发送；请重试或显式选择 Char/Session。';
+  }
+  if (code === 'session-unavailable') {
+    return '所选 Session 当前不可用；sticky 选择已保留，请重试或主动切换。';
+  }
+  if (code === 'confirmation-stale') {
+    return '可见上下文或候选状态已变化，请取消后重新发送以再次判断。';
+  }
+  if (code === 'dispatch-failed') {
+    return '目标拒绝了本次消息，未进行回退；请检查状态后重试。';
+  }
+  return error instanceof Error ? error.message : String(error);
+}
+
+function publishRoutingSelection(selection: TargetSelection): void {
+  document.body.dataset.routingSelection = targetSelectionValue(selection);
+  publishRoutingPhase();
+}
+
+function publishRoutingPhase(): void {
+  document.body.dataset.routingPhase = routingUiState.phase;
 }
 
 function renderConversationAgentAudit(summary: HTMLElement, content: HTMLElement): void {
@@ -2181,6 +2689,14 @@ function renderConversationTranscript(transcript: HTMLOListElement, snapshot: Co
     const user = snapshot.messages.find(message => message.turnId === response.turnId && message.role === 'user');
     const assistant = snapshot.messages.find(message => message.turnId === response.turnId && message.role === 'assistant');
     if (user) transcript.append(conversationMessageElement('你', user.text, 'user'));
+    if (assistant) {
+      recordVisibleExposure(
+        response.responseId,
+        'shown',
+        assistant.text,
+        true,
+      );
+    }
     transcript.append(conversationMessageElement(
       response.agentId ?? `Turn ${response.turnSequence + 1}`,
       assistant?.text ?? (response.error ? `失败：${response.error}` : replyProgressLabel(response.reply)),

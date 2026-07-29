@@ -73,7 +73,11 @@ export class RouteCoordinator {
       visibleContextRevision: context.visibleContextRevision,
       decidedAtMs: this.now(),
     };
-    const dispatched = await this.dispatch(message, decision);
+    const dispatched = await this.dispatch(
+      message,
+      decision,
+      context.visibleContextRevision,
+    );
     this.routes.push(cloneRecord(record));
     if (decision.decision === 'confirm') {
       this.pendingConfirmation = {
@@ -131,7 +135,11 @@ export class RouteCoordinator {
       );
     }
     try {
-      await this.options.taskSessions.submit(sessionId, cloneMessage(message));
+      await this.options.taskSessions.submit(
+        sessionId,
+        cloneMessage(message),
+        visibleContextRevision,
+      );
     }
     catch (error) {
       throw new RouteCoordinatorError(
@@ -208,7 +216,11 @@ export class RouteCoordinator {
     }
   }
 
-  private async dispatch(message: InteractionMessage, decision: RouteDecision): Promise<boolean> {
+  private async dispatch(
+    message: InteractionMessage,
+    decision: RouteDecision,
+    visibleContextRevision: number,
+  ): Promise<boolean> {
     if (decision.decision !== 'route') return false;
     if (decision.target.kind === 'character') {
       try {
@@ -231,7 +243,11 @@ export class RouteCoordinator {
       );
     }
     try {
-      await this.options.taskSessions.submit(sessionId, cloneMessage(message));
+      await this.options.taskSessions.submit(
+        sessionId,
+        cloneMessage(message),
+        visibleContextRevision,
+      );
     }
     catch (error) {
       throw new RouteCoordinatorError(

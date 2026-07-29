@@ -107,7 +107,21 @@ export interface CharacterRoutePort {
 
 export interface TaskSessionRoutePort {
   isAvailable(sessionId: string): boolean | Promise<boolean>;
-  submit(sessionId: string, message: InteractionMessage): Promise<void>;
+  submit(
+    sessionId: string,
+    message: InteractionMessage,
+    visibleContextRevision: number,
+  ): Promise<void>;
+}
+
+export interface VisibleRoutingContextOptions {
+  maxTimelineEntries: number;
+  maxCandidates: number;
+}
+
+export interface VisibleRoutingContextSnapshot extends RoutingContextSnapshot {
+  exposureCount: number;
+  candidateCount: number;
 }
 
 export interface RouteCoordinatorConfig {

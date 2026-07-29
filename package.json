@@ -21,6 +21,7 @@
     "test:task-manager-monitor": "node scripts/task-manager-session-monitor-smoke.mjs",
     "test:task-manager-service": "node scripts/task-manager-service-smoke.mjs",
     "test:task-manager-foreground": "npm run build && node scripts/task-manager-foreground-smoke.mjs",
+    "test:routing-foreground": "npm run build && node scripts/routing-foreground-smoke.mjs",
     "test:codex-agent": "node --experimental-strip-types scripts/codex-multi-agent-smoke.ts",
     "test:codex-app-server": "node scripts/codex-app-server-smoke.mjs",
     "test:local-mcp": "node --test local-tts-mcp/*.test.mjs",

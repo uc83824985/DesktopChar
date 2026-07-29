@@ -593,7 +593,9 @@ Char Agent 的建议只是用户可见内容，不自动转化为 TaskCommand。
    事件日志、cursor/ack、按 session 的 submission generation 和精确命令接口。
 4. （已完成）DesktopChar 接收并保存有界事实事件，保存后 ack，并以不含终端尾部的固定文案
    完成无 Agent 的确定性通知与 Avatar Runtime/TTS 播放闭环。
-5. 增加 `visibleTimeline`、候选 LRU、冻结 revision、显式 session 选择和二次确认。
+5. （已完成）增加 `VisibleRoutingContext`、候选 LRU、冻结 revision，以及现有对话框中的
+   sticky Auto/Char/Session 选择、候选状态和二次确认区域；Router Provider 未配置时严格
+   报错，不回退到 Char 或任意 session。
 6. 实现 Char Agent 的角色化任务通知，并保持有界事实事件可审计、可重新处理。
 7. 补齐 Router Provider Profile/Agent Role、密钥引用与热重载；Char Role 配置和首版应用
    失败占位已随第 1 步落地。

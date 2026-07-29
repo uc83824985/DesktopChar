@@ -79,7 +79,8 @@ export function normalizeDesktopConfig(fileConfig = {}, env = {}, options = {}) 
   if (!isRecord(fileConfig)) throw new TypeError('Desktop config root must be an object');
   assertKnownKeys(fileConfig, [
     '$schema', 'version', 'interaction', 'window', 'agentProviders', 'agentRoles',
-    'agentHttp', 'taskManager', 'character', 'performanceInference', 'ttsMcp', 'characterMcp',
+    'agentHttp', 'taskManager', 'routing', 'character', 'performanceInference', 'ttsMcp',
+    'characterMcp',
   ], 'Desktop config');
   if (fileConfig.$schema !== undefined) text(fileConfig.$schema, '$schema');
   const version = fileConfig.version ?? 1;
@@ -134,6 +135,12 @@ export function normalizeDesktopConfig(fileConfig = {}, env = {}, options = {}) 
   if (taskManagerEnabled && !taskManagerMarkerPath) {
     throw new TypeError('Enabled taskManager requires markerPath');
   }
+  const routing = optionalRecord(fileConfig.routing, 'routing');
+  assertKnownKeys(
+    routing,
+    ['autoSubmitMinConfidence', 'autoSubmitMinMargin', 'maxTimelineEntries', 'maxCandidates'],
+    'routing',
+  );
   const characterProfile = optionalRecord(fileConfig.character, 'character');
   assertKnownKeys(characterProfile, ['profile'], 'character');
   const performanceInference = optionalRecord(fileConfig.performanceInference, 'performanceInference');
@@ -325,6 +332,36 @@ export function normalizeDesktopConfig(fileConfig = {}, env = {}, options = {}) 
         10,
         2_000,
         'taskManager.maxEvents',
+      ),
+    },
+    routing: {
+      autoSubmitMinConfidence: boundedNumber(
+        routing.autoSubmitMinConfidence,
+        0.78,
+        0,
+        1,
+        'routing.autoSubmitMinConfidence',
+      ),
+      autoSubmitMinMargin: boundedNumber(
+        routing.autoSubmitMinMargin,
+        0.18,
+        0,
+        1,
+        'routing.autoSubmitMinMargin',
+      ),
+      maxTimelineEntries: boundedInteger(
+        routing.maxTimelineEntries,
+        12,
+        1,
+        100,
+        'routing.maxTimelineEntries',
+      ),
+      maxCandidates: boundedInteger(
+        routing.maxCandidates,
+        6,
+        1,
+        50,
+        'routing.maxCandidates',
       ),
     },
     characterProfile: {

@@ -90,7 +90,8 @@ function karaokeBubble(
   const leadingText = characters.slice(0, index).join('');
   const activeText = characters[index] ?? '';
   return {
-    visible: true, mode: 'karaoke', fullText: text, visibleText: text,
+    visible: true, mode: 'karaoke', fullText: text,
+    visibleText: leadingText + activeText,
     leadingText, activeText, trailingText: characters.slice(index + (activeText ? 1 : 0)).join(''),
   };
 }
@@ -101,7 +102,8 @@ function completeBubble(text: string, mode: SpeechBubbleMode = 'complete'): Spee
 
 function karaokeParts(text: string, start: number, length: number): SpeechBubbleProjection {
   return {
-    visible: true, mode: 'karaoke', fullText: text, visibleText: text,
+    visible: true, mode: 'karaoke', fullText: text,
+    visibleText: text.slice(0, start + length),
     leadingText: text.slice(0, start), activeText: text.slice(start, start + length), trailingText: text.slice(start + length),
   };
 }

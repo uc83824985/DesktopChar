@@ -59,6 +59,7 @@ const channels = {
   conversationAgentsGet: 'conversation:agents:get-state',
   conversationAgentsState: 'conversation:agents:state',
   taskManagerGet: 'task-manager:get-state',
+  taskManagerSubmit: 'task-manager:submit-command',
   taskManagerState: 'task-manager:state',
   mcpListTools: 'tts-mcp:list-tools',
   mcpCallTool: 'tts-mcp:call-tool',
@@ -737,6 +738,10 @@ function registerIpc() {
     requireAvatarSender(event);
     return taskManager.snapshot();
   });
+  ipcMain.handle(channels.taskManagerSubmit, async (event, command) => {
+    requireAvatarSender(event);
+    return taskManager.submitCommand(command);
+  });
   ipcMain.handle(channels.mcpListTools, async event => {
     requireAvatarSender(event);
     const tools = await mcpServices.listTtsTools({ timeoutMs: 10_000 });
@@ -880,6 +885,7 @@ function windowState() {
     tts: mcpServices.currentTtsConfig(),
     mcpServices: mcpServices.snapshot(),
     taskManager: taskManager.snapshot(),
+    routing: { ...desktopConfig.routing },
   };
 }
 

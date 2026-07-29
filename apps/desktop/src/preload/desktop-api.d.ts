@@ -46,6 +46,7 @@ export interface DesktopWindowState {
   tts: DesktopTtsConfig;
   mcpServices: McpServicesState;
   taskManager: TaskManagerState;
+  routing: DesktopRoutingConfig;
 }
 
 export interface DesktopCharacterConfig {
@@ -55,6 +56,13 @@ export interface DesktopCharacterConfig {
 export interface DesktopInteractionConfig {
   dragHoldDelayMs: number;
   dragWindowApi: 'native-set-window-pos' | 'setBounds';
+}
+
+export interface DesktopRoutingConfig {
+  autoSubmitMinConfidence: number;
+  autoSubmitMinMargin: number;
+  maxTimelineEntries: number;
+  maxCandidates: number;
 }
 
 export interface DesktopAgentRolesConfig {
@@ -109,6 +117,7 @@ export interface DesktopCharApi {
   cancelConversationReply(agentId: string, taskId: string, attemptId: string): void;
   getConversationAgentState(): Promise<ConversationAgentState>;
   getTaskManagerState(): Promise<TaskManagerState>;
+  submitTaskManagerCommand(command: TaskManagerCommand): Promise<TaskManagerCommandState>;
   listTtsMcpTools(): Promise<McpToolDescriptor[]>;
   callTtsMcpTool(name: string, args: Record<string, unknown>, options?: { timeoutMs?: number }): Promise<McpCallToolResult>;
   getMcpServicesState(): Promise<McpServicesState>;
@@ -201,6 +210,27 @@ export interface TaskManagerState {
   lastError: string | null;
   sessions: TaskManagerSessionState[];
   events: TaskManagerEventState[];
+}
+
+export interface TaskManagerCommand {
+  commandId: string;
+  sessionId: string;
+  text: string;
+  mode: 'submit';
+  contextRevision: number;
+  resultArtifact?: {
+    path: string;
+    openOnCompletion: boolean;
+  };
+}
+
+export interface TaskManagerCommandState extends TaskManagerCommand {
+  submissionGeneration: number;
+  status: 'submitting' | 'observing' | 'completed' | 'failed' | 'unavailable' | 'superseded';
+  createdAtMs?: number;
+  submittedAtMs?: number;
+  completedAtMs?: number;
+  error?: string;
 }
 
 export type AgentCommand =

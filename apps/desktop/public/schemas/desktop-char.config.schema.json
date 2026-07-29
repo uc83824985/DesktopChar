@@ -91,6 +91,16 @@
         "maxEvents": { "type": "integer", "minimum": 10, "maximum": 2000 }
       }
     },
+    "routing": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "autoSubmitMinConfidence": { "type": "number", "minimum": 0, "maximum": 1 },
+        "autoSubmitMinMargin": { "type": "number", "minimum": 0, "maximum": 1 },
+        "maxTimelineEntries": { "type": "integer", "minimum": 1, "maximum": 100 },
+        "maxCandidates": { "type": "integer", "minimum": 1, "maximum": 50 }
+      }
+    },
     "performanceInference": { "$ref": "#/$defs/performanceInference" },
     "ttsMcp": { "$ref": "#/$defs/ttsMcp" },
     "characterMcp": { "$ref": "#/$defs/characterMcp" }

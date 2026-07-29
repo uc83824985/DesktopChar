@@ -37,6 +37,12 @@
     "eventPageSize": 100,
     "maxEvents": 200
   },
+  "routing": {
+    "autoSubmitMinConfidence": 0.78,
+    "autoSubmitMinMargin": 0.18,
+    "maxTimelineEntries": 12,
+    "maxCandidates": 6
+  },
   "character": {
     "profile": "models/Mao/DesktopChar.character.json"
   },

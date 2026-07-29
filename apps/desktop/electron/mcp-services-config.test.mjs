@@ -102,6 +102,12 @@ test('desktop config owns interaction, window, char agent and character profile 
       pollIntervalMs: 2_000,
       maxEvents: 50,
     },
+    routing: {
+      autoSubmitMinConfidence: 0.84,
+      autoSubmitMinMargin: 0.12,
+      maxTimelineEntries: 10,
+      maxCandidates: 4,
+    },
     character: { profile: 'models/Test/DesktopChar.character.json' },
   }, {
     DESKTOP_CHAR_DRAG_HOLD_DELAY_MS: '300',
@@ -120,6 +126,12 @@ test('desktop config owns interaction, window, char agent and character profile 
   assert.equal(config.taskManager.markerPath, 'C:\\TaskManager\\task_manager.json');
   assert.equal(config.taskManager.pollIntervalMs, 2_000);
   assert.equal(config.taskManager.maxEvents, 50);
+  assert.deepEqual(config.routing, {
+    autoSubmitMinConfidence: 0.84,
+    autoSubmitMinMargin: 0.12,
+    maxTimelineEntries: 10,
+    maxCandidates: 4,
+  });
   assert.equal(config.characterProfile.url, 'models/Test/DesktopChar.character.json');
   assert.equal(config.performanceInference.enabled, false);
   assert.equal(config.performanceInference.lifecycle.type, 'external');
@@ -151,6 +163,12 @@ test('desktop config path prefers the new bootstrap variable and validates appli
   assert.throws(() => normalizeDesktopConfig({
     taskManager: { enabled: true, markerPath: 'relative.json' },
   }), /absolute path/);
+  assert.throws(() => normalizeDesktopConfig({
+    routing: { autoSubmitMinConfidence: 1.1 },
+  }), /0 to 1/);
+  assert.throws(() => normalizeDesktopConfig({
+    routing: { maxCandidates: 0 },
+  }), /1 to 50/);
   assert.throws(() => normalizeDesktopConfig({ character: { profile: '../escape.json' } }), /parent traversal/);
   assert.throws(() => normalizeDesktopConfig({ performanceInference: { temperature: 3 } }), /0 to 2/);
   assert.throws(() => normalizeDesktopConfig({ performanceInference: { maxOutputTokens: 0 } }), /positive integer/);

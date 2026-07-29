@@ -26,6 +26,7 @@ export function createTaskManagerController(initialConfig, options = {}) {
     close,
     configure,
     pollNow,
+    submitCommand,
     snapshot,
   };
 
@@ -79,6 +80,17 @@ export function createTaskManagerController(initialConfig, options = {}) {
     if (polling) return polling;
     polling = performPoll().finally(() => { polling = undefined; });
     return polling;
+  }
+
+  async function submitCommand(input) {
+    if (closed) throw new Error('Task Manager controller is closed');
+    if (!config.enabled) throw new Error('Task Manager is disabled');
+    const command = normalizeCommand(input);
+    client ??= createClient(config);
+    await client.discover();
+    const result = await client.submitCommand(command);
+    void pollNow().catch(() => {});
+    return result;
   }
 
   async function performPoll() {
@@ -213,6 +225,44 @@ function normalizeSession(value) {
   };
 }
 
+function normalizeCommand(value) {
+  if (!record(value)) throw new TypeError('Task Manager command must be an object');
+  exactKeys(
+    value,
+    ['commandId', 'sessionId', 'text', 'mode', 'contextRevision', 'resultArtifact'],
+    'Task Manager command',
+  );
+  if (value.mode !== 'submit') throw new TypeError('Task Manager command mode must be submit');
+  const result = {
+    commandId: nonEmptyText(value.commandId, 'Task Manager commandId'),
+    sessionId: nonEmptyText(value.sessionId, 'Task Manager command sessionId'),
+    text: boundedText(value.text, 12_000, 'Task Manager command text'),
+    mode: 'submit',
+    contextRevision: nonNegativeInteger(
+      value.contextRevision,
+      'Task Manager command contextRevision',
+    ),
+  };
+  if (value.resultArtifact !== undefined) {
+    if (!record(value.resultArtifact)) {
+      throw new TypeError('Task Manager resultArtifact must be an object');
+    }
+    exactKeys(
+      value.resultArtifact,
+      ['path', 'openOnCompletion'],
+      'Task Manager resultArtifact',
+    );
+    if (typeof value.resultArtifact.openOnCompletion !== 'boolean') {
+      throw new TypeError('Task Manager resultArtifact.openOnCompletion must be boolean');
+    }
+    result.resultArtifact = {
+      path: nonEmptyText(value.resultArtifact.path, 'Task Manager resultArtifact.path'),
+      openOnCompletion: value.resultArtifact.openOnCompletion,
+    };
+  }
+  return result;
+}
+
 function normalizeEvent(value, instanceId) {
   if (!record(value)) throw new TypeError('Task Manager event must be an object');
   const type = enumText(
@@ -286,6 +336,20 @@ function nonNegativeInteger(value, label) {
     throw new TypeError(`${label} must be non-negative`);
   }
   return value;
+}
+
+function boundedText(value, maximum, label) {
+  const normalized = nonEmptyText(value, label);
+  if (normalized.length > maximum) {
+    throw new RangeError(`${label} must not exceed ${maximum} characters`);
+  }
+  return normalized;
+}
+
+function exactKeys(value, allowed, label) {
+  const allowedKeys = new Set(allowed);
+  const unknown = Object.keys(value).filter(key => !allowedKeys.has(key));
+  if (unknown.length > 0) throw new TypeError(`${label} contains unknown fields: ${unknown.join(', ')}`);
 }
 
 function boundedInteger(value, fallback, minimum, maximum, label) {

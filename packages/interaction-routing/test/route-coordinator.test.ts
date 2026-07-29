@@ -46,6 +46,10 @@ test('direct session selection remains sticky and submits while the session is a
       ['session-2', '只回复最后请求'],
     ],
   );
+  assert.deepEqual(
+    fixture.sessionMessages.map(item => item.visibleContextRevision),
+    [4, 4],
+  );
   assert.equal(fixture.router.requests.length, 0);
 });
 
@@ -249,7 +253,11 @@ function coordinator(options: {
   );
   const currentContext = options.context ?? routeContext(8);
   const characterMessages: InteractionMessage[] = [];
-  const sessionMessages: Array<{ sessionId: string; message: InteractionMessage }> = [];
+  const sessionMessages: Array<{
+    sessionId: string;
+    message: InteractionMessage;
+    visibleContextRevision: number;
+  }> = [];
   const unavailable = new Set(options.unavailable ?? []);
   let id = 0;
   let now = 1_000;
@@ -263,8 +271,8 @@ function coordinator(options: {
     },
     taskSessions: {
       isAvailable: sessionId => !unavailable.has(sessionId),
-      async submit(sessionId, message) {
-        sessionMessages.push({ sessionId, message });
+      async submit(sessionId, message, visibleContextRevision) {
+        sessionMessages.push({ sessionId, message, visibleContextRevision });
       },
     },
     config,

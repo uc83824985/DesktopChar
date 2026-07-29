@@ -50,8 +50,10 @@ test('karaoke speech bubble highlights authored cues from the playback clock', (
   ];
   const first = projectSpeechBubble(playing(200, value));
   assert.deepEqual([first.leadingText, first.activeText, first.trailingText], ['', '你好', '世界']);
+  assert.equal(first.visibleText, '你好');
   const second = projectSpeechBubble(playing(500, value));
   assert.deepEqual([second.leadingText, second.activeText, second.trailingText], ['你好', '世界', '']);
+  assert.equal(second.visibleText, '你好世界');
 });
 
 test('karaoke fallback uses known audio duration instead of an unrelated wall clock rate', () => {
@@ -60,6 +62,7 @@ test('karaoke fallback uses known audio duration instead of an unrelated wall cl
     [projectSpeechBubble(value).leadingText, projectSpeechBubble(value).activeText],
     ['你好', '世'],
   );
+  assert.equal(projectSpeechBubble(value).visibleText, '你好世');
 });
 
 test('holding completes stream text while waiting for the Runtime dismissal event', () => {

@@ -182,6 +182,12 @@ Windows 通常对应 `%APPDATA%/DesktopChar/config.json`。程序只通过 Elect
     "eventPageSize": 100,
     "maxEvents": 200
   },
+  "routing": {
+    "autoSubmitMinConfidence": 0.78,
+    "autoSubmitMinMargin": 0.18,
+    "maxTimelineEntries": 12,
+    "maxCandidates": 6
+  },
   "character": {
     "profile": "models/Mao/DesktopChar.character.json"
   },
@@ -209,6 +215,7 @@ Windows 通常对应 `%APPDATA%/DesktopChar/config.json`。程序只通过 Elect
 - Agent HTTP 启停、loopback host 和端口；
 - DesktopChar 到独立 Task Manager 的启停、marker 绝对路径、轮询周期、请求超时和有界事件
   数量；
+- Auto 路由的最低自动提交置信度、领先幅度、可见时间线与候选上限；
 - 语音合成 MCP、角色接入 MCP、重连与内置本地语音合成参数；
 - 窗口默认尺寸、边距、置顶策略等用户偏好；
 - 当前角色资产 Profile 路径。
@@ -235,6 +242,11 @@ DesktopChar 侧通过应用 JSON 的 `taskManager` 读取该发现 marker。启�
 `DESKTOP_CHAR_TASK_MANAGER_MARKER` 与 `DESKTOP_CHAR_TASK_MANAGER_ENABLED` 作首次引导，
 加载应用 JSON 后仍以 JSON 所有权为准。DesktopChar 不读取 Session Monitor token，也不把
 Task Manager marker/token 内容转发给 renderer。
+
+`routing.autoSubmitMinConfidence` 和 `routing.autoSubmitMinMargin` 均为 `0–1`；前者要求最高
+候选达到足够置信度，后者要求它相对第二候选有明显领先。未达到明显领先、但存在多个合理
+候选时进入二次确认。`maxTimelineEntries` 与 `maxCandidates` 分别限制每次冻结给 Router 的
+用户可见投影和 LRU/相关性候选数量。阈值只决定新请求，不会改变已经冻结的 RouteRecord。
 
 `performanceInference.lifecycle` 接受 `external`、`managed` 字符串简写，或带启动和
 健康检查策略的对象。`external` 的动态开关只改变 Adapter 是否向现有 endpoint 发请求；

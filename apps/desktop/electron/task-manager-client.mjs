@@ -58,6 +58,23 @@ export function createTaskManagerClient(options) {
       }
       return structuredClone(payload.event);
     },
+    async submitCommand(command, signal) {
+      if (!record(command)) {
+        throw new TypeError('Task Manager command must be an object');
+      }
+      const payload = await request(
+        '/commands',
+        {
+          method: 'POST',
+          body: JSON.stringify(command),
+        },
+        signal,
+      );
+      if (!record(payload) || payload.ok !== true || !record(payload.command)) {
+        throw new TaskManagerClientError('invalid-response', 'Task Manager command response is invalid');
+      }
+      return structuredClone(payload.command);
+    },
     getDiscovery() {
       return discovery ? publicDiscovery(discovery) : undefined;
     },
