@@ -86,6 +86,31 @@ test('a new Task Manager instance resets its cursor without discarding saved Des
   await controller.close();
 });
 
+test('an endpoint reconfiguration discards an in-flight stale poll before storing its events', async () => {
+  const client = new FakeClient();
+  client.pauseFirstSessionList = Promise.withResolvers();
+  client.pages.push({
+    earliestCursor: 1,
+    latestCursor: 1,
+    gap: false,
+    events: [taskEvent(1, 'task-completed')],
+  });
+  const controller = createTaskManagerController(config(), {
+    createClient: () => client,
+  });
+  const stalePoll = controller.pollNow();
+  await client.firstSessionListStarted.promise;
+  controller.configure({ ...config(), markerPath: 'C:\\replacement-task-manager.json' });
+  client.pauseFirstSessionList.resolve();
+  await stalePoll;
+  await waitUntil(() => controller.snapshot().cursor === 1);
+  const snapshot = controller.snapshot();
+  assert.equal(snapshot.events.length, 1);
+  assert.equal(snapshot.events[0].sourceInstanceId, 'instance-a');
+  assert.doesNotMatch(JSON.stringify(snapshot.events), /undefined/);
+  await controller.close();
+});
+
 test('Task Manager controller validates and submits one exact routed command', async () => {
   const client = new FakeClient();
   const controller = createTaskManagerController(config(), {
@@ -123,6 +148,9 @@ class FakeClient {
   acked = [];
   commands = [];
   ackFailures = 0;
+  pauseFirstSessionList;
+  firstSessionListStarted = Promise.withResolvers();
+  sessionListCalls = 0;
 
   async discover() {
     return {
@@ -133,6 +161,11 @@ class FakeClient {
   }
 
   async listSessions() {
+    this.sessionListCalls++;
+    if (this.sessionListCalls === 1 && this.pauseFirstSessionList) {
+      this.firstSessionListStarted.resolve();
+      await this.pauseFirstSessionList.promise;
+    }
     return [{
       sessionId: 'session-a',
       state: 'running',
@@ -193,4 +226,12 @@ function taskEvent(cursor, type) {
     lastVisibleLine: '完成',
     visibleTextTail: '完成',
   };
+}
+
+async function waitUntil(predicate) {
+  for (let attempt = 0; attempt < 100; attempt++) {
+    if (predicate()) return;
+    await new Promise(resolve => setTimeout(resolve, 5));
+  }
+  throw new Error('Condition was not reached');
 }

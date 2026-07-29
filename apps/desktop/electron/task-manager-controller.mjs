@@ -17,6 +17,7 @@ export function createTaskManagerController(initialConfig, options = {}) {
   let sessions = [];
   let events = [];
   let pendingAckIds = new Set();
+  let endpointRevision = 0;
   let phase = config.enabled ? 'standby' : 'disabled';
   let lastError;
   let lastPollAtMs;
@@ -56,8 +57,10 @@ export function createTaskManagerController(initialConfig, options = {}) {
     const endpointChanged = config.markerPath !== next.markerPath
       || config.requestTimeoutMs !== next.requestTimeoutMs;
     const intervalChanged = config.pollIntervalMs !== next.pollIntervalMs;
+    const activePoll = polling;
     config = next;
     if (endpointChanged) {
+      endpointRevision++;
       client = undefined;
       instanceId = undefined;
       cursor = 0;
@@ -72,7 +75,10 @@ export function createTaskManagerController(initialConfig, options = {}) {
       return;
     }
     if (intervalChanged || !timer) schedule();
-    void pollNow().catch(() => {});
+    if (endpointChanged && activePoll) {
+      void activePoll.catch(() => {}).finally(() => pollNow().catch(() => {}));
+    }
+    else void pollNow().catch(() => {});
   }
 
   async function pollNow() {
@@ -94,25 +100,36 @@ export function createTaskManagerController(initialConfig, options = {}) {
   }
 
   async function performPoll() {
+    const operationRevision = endpointRevision;
     phase = instanceId ? 'reconnecting' : 'connecting';
     publish();
     try {
-      client ??= createClient(config);
-      const discovery = await client.discover();
-      if (instanceId !== discovery.instanceId) {
-        instanceId = discovery.instanceId;
+      const operationClient = client ?? createClient(config);
+      client = operationClient;
+      const discovery = await operationClient.discover();
+      if (!currentEndpointOperation(operationRevision, operationClient)) return snapshot();
+      const sourceInstanceId = nonEmptyText(
+        discovery.instanceId,
+        'Task Manager discovery instanceId',
+      );
+      if (instanceId !== sourceInstanceId) {
+        instanceId = sourceInstanceId;
         cursor = 0;
         pendingAckIds = new Set();
       }
       let degradedError;
-      await retryAcks();
-      sessions = (await client.listSessions()).map(normalizeSession);
-      const page = await client.eventsAfter(cursor, config.eventPageSize);
+      await retryAcks(operationClient);
+      if (!currentEndpointOperation(operationRevision, operationClient)) return snapshot();
+      const nextSessions = (await operationClient.listSessions()).map(normalizeSession);
+      if (!currentEndpointOperation(operationRevision, operationClient)) return snapshot();
+      const page = await operationClient.eventsAfter(cursor, config.eventPageSize);
+      if (!currentEndpointOperation(operationRevision, operationClient)) return snapshot();
+      sessions = nextSessions;
       if (page.gap) {
         degradedError = `Task Manager event cursor gap before ${page.earliestCursor}`;
       }
       for (const rawEvent of page.events) {
-        const event = normalizeEvent(rawEvent, instanceId);
+        const event = normalizeEvent(rawEvent, sourceInstanceId);
         if (event.cursor <= cursor) continue;
         const identity = eventIdentity(event);
         if (!events.some(existing => eventIdentity(existing) === identity)) {
@@ -125,7 +142,7 @@ export function createTaskManagerController(initialConfig, options = {}) {
         pendingAckIds.add(event.eventId);
       }
       try {
-        await retryAcks();
+        await retryAcks(operationClient);
       }
       catch (error) {
         degradedError = errorMessage(error);
@@ -144,9 +161,9 @@ export function createTaskManagerController(initialConfig, options = {}) {
     }
   }
 
-  async function retryAcks() {
+  async function retryAcks(targetClient = client) {
     for (const eventId of [...pendingAckIds]) {
-      await client.ackEvent(eventId);
+      await targetClient.ackEvent(eventId);
       pendingAckIds.delete(eventId);
     }
   }
@@ -157,6 +174,10 @@ export function createTaskManagerController(initialConfig, options = {}) {
       void pollNow().catch(() => {});
     }, config.pollIntervalMs);
     timer.unref?.();
+  }
+
+  function currentEndpointOperation(revision, operationClient) {
+    return revision === endpointRevision && operationClient === client;
   }
 
   function snapshot() {
