@@ -1968,7 +1968,7 @@ function taskSessionRouteStatus(
 
 function taskSessionIsAvailable(sessionId: string): boolean {
   const state = taskManagerState;
-  if (!state?.enabled || !['ready', 'degraded'].includes(state.phase)) return false;
+  if (!state?.enabled || state.phase === 'disabled' || state.phase === 'closed') return false;
   const session = state.sessions.find(item => item.sessionId === sessionId);
   return Boolean(session && taskSessionRouteStatus(session) !== 'unavailable');
 }

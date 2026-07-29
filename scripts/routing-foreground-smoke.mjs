@@ -75,16 +75,16 @@ try {
     persistence: 'memory-only',
     updatedAtUtc: new Date().toISOString(),
   }, null, 2), 'utf8');
-  await writeFile(configPath, JSON.stringify({
-    taskManager: {
-      enabled: true,
-      markerPath,
-      pollIntervalMs: 250,
+  await writeFile(configPath, JSON.stringify(smokeConfig(markerPath, {
+    providerName: 'router-failing',
+    provider: {
+      adapter: 'openai-compatible',
+      baseUrl: `${address.baseUrl}/v1`,
+      model: 'router-smoke',
+      apiKeyEnv: 'DESKTOP_CHAR_ROUTER_SMOKE_KEY',
       requestTimeoutMs: 2_000,
-      eventPageSize: 10,
-      maxEvents: 20,
     },
-  }, null, 2), 'utf8');
+  }), null, 2), 'utf8');
 
   application = await electron.launch({
     args: [
@@ -97,6 +97,7 @@ try {
       DESKTOP_CHAR_CONFIG_PATH: configPath,
       DESKTOP_CHAR_TASK_MANAGER_MARKER: markerPath,
       DESKTOP_CHAR_TASK_MANAGER_ENABLED: '1',
+      DESKTOP_CHAR_ROUTER_SMOKE_KEY: 'foreground-smoke-only',
     },
   });
   originalCursorPoint = await application.evaluate(({ screen }) => screen.getCursorScreenPoint());
@@ -165,6 +166,62 @@ try {
     throw new Error('Router failure changed target, cleared input, or produced a session side effect');
   }
 
+  await writeFile(configPath, JSON.stringify(smokeConfig(markerPath), null, 2), 'utf8');
+  await page.evaluate(() => window.desktopChar?.reloadDesktopConfig());
+  await page.waitForFunction(async () => {
+    const state = await window.desktopChar?.getWindowState();
+    return state?.agentRoles.router.provider === 'router-codex-managed'
+      && state?.routerAgent.adapter === 'codex-app-server';
+  }, undefined, { timeout: 10_000 });
+  const managedAutoText =
+    '请把这条补充说明立即发给候选列表中唯一的任务会话“路由隔离会话”（sessionId=session-routing-smoke），不要发给角色。';
+  await input.fill(managedAutoText);
+  await input.press('Control+Enter');
+  await page.waitForFunction(() => {
+    return ['sent', 'error', 'no-match', 'confirm'].includes(
+      document.body.dataset.routingPhase ?? '',
+    );
+  }, undefined, { timeout: 180_000 });
+  const managedAutoDiagnostics = await page.evaluate(async () => ({
+    phase: document.body.dataset.routingPhase,
+    selection: document.body.dataset.routingSelection,
+    status: document.querySelector('.conversation-panel__route-status')?.textContent ?? '',
+    input: document.querySelector('.conversation-panel__form textarea')?.value ?? '',
+    router: await window.desktopChar?.getRouterAgentState(),
+  }));
+  if (managedAutoDiagnostics.phase !== 'sent') {
+    throw new Error(
+      `Managed Router Codex did not produce a sent route: ${JSON.stringify({
+        managedAutoDiagnostics,
+        commands,
+        rendererErrors,
+      })}`,
+    );
+  }
+  await page.waitForFunction(() => {
+    const status = document.querySelector('.conversation-panel__route-status')?.textContent ?? '';
+    return document.body.dataset.routingPhase === 'sent'
+      && document.querySelector('.conversation-panel__form textarea')?.value === ''
+      && status.includes('路由隔离会话');
+  }, undefined, { timeout: 5_000 });
+  if (
+    commands.length !== 3
+    || commands[2].sessionId !== sessionId
+    || commands[2].text !== managedAutoText
+    || commands[2].mode !== 'submit'
+  ) {
+    throw new Error(`Managed Router Codex did not submit the unique session: ${JSON.stringify(commands)}`);
+  }
+  const routerState = await page.evaluate(() => window.desktopChar?.getRouterAgentState());
+  if (
+    routerState?.adapter !== 'codex-app-server'
+    || routerState.phase !== 'ready'
+    || !routerState.lastDecisionAt
+    || routerState.lastError
+  ) {
+    throw new Error(`Managed Router state is invalid: ${JSON.stringify(routerState)}`);
+  }
+
   await selector.selectOption('character');
   const charText = `路由前台 Codex 测试 ${Date.now()}：请简短确认。`;
   await input.fill(charText);
@@ -182,14 +239,14 @@ try {
       && Boolean(activity.reply?.trim()));
   }, charText, { timeout: 180_000 });
 
-  if (commands.length !== 2) {
+  if (commands.length !== 3) {
     throw new Error(`Char routing unexpectedly submitted a Task Manager command: ${commands.length}`);
   }
   if (rendererErrors.length) {
     throw new Error(`Foreground routing renderer errors:\n${rendererErrors.join('\n')}`);
   }
   console.log(
-    `Foreground routing smoke passed: sticky ${sessionId}, strict Auto failure, managed Char Codex`,
+    `Foreground routing smoke passed: sticky ${sessionId}, strict failure, managed Router + Char Codex`,
   );
 }
 finally {
@@ -227,6 +284,29 @@ async function openConversationPanel(page, bounds, pointer) {
     }
   }
   throw new Error('Could not open the conversation panel from a covered avatar pixel');
+}
+
+function smokeConfig(taskManagerMarkerPath, routerOverride) {
+  return {
+    ...(routerOverride ? {
+      agentProviders: {
+        [routerOverride.providerName]: routerOverride.provider,
+      },
+      agentRoles: {
+        router: {
+          provider: routerOverride.providerName,
+        },
+      },
+    } : {}),
+    taskManager: {
+      enabled: true,
+      markerPath: taskManagerMarkerPath,
+      pollIntervalMs: 250,
+      requestTimeoutMs: 2_000,
+      eventPageSize: 10,
+      maxEvents: 20,
+    },
+  };
 }
 
 function createNativePointer() {

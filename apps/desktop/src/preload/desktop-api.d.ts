@@ -160,6 +160,7 @@ export interface RouterAgentState {
   promptProfile: string;
   profileRevision: number;
   lastDecisionAt: string | null;
+  lastResult: import('../../../../packages/interaction-routing/src/index.ts').RouterAgentResult | null;
   lastError: string | null;
 }
 

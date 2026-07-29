@@ -181,11 +181,11 @@ function routerRequest() {
 function routeResult() {
   return JSON.stringify({
     contextRevision: 7,
-    route: {
-      decision: 'route',
-      target: { kind: 'task-session', sessionId: 'session-2' },
-      confidence: 0.95,
-    },
+    decision: 'route',
+    targetKind: 'task-session',
+    sessionId: 'session-2',
+    confidence: 0.95,
+    candidateSessionIds: [],
     candidates: [{ sessionId: 'session-2', score: 0.95, reason: '明确提及第二个会话' }],
   });
 }
