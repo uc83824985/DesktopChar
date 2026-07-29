@@ -18,6 +18,13 @@ External Agent --MCP Client--> DesktopChar 角色接入 MCP Server
 
 Electron main 的 `McpServicesController` 独占配置 revision、服务生命周期、MCP session、重连计时器和连接测试结果。Renderer 右键 UI 只发送启停、重载和测试意图；Avatar Runtime 仍是角色状态唯一所有者。
 
+初期契约测试使用的 `CharAgentMcpAdapter` 与这里的 `characterMcp` 不是同一接口：前者只把
+单一 `char_generate_reply` 工具映射为 `CharAgentEndpoint`，后者控制角色表演。Char Agent
+MCP 不进入 `conversation-runtime`，也不作为生产文本 Provider；默认单元测试仍注入 Fake
+endpoint，官方 MCP Client 的 loopback 契约测试不启动真实模型、TTS、Electron 或 Live2D。
+首版契约完成后不再扩展 Char MCP 能力，只保留必要的兼容修复。完整测试分层见
+[单角色多 Agent 回复流水线开发说明](multi-agent-development.md)。
+
 本地表情/动作规划服务不属于第三个 MCP。它虽然复用 `external / managed` 生命周期术语，
 但只通过 OpenAI-compatible HTTP 接收 sealed 文本和当前 Live2D 动作目录，并返回受
 JSON Schema 约束的建议。它由独立的 `PerformanceModelController` 管理状态和 owned
