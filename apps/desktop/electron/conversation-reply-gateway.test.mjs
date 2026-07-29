@@ -22,11 +22,11 @@ test('reply gateway owns one managed App Server executor and audits logical repl
   });
 
   assert.equal(
-    (await gateway.execute('assistant-1', task(0), new AbortController().signal)).segments[0].text,
+    (await gateway.execute('char-worker-1', task(0), new AbortController().signal)).segments[0].text,
     '托管回复 0',
   );
   assert.equal(
-    (await gateway.execute('assistant-2', task(1), new AbortController().signal)).segments[0].text,
+    (await gateway.execute('char-worker-2', task(1), new AbortController().signal)).segments[0].text,
     '托管回复 1',
   );
   const snapshot = gateway.snapshot();
@@ -43,14 +43,13 @@ test('reply gateway owns one managed App Server executor and audits logical repl
 
 function config() {
   return {
-    maxAssistants: 2,
-    reply: {
-      requestTimeoutMs: 5_000,
-    },
+    maxConcurrency: 2,
+    requestTimeoutMs: 5_000,
   };
 }
 
 function task(sequence) {
+  const messageId = `message-${sequence}`;
   return {
     conversationId: 'conversation',
     turnId: `turn-${sequence}`,
@@ -58,9 +57,21 @@ function task(sequence) {
     taskId: `task-${sequence}`,
     attemptId: `attempt-${sequence}`,
     generation: 0,
-    baseContextRevision: sequence + 1,
-    messages: [],
-    userMessage: `消息 ${sequence}`,
+    deadlineAtMs: Date.now() + 5_000,
+    context: {
+      schemaVersion: 'desktop-char.char-context.v1',
+      baseContextRevision: sequence + 1,
+      personaRevision: 1,
+      persona: { name: '测试角色', instructions: [] },
+      messages: [{
+        messageId,
+        sequence,
+        role: 'user',
+        text: `消息 ${sequence}`,
+        turnId: `turn-${sequence}`,
+      }],
+      focusMessageId: messageId,
+    },
   };
 }
 
@@ -71,6 +82,8 @@ function reply(value, text) {
     taskId: value.taskId,
     attemptId: value.attemptId,
     generation: value.generation,
+    baseContextRevision: value.context.baseContextRevision,
+    personaRevision: value.context.personaRevision,
     segments: [{ segmentId: `segment-${value.turnId}`, text }],
   };
 }

@@ -11,10 +11,18 @@
     "defaultMarginDip": 24,
     "alwaysOnTop": true
   },
-  "conversation": {
-    "maxAssistants": 2,
-    "reply": {
+  "agentProviders": {
+    "codex-managed": {
+      "adapter": "codex-app-server",
+      "lifecycle": "managed",
       "requestTimeoutMs": 180000
+    }
+  },
+  "agentRoles": {
+    "char": {
+      "provider": "codex-managed",
+      "promptProfile": "profiles/char/default.json",
+      "maxConcurrency": 2
     }
   },
   "agentHttp": {

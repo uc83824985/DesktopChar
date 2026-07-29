@@ -156,10 +156,18 @@ Windows 通常对应 `%APPDATA%/DesktopChar/config.json`。程序只通过 Elect
     "defaultMarginDip": 24,
     "alwaysOnTop": true
   },
-  "conversation": {
-    "maxAssistants": 2,
-    "reply": {
+  "agentProviders": {
+    "codex-managed": {
+      "adapter": "codex-app-server",
+      "lifecycle": "managed",
       "requestTimeoutMs": 180000
+    }
+  },
+  "agentRoles": {
+    "char": {
+      "provider": "codex-managed",
+      "promptProfile": "profiles/char/default.json",
+      "maxConcurrency": 2
     }
   },
   "agentHttp": {
@@ -186,17 +194,19 @@ Windows 通常对应 `%APPDATA%/DesktopChar/config.json`。程序只通过 Elect
 以下当前可调项已经进入应用 JSON：
 
 - 拖动长按延迟；
-- 对话逻辑助手并发上限 `conversation.maxAssistants`，允许 `1–8`，默认 `2`；
-- managed Reply Provider 请求超时 `conversation.reply.requestTimeoutMs`；所有逻辑助手
-  共享 DesktopChar 托管的单个 Codex App Server；
+- Char worker 并发上限 `agentRoles.char.maxConcurrency`，允许 `1–8`，默认 `2`；
+- managed Char Provider 请求超时 `agentProviders.codex-managed.requestTimeoutMs`；所有
+  Char worker 共享 DesktopChar 托管的单个 Codex App Server；
+- `agentRoles.char.promptProfile` 指向角色提示 Profile；首版包含 Persona instructions 和
+  应用 fallback 文本；
 - Agent HTTP 启停、loopback host 和端口；
 - 语音合成 MCP、角色接入 MCP、重连与内置本地语音合成参数；
 - 窗口默认尺寸、边距、置顶策略等用户偏好；
 - 当前角色资产 Profile 路径。
 
-Char Agent 与 Router Agent 的独立 Provider/Profile 仍是目标设计，不属于当前 schema。
-后续会采用“可复用 Provider Profile + Agent 角色绑定”，并以环境变量或 secret reference
-传递密钥；不能在应用 JSON 中硬编码 DeepSeek 或其他 Provider 凭据。目标示例和角色边界见
+Char Agent 已采用“可复用 Provider Profile + Agent 角色绑定”。Router Agent 的独立
+Provider/Profile 会在 Router 实现时加入；密钥只能通过环境变量或后续 secret reference
+传递，不能在应用 JSON 中硬编码 DeepSeek 或其他 Provider 凭据。目标示例和角色边界见
 [Task Manager 与会话路由设计](task-manager-routing.md)。
 
 `performanceInference.lifecycle` 接受 `external`、`managed` 字符串简写，或带启动和

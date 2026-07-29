@@ -1,6 +1,6 @@
 import {
   AgentConnectionManager,
-  CodexCliReplyAgent,
+  CodexCliCharAgent,
   ConversationRuntime,
   type PreparationPort,
   type PresentationPort,
@@ -16,10 +16,10 @@ for (const suffix of ['a', 'b']) {
   manager.register({
     agentId: `codex-${suffix}`,
     instanceId: `codex-${suffix}-${process.pid}`,
-    protocolVersion: 'desktop-char.reply.v1',
-    capabilities: ['reply'],
+    protocolVersion: 'desktop-char.char-reply.v1',
+    capabilities: ['char-reply'],
     maxConcurrency: 1,
-  }, new CodexCliReplyAgent({
+  }, new CodexCliCharAgent({
     cwd: workspace,
     timeoutMs: 180_000,
   }));
@@ -51,6 +51,13 @@ const runtime = new ConversationRuntime({
   connections: manager,
   preparation,
   presentation,
+  persona: {
+    name: 'DesktopChar',
+    instructions: ['使用简短、自然、适合桌面角色说出的中文回复。'],
+  },
+  personaRevision: 1,
+  replyTimeoutMs: 180_000,
+  applicationFallbackText: '上一轮的回复没有收到，可以再说一次吗？',
   idFactory: kind => `${kind}-${id++}`,
 });
 

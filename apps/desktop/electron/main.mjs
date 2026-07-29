@@ -10,7 +10,7 @@ import {
   parseLoopbackDevUrl,
 } from './window-policy.mjs';
 import { createAgentHttpServer } from './agent-http-server.mjs';
-import { createCodexConversationReplyExecutor } from './codex-conversation-agent.mjs';
+import { createCodexCharReplyExecutor } from './codex-conversation-agent.mjs';
 import { createConversationReplyGateway } from './conversation-reply-gateway.mjs';
 import { createNativeCursorRefresh } from './cursor-refresh.mjs';
 import { createNativeWindowPosition } from './native-window-position.mjs';
@@ -114,9 +114,9 @@ let desktopStarted = false;
 let agentRuntimeState = { ready: false, snapshot: null };
 const conversationReplyControllers = new Map();
 const conversationReplyGateway = createConversationReplyGateway({
-  config: desktopConfig.conversation,
+  config: resolvedCharRole(desktopConfig),
   createManagedExecutor(timeoutMs) {
-    return createCodexConversationReplyExecutor({
+    return createCodexCharReplyExecutor({
       cwd: process.cwd(),
       timeoutMs,
       schemaPath: path.resolve(
@@ -856,10 +856,10 @@ function windowState() {
       dragHoldDelayMs: desktopConfig.interaction.drag.holdDelayMs,
       dragWindowApi,
     },
-    conversation: {
-      maxAssistants: desktopConfig.conversation.maxAssistants,
-      reply: {
-        requestTimeoutMs: desktopConfig.conversation.reply.requestTimeoutMs,
+    agentRoles: {
+      char: {
+        ...desktopConfig.agentRoles.char,
+        requestTimeoutMs: resolvedCharRole(desktopConfig).requestTimeoutMs,
       },
     },
     character: { profileUrl: desktopConfig.characterProfile.url },
@@ -871,7 +871,7 @@ function windowState() {
 
 function applyDesktopConfig(config, metadata = {}) {
   desktopConfig = config;
-  conversationReplyGateway.configure(config.conversation);
+  conversationReplyGateway.configure(resolvedCharRole(config));
   void performanceModel.replace(config.performanceInference).catch(error => {
     safeError('[performance-model] config apply failed', error);
   });
@@ -888,6 +888,16 @@ function applyDesktopConfig(config, metadata = {}) {
       .then(() => rebindAgentServer(metadata.reason ?? 'config-reload'))
       .catch(error => safeError('[agent-http] config reload failed; keeping previous listener', error));
   }
+}
+
+function resolvedCharRole(config) {
+  const role = config.agentRoles.char;
+  const provider = config.agentProviders[role.provider];
+  if (!provider) throw new Error(`Char Agent Provider is not configured: ${role.provider}`);
+  return {
+    ...role,
+    requestTimeoutMs: provider.requestTimeoutMs,
+  };
 }
 
 function publishDesktopConfigState() {

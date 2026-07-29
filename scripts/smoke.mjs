@@ -118,7 +118,7 @@ try {
     '第一条前台并行测试', '第二条前台并行测试',
   ]) || conversationUi.assistantMessages.length !== 2
     || JSON.stringify(conversationUi.taskOrder) !== JSON.stringify([
-      '#1 assistant-1', '#2 assistant-2',
+      '#1 char-worker-1', '#2 char-worker-2',
     ])) {
     throw new Error(`Conversation interaction view did not preserve turn order: ${JSON.stringify(conversationUi)}`);
   }

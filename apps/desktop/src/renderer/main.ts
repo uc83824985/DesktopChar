@@ -77,11 +77,11 @@ import {
   ConversationRuntime,
 } from '../../../../packages/conversation-runtime/src/conversation-runtime.ts';
 import type {
+  CharAgentEndpoint,
+  CharReplyResult,
+  CharReplyTask,
   ConversationSnapshot,
   PresentationUnit,
-  ReplyAgentEndpoint,
-  ReplyResult,
-  ReplyTask,
 } from '../../../../packages/conversation-runtime/src/types.ts';
 import {
   DomContextMenuHost,
@@ -105,6 +105,7 @@ import { JsonConsoleTtsLogger, McpTtsAdapter, TtsRuntimeEffectHandler } from '..
 import './style.css';
 import type {
   ConversationAgentState,
+  DesktopAgentRolesConfig,
   DesktopTtsConfig,
   DesktopPerformanceInferenceConfig,
   McpServiceId,
@@ -577,7 +578,7 @@ let conversationRuntime: ConversationRuntime | undefined;
 let conversationConnections: AgentConnectionManager | undefined;
 let conversationAgentState: ConversationAgentState | undefined;
 let conversationAgentStateUnsubscribe: (() => void) | undefined;
-let conversationMaxAssistants = 2;
+let charMaxConcurrency = 2;
 const conversationAgentDisposers: Array<() => void> = [];
 let gazeFrameDriverAttached = false;
 let playbackTimer: ReturnType<typeof setInterval> | undefined;
@@ -744,7 +745,7 @@ function handleTonePlaybackEvent(event: AvatarEvent): void {
 
 try {
   const shellState = desktopShell ? await desktopShell.ready() : undefined;
-  conversationMaxAssistants = shellState?.conversation.maxAssistants ?? 2;
+  charMaxConcurrency = shellState?.agentRoles.char.maxConcurrency ?? 2;
   const characterConfig = await loadCharacterConfig(
     shellState?.character.profileUrl ?? DEFAULT_CHARACTER_PROFILE_URL,
   );
@@ -942,7 +943,7 @@ try {
     type: runtime.getSnapshot().gaze.active ? 'user.gaze-follow-disabled' : 'user.gaze-follow-enabled',
   }));
   reset.addEventListener('click', () => runtime?.dispatch({ type: 'user.interrupt-requested' }));
-  initializeConversationTestRuntime();
+  initializeConversationTestRuntime(shellState?.agentRoles.char);
   if (desktopShell) {
     conversationAgentStateUnsubscribe = desktopShell.onConversationAgentState(state => {
       conversationAgentState = state;
@@ -1669,9 +1670,9 @@ function submitEmotionBindingDemo(): void {
   }] } });
 }
 
-function createDesktopConversationReplyEndpoint(agentId: string): ReplyAgentEndpoint {
+function createDesktopConversationReplyEndpoint(agentId: string): CharAgentEndpoint {
   return {
-    execute(task: ReplyTask, signal: AbortSignal): Promise<ReplyResult> {
+    execute(task: CharReplyTask, signal: AbortSignal): Promise<CharReplyResult> {
       if (!desktopShell) return browserConversationReply(agentId, task, signal);
       if (signal.aborted) return Promise.reject(signal.reason);
       return new Promise((resolve, reject) => {
@@ -1701,9 +1702,11 @@ function createDesktopConversationReplyEndpoint(agentId: string): ReplyAgentEndp
 
 async function browserConversationReply(
   agentId: string,
-  task: ReplyTask,
+  task: CharReplyTask,
   signal: AbortSignal,
-): Promise<ReplyResult> {
+): Promise<CharReplyResult> {
+  const focus = task.context.messages.find(message => message.messageId === task.context.focusMessageId);
+  if (!focus || focus.role !== 'user') throw new Error('Char context focusMessageId is invalid');
   await abortableDelay(task.turnSequence % 2 === 0 ? 600 : 150, signal);
   return {
     conversationId: task.conversationId,
@@ -1711,14 +1714,18 @@ async function browserConversationReply(
     taskId: task.taskId,
     attemptId: task.attemptId,
     generation: task.generation,
+    baseContextRevision: task.context.baseContextRevision,
+    personaRevision: task.context.personaRevision,
     segments: [{
       segmentId: `segment-${task.turnId}`,
-      text: `${agentId} 已收到：“${task.userMessage}”`,
+      text: `${agentId} 已收到：“${focus.text}”`,
     }],
   };
 }
 
-function initializeConversationTestRuntime(): void {
+function initializeConversationTestRuntime(
+  charRole?: DesktopAgentRolesConfig['char'],
+): void {
   const connections = new AgentConnectionManager();
   conversationConnections = connections;
   reconcileConversationAgentSlots();
@@ -1748,6 +1755,14 @@ function initializeConversationTestRuntime(): void {
     presentation: {
       present: presentConversationUnit,
     },
+    persona: charRole?.persona ?? {
+      name: 'DesktopChar',
+      instructions: ['使用简短、自然、适合桌面角色说出的中文回复。'],
+    },
+    personaRevision: charRole?.personaRevision ?? 1,
+    replyTimeoutMs: charRole?.requestTimeoutMs ?? 180_000,
+    applicationFallbackText: charRole?.applicationFallbackText
+      ?? '上一轮的回复没有收到，可以再说一次吗？',
   });
   conversationRuntime.subscribe(snapshot => {
     const pending = snapshot.responses.filter(response => !terminalConversationPresentation(response.presentation)).length;
@@ -1764,18 +1779,18 @@ function reconcileConversationAgentSlots(): void {
   const busy = conversationRuntime?.getSnapshot().responses
     .some(response => !terminalConversationPresentation(response.presentation)) ?? false;
   if (busy) return;
-  while (conversationAgentDisposers.length < conversationMaxAssistants) {
+  while (conversationAgentDisposers.length < charMaxConcurrency) {
     const slot = conversationAgentDisposers.length + 1;
-    const agentId = `assistant-${slot}`;
+    const agentId = `char-worker-${slot}`;
     conversationAgentDisposers.push(connections.register({
       agentId,
       instanceId: `${agentId}-foreground`,
-      protocolVersion: 'desktop-char.reply.v1',
-      capabilities: ['reply'],
+      protocolVersion: 'desktop-char.char-reply.v1',
+      capabilities: ['char-reply'],
       maxConcurrency: 1,
     }, createDesktopConversationReplyEndpoint(agentId)));
   }
-  while (conversationAgentDisposers.length > conversationMaxAssistants) {
+  while (conversationAgentDisposers.length > charMaxConcurrency) {
     conversationAgentDisposers.pop()?.();
   }
   document.body.dataset.conversationAssistants = conversationAgentDisposers.length.toString();
@@ -1935,9 +1950,9 @@ function refreshConversationPanel(
     return;
   }
   const pending = snapshot.responses.filter(response => !terminalConversationPresentation(response.presentation)).length;
-  const assistantCount = conversationConnections?.getSnapshot().length ?? conversationMaxAssistants;
+  const assistantCount = conversationConnections?.getSnapshot().length ?? charMaxConcurrency;
   const providerLabel = desktopShell ? 'Codex App Server' : '浏览器回显';
-  summary.textContent = `${providerLabel} · ${assistantCount} 助手 · ${pending} 个处理中`;
+  summary.textContent = `${providerLabel} · ${assistantCount} 个 Char worker · ${pending} 个处理中`;
   submit.disabled = pending >= 6;
   renderConversationAgentAudit(agentAuditSummary, agentAuditContent);
   renderConversationTranscript(transcript, snapshot);
@@ -1956,7 +1971,7 @@ function renderConversationAgentAudit(summary: HTMLElement, content: HTMLElement
   if (activities.length === 0) {
     const empty = document.createElement('div');
     empty.className = 'conversation-panel__agent-empty';
-    empty.textContent = '尚无 ReplyTask 请求。';
+    empty.textContent = '尚无 CharReplyTask 请求。';
     content.append(empty);
     return;
   }
@@ -2900,7 +2915,7 @@ function initializeDesktopInteraction(initialState: Awaited<ReturnType<NonNullab
   }, { once: true });
   const applyReadyState = (state: Awaited<ReturnType<NonNullable<typeof desktopShell>['ready']>>) => {
     applyPerformanceInferenceConfig(state.performanceInference);
-    conversationMaxAssistants = state.conversation.maxAssistants;
+    charMaxConcurrency = state.agentRoles.char.maxConcurrency;
     reconcileConversationAgentSlots();
     dragGesture.setHoldDelayMs(state.interaction.dragHoldDelayMs);
     document.body.dataset.dragHoldDelayMs = state.interaction.dragHoldDelayMs.toString();

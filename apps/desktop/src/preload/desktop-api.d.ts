@@ -40,7 +40,7 @@ export interface DesktopWindowState {
   };
   tray: { available: boolean; iconScaleFactors: number[] };
   interaction: DesktopInteractionConfig;
-  conversation: DesktopConversationConfig;
+  agentRoles: DesktopAgentRolesConfig;
   character: DesktopCharacterConfig;
   performanceInference: DesktopPerformanceInferenceConfig;
   tts: DesktopTtsConfig;
@@ -56,10 +56,15 @@ export interface DesktopInteractionConfig {
   dragWindowApi: 'native-set-window-pos' | 'setBounds';
 }
 
-export interface DesktopConversationConfig {
-  maxAssistants: number;
-  reply: {
+export interface DesktopAgentRolesConfig {
+  char: {
+    provider: string;
+    promptProfile: string;
+    maxConcurrency: number;
     requestTimeoutMs: number;
+    personaRevision: number;
+    persona: import('../../../../packages/conversation-runtime/src/index.ts').PersonaProjection;
+    applicationFallbackText: string;
   };
 }
 
@@ -98,8 +103,8 @@ export interface DesktopCharApi {
   publishAgentState(state: AgentRuntimeState): void;
   requestConversationReply(
     agentId: string,
-    task: import('../../../../packages/conversation-runtime/src/index.ts').ReplyTask,
-  ): Promise<import('../../../../packages/conversation-runtime/src/index.ts').ReplyResult>;
+    task: import('../../../../packages/conversation-runtime/src/index.ts').CharReplyTask,
+  ): Promise<import('../../../../packages/conversation-runtime/src/index.ts').CharReplyResult>;
   cancelConversationReply(agentId: string, taskId: string, attemptId: string): void;
   getConversationAgentState(): Promise<ConversationAgentState>;
   listTtsMcpTools(): Promise<McpToolDescriptor[]>;
@@ -135,7 +140,7 @@ export interface ConversationAgentActivityState {
 }
 
 export interface ConversationAgentState {
-  maxAssistants: number;
+  maxConcurrency: number;
   managed: {
     phase: 'standby' | 'active' | 'ready' | 'stopping';
     active: number;

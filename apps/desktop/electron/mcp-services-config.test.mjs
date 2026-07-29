@@ -76,15 +76,23 @@ test('TTS config exposes the selected profile name from the resolved profile fil
   assert.equal(config.tts.timing.fallbackCharactersPerSecond, 5.56);
 });
 
-test('desktop config owns interaction, window, conversation, agent and character profile settings', () => {
+test('desktop config owns interaction, window, char agent and character profile settings', () => {
   const config = normalizeDesktopConfig({
     version: 1,
     interaction: { drag: { holdDelayMs: 120 } },
     window: { defaultSize: { width: 512, height: 768 }, defaultMarginDip: 16, alwaysOnTop: false },
-    conversation: {
-      maxAssistants: 4,
-      reply: {
+    agentProviders: {
+      'codex-managed': {
+        adapter: 'codex-app-server',
+        lifecycle: 'managed',
         requestTimeoutMs: 90_000,
+      },
+    },
+    agentRoles: {
+      char: {
+        provider: 'codex-managed',
+        promptProfile: 'profiles/char/default.json',
+        maxConcurrency: 4,
       },
     },
     agentHttp: { enabled: false, port: 0 },
@@ -96,8 +104,10 @@ test('desktop config owns interaction, window, conversation, agent and character
   assert.equal(config.interaction.drag.holdDelayMs, 120);
   assert.deepEqual(config.window.defaultSize, { width: 512, height: 768 });
   assert.equal(config.window.alwaysOnTop, false);
-  assert.equal(config.conversation.maxAssistants, 4);
-  assert.equal(config.conversation.reply.requestTimeoutMs, 90_000);
+  assert.equal(config.agentRoles.char.maxConcurrency, 4);
+  assert.equal(config.agentRoles.char.provider, 'codex-managed');
+  assert.equal(config.agentProviders['codex-managed'].requestTimeoutMs, 90_000);
+  assert.equal(config.agentRoles.char.persona.name, 'DesktopChar');
   assert.equal(config.agentHttp.enabled, false);
   assert.equal(config.agentHttp.port, 0);
   assert.equal(config.characterProfile.url, 'models/Test/DesktopChar.character.json');
@@ -119,9 +129,12 @@ test('desktop config path prefers the new bootstrap variable and validates appli
   );
   assert.throws(() => normalizeDesktopConfig({ version: 2 }), /version/);
   assert.throws(() => normalizeDesktopConfig({ interaction: { drag: { holdDelayMs: 1000 } } }), /0 to 999/);
-  assert.throws(() => normalizeDesktopConfig({ conversation: { maxAssistants: 0 } }), /1 to 8/);
-  assert.throws(() => normalizeDesktopConfig({ conversation: { maxAssistants: 9 } }), /1 to 8/);
-  assert.throws(() => normalizeDesktopConfig({ conversation: { reply: { lifecycle: 'external' } } }), /unknown field/);
+  assert.throws(() => normalizeDesktopConfig({ conversation: { maxAssistants: 2 } }), /unknown field/);
+  assert.throws(() => normalizeDesktopConfig({ agentRoles: { char: { maxConcurrency: 0 } } }), /1 to 8/);
+  assert.throws(() => normalizeDesktopConfig({ agentRoles: { char: { maxConcurrency: 9 } } }), /1 to 8/);
+  assert.throws(() => normalizeDesktopConfig({
+    agentProviders: { 'codex-managed': { lifecycle: 'external' } },
+  }), /must be managed/);
   assert.throws(() => normalizeDesktopConfig({ interaction: { drag: { holdDelyMs: 100 } } }), /unknown field/);
   assert.throws(() => normalizeDesktopConfig({ agentHttp: { host: '0.0.0.0' } }), /loopback/);
   assert.throws(() => normalizeDesktopConfig({ character: { profile: '../escape.json' } }), /parent traversal/);

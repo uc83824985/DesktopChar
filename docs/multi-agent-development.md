@@ -3,8 +3,7 @@
 ## 当前范围
 
 多 Agent 只负责为同一个桌面角色跨 Turn 并行生成回复文本，不表示多个角色或多种人格。
-所有 worker 都必须接收同一 Persona revision 的完整角色上下文。当前代码仍使用
-`ReplyAgentEndpoint/ReplyTask/ReplyResult` 过渡命名；目标直接替换为
+所有 worker 都必须接收同一 Persona revision 的完整角色上下文。当前代码使用
 `CharAgentEndpoint/CharReplyTask/CharReplyResult`，不是让无角色 Agent 先回复后再润色：
 
 - `CharReplyTask` 外层保留 task/attempt/generation/deadline，Persona、消息与 revision
@@ -75,9 +74,8 @@ Persona 改变、明确取消、generation 变化或 deadline 到期才硬拒绝
 - `角色对话`：默认页，提供多行输入框和发送按钮；Enter 换行，Ctrl+Enter 发送；
 - `资源调试`：保留原有表情、动作、Neutral/Reset 与基准姿态锁定能力。
 
-当前桌面端仍按 `conversation.maxAssistants` 注册 1–8 个容量均为 1 的逻辑 endpoint，默认
-`assistant-1`、`assistant-2`。实现 Agent Role 配置时该字段一次性迁移为
-`agentRoles.char.maxConcurrency`，逻辑实例的目标命名同步改为 `char-worker-1/2...`。所有
+当前桌面端按 `agentRoles.char.maxConcurrency` 注册 1–8 个容量均为 1 的逻辑 endpoint，
+默认 `char-worker-1`、`char-worker-2`。所有
 endpoint 通过 Electron main 共享一个隐藏的官方
 `codex app-server` 进程，不为每个助手或每个 Turn 启动 CLI/窗口。每次回复请求在该
 进程内建立独立 ephemeral thread，并通过 `turn/start` 的 JSON `outputSchema` 得到结构化
@@ -127,8 +125,8 @@ Electron 集成使用 stdio JSONL：
 ```text
 DesktopChar main
   └─ codex app-server --listen stdio://       # 一个隐藏进程
-       ├─ ephemeral thread: assistant-1 / Turn N
-       └─ ephemeral thread: assistant-2 / Turn N+1
+       ├─ ephemeral thread: char-worker-1 / Turn N
+       └─ ephemeral thread: char-worker-2 / Turn N+1
 ```
 
 每个 thread/turn 均设置 `approvalPolicy: never` 和只读 sandbox；窗口关闭时 main 先
@@ -136,10 +134,10 @@ Abort 活跃 Turn，再统一关闭 App Server。Windows 下启动 npm 安装的
 设置 `ELECTRON_RUN_AS_NODE=1`，避免把 Electron 的 `process.execPath` 当成 Node 后新建
 前台窗口。
 
-目标字段 `agentRoles.char.maxConcurrency` 是整数并发上限，不是 checkbox。当前实现的
-`conversation.maxAssistants` 不作为长期兼容别名；实施迁移时同步更新 schema、示例配置、
-快照、UI 和测试。配置热重载时，如果仍有回复或播放任务，只记录目标值；等 Conversation
-空闲后再增减逻辑 endpoint，不中断现有 Turn。
+`agentRoles.char.maxConcurrency` 是整数并发上限，不是 checkbox。旧
+`conversation.maxAssistants` 不作为兼容别名；schema、示例配置、快照、UI 和测试均已同步
+迁移。配置热重载时，如果仍有回复或播放任务，只记录目标值；等 Conversation 空闲后再
+增减逻辑 endpoint，不中断现有 Turn。
 
 当前生产 Char Provider 只有 `managed`：DesktopChar 只拥有一个 Codex App Server，
 所有逻辑 Char worker 共享该隐藏进程，并以独立 ephemeral thread 隔离每次任务。此前探索的
@@ -161,6 +159,16 @@ npm run test:codex-app-server
 ```
 
 该验收复用本机 Codex 登录状态，会产生实际模型调用；不进入默认 `npm test`。
+
+运行完整 Electron 前台输入到 managed Codex 再回到对话面板的验收：
+
+```powershell
+npm run test:conversation-codex-foreground
+```
+
+该命令启动真实桌面窗口，在“角色对话”页提交一条消息，核对 gateway 审计中的
+`codex-app-server` 完成记录，并确认相同回复已经由 `ConversationRuntime` sealed 后显示。
+它同样会产生实际模型调用，不进入默认 `npm test`。
 
 ## 独立 Codex CLI 适配器
 

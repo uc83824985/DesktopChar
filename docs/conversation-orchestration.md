@@ -79,10 +79,9 @@ DesktopCharRuntime（组合根）
 `AvatarRuntime` 接受一个 `PerformanceUnit`，`performance.completed` 再向
 `ConversationRuntime` 报告呈现完成；组合根不能直接修改任一子 Runtime 的内部字段。
 Char reply task、attempt 和 ResponseSlot 属于 `ConversationRuntime`；连接、进程和 endpoint
-并发属于 `AgentConnectionManager`。两者通过 `ReplyTask` 与 `ReplyResult` 契约协作，
-任何一层都不能拥有第二份对话记录。`ReplyTask/ReplyResult` 是当前代码的过渡命名，目标
-契约改为携带 Persona revision 的 `CharReplyTask/CharReplyResult`，Runtime 内部的 reply
-状态名仍可保留。
+并发属于 `AgentConnectionManager`。两者通过 `CharReplyTask` 与 `CharReplyResult` 契约
+协作，任何一层都不能拥有第二份对话记录。任务的 Persona、消息和 revision 已收拢到
+嵌套 `CharContextEnvelope`，Runtime 内部的 reply 状态名继续保留。
 
 ## “完整上下文”的准确含义
 
@@ -368,11 +367,10 @@ Manager 只接受已解析完成的 `sessionId + text` 命令，不能自行理�
 目标。完整的用户可见时间线、二次确认和独立 Agent 配置见
 [Task Manager 与会话路由设计](task-manager-routing.md)。
 
-### 当前实现与目标命名
+### 当前 Char 契约
 
-当前代码仍以 `ReplyAgentEndpoint/ReplyTask/ReplyResult` 命名；目标实现直接收窄为
-`CharAgentEndpoint/CharReplyTask/CharReplyResult`，不是在无角色 Reply 之后增加后处理。
-同步 lane 只保留单角色 `char-reply`：
+当前代码已直接收窄为 `CharAgentEndpoint/CharReplyTask/CharReplyResult`，不是在无角色
+Reply 之后增加后处理。同步 lane 只保留单角色 `char-reply`：
 
 - 一个 Turn 默认只创建一个 Char reply task；
 - 多个 Turn 可以分派给同一角色的不同 Char worker 并行生成；
@@ -749,9 +747,9 @@ Player 只报告 `buffering/started/progress/stalled/recovered/completed/failed`
 
 已经确定采用单角色、多 Turn Char worker 并发、managed Char 执行面、应用单写提交和本地
 表现规划。最小内存调度框架已验证双 worker、乱序结果提前准备和顺序播放；新用户输入默认
-不会让已运行 Turn 失效。并发配置已经确定使用 `agentRoles.char.maxConcurrency`；当前
-`conversation.maxAssistants` 在 Agent Role schema 落地时一次性迁移，不保留兼容别名。
-进入实现前已经定案：
+不会让已运行 Turn 失效。配置已经迁移为 `agentProviders + agentRoles`，并发使用
+`agentRoles.char.maxConcurrency`，不接受旧 `conversation.maxAssistants` 兼容别名。
+Router 与 Task Manager 实现前已经定案：
 
 1. Auto 模式下，单个候选同时超过可配置的最低置信度与领先幅度时直接提交；只有多个合理
    候选接近时二次确认。Router 调用或结构校验失败直接向前台报错，不回退 Char、不产生

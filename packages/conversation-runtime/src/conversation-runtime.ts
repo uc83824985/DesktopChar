@@ -1,4 +1,6 @@
 import type {
+  CharReplyResult,
+  CharReplyTask,
   CommitState,
   ConversationMessage,
   ConversationRuntimeOptions,
@@ -10,9 +12,7 @@ import type {
   PresentationState,
   PresentationUnit,
   PreparationState,
-  ReplyResult,
   ReplyState,
-  ReplyTask,
   ResponseSegmentSnapshot,
   ResponseSlotSnapshot,
   SubmittedTurn,
@@ -22,6 +22,7 @@ interface SegmentRecord {
   segmentId: string;
   segmentRevision: number;
   text: string;
+  source: 'agent' | 'application-fallback';
   speech: PreparationState;
   performance: PerformancePreparationState;
   preparedSpeech?: PreparedSpeech;
@@ -37,6 +38,8 @@ interface ResponseRecord {
   attemptId: string;
   generation: number;
   baseContextRevision: number;
+  personaRevision: number;
+  deadlineAtMs: number;
   reply: ReplyState;
   commit: CommitState;
   presentation: PresentationState;
@@ -61,6 +64,16 @@ export class ConversationRuntime {
 
   constructor(options: ConversationRuntimeOptions) {
     if (!options.conversationId.trim()) throw new TypeError('ConversationRuntime requires a conversationId');
+    validatePersona(options.persona);
+    if (!Number.isInteger(options.personaRevision) || options.personaRevision < 0) {
+      throw new RangeError('ConversationRuntime personaRevision must be a non-negative integer');
+    }
+    if (!Number.isFinite(options.replyTimeoutMs) || options.replyTimeoutMs <= 0) {
+      throw new RangeError('ConversationRuntime replyTimeoutMs must be positive and finite');
+    }
+    if (!options.applicationFallbackText.trim()) {
+      throw new TypeError('ConversationRuntime applicationFallbackText must not be empty');
+    }
     this.options = options;
   }
 
@@ -93,6 +106,8 @@ export class ConversationRuntime {
       attemptId,
       generation: 0,
       baseContextRevision: this.contextRevision,
+      personaRevision: this.options.personaRevision,
+      deadlineAtMs: this.now() + this.options.replyTimeoutMs,
       reply: 'pending',
       commit: 'waiting',
       presentation: 'waiting',
@@ -101,16 +116,22 @@ export class ConversationRuntime {
     };
     this.responses.push(response);
 
-    const task: ReplyTask = {
+    const task: CharReplyTask = {
       conversationId: this.options.conversationId,
       turnId,
       turnSequence,
       taskId,
       attemptId,
       generation: response.generation,
-      baseContextRevision: response.baseContextRevision,
-      messages: this.messages.map(cloneMessage),
-      userMessage: normalized,
+      deadlineAtMs: response.deadlineAtMs,
+      context: {
+        schemaVersion: 'desktop-char.char-context.v1',
+        baseContextRevision: response.baseContextRevision,
+        personaRevision: response.personaRevision,
+        persona: clonePersona(this.options.persona),
+        messages: this.messages.map(cloneMessage),
+        focusMessageId: userMessage.messageId,
+      },
     };
     response.reply = 'running';
     this.emit();
@@ -167,17 +188,22 @@ export class ConversationRuntime {
     this.resolveIdleWaiters();
   }
 
-  private async runReply(response: ResponseRecord, task: ReplyTask): Promise<void> {
+  private async runReply(response: ResponseRecord, task: CharReplyTask): Promise<void> {
+    const timeout = setTimeout(
+      () => response.controller.abort(new Error(`Char reply timed out at ${task.deadlineAtMs}`)),
+      Math.max(0, task.deadlineAtMs - this.now()),
+    );
     try {
       const execution = await this.options.connections.dispatch(task, response.controller.signal);
       if (!this.isCurrent(response, task.generation)) return;
-      validateReplyResult(task, execution.result);
+      validateCharReplyResult(task, execution.result);
       response.agentId = execution.agentId;
       response.instanceId = execution.instanceId;
       response.segments = execution.result.segments.map((segment, index) => ({
         segmentId: segment.segmentId || this.id('segment'),
         segmentRevision: 0,
         text: segment.text.trim(),
+        source: 'agent',
         speech: 'none',
         performance: 'none',
       }));
@@ -193,13 +219,23 @@ export class ConversationRuntime {
     }
     catch (error) {
       if (!this.isCurrent(response, task.generation)) return;
-      response.reply = response.controller.signal.aborted ? 'cancelled' : 'failed';
-      response.commit = response.reply === 'cancelled' ? 'cancelled' : 'failed';
-      response.presentation = response.reply === 'cancelled' ? 'cancelled' : 'failed';
       response.error = errorMessage(error);
+      response.reply = 'sealed';
+      response.segments = [{
+        segmentId: this.id('segment'),
+        segmentRevision: 0,
+        text: this.options.applicationFallbackText.trim(),
+        source: 'application-fallback',
+        speech: 'none',
+        performance: 'none',
+      }];
+      this.startPreparations(response);
       this.advanceCommits();
       this.emit();
       void this.pumpPresentation();
+    }
+    finally {
+      clearTimeout(timeout);
     }
   }
 
@@ -344,22 +380,39 @@ export class ConversationRuntime {
   private id(kind: 'message' | 'turn' | 'task' | 'attempt' | 'response' | 'segment'): string {
     return this.options.idFactory?.(kind) ?? `${kind}-${globalThis.crypto.randomUUID()}`;
   }
+
+  private now(): number {
+    return this.options.now?.() ?? Date.now();
+  }
 }
 
-function validateReplyResult(task: ReplyTask, result: ReplyResult): void {
+function validateCharReplyResult(task: CharReplyTask, result: CharReplyResult): void {
   if (
     result.conversationId !== task.conversationId
     || result.turnId !== task.turnId
     || result.taskId !== task.taskId
     || result.attemptId !== task.attemptId
     || result.generation !== task.generation
+    || result.baseContextRevision !== task.context.baseContextRevision
+    || result.personaRevision !== task.context.personaRevision
   ) {
-    throw new Error('Reply result correlation does not match the active task attempt');
+    throw new Error('Char reply result correlation does not match the active task attempt');
   }
 }
 
 function cloneMessage(message: ConversationMessage): ConversationMessage {
   return { ...message };
+}
+
+function clonePersona(persona: ConversationRuntimeOptions['persona']): ConversationRuntimeOptions['persona'] {
+  return { name: persona.name, instructions: [...persona.instructions] };
+}
+
+function validatePersona(persona: ConversationRuntimeOptions['persona']): void {
+  if (!persona.name.trim()) throw new TypeError('Persona name must not be empty');
+  if (!Array.isArray(persona.instructions) || persona.instructions.some(instruction => !instruction.trim())) {
+    throw new TypeError('Persona instructions must contain only non-empty strings');
+  }
 }
 
 function snapshotResponse(response: ResponseRecord): ResponseSlotSnapshot {
@@ -372,6 +425,8 @@ function snapshotResponse(response: ResponseRecord): ResponseSlotSnapshot {
     attemptId: response.attemptId,
     generation: response.generation,
     baseContextRevision: response.baseContextRevision,
+    personaRevision: response.personaRevision,
+    deadlineAtMs: response.deadlineAtMs,
     reply: response.reply,
     commit: response.commit,
     presentation: response.presentation,
@@ -387,6 +442,7 @@ function snapshotSegment(segment: SegmentRecord): ResponseSegmentSnapshot {
     segmentId: segment.segmentId,
     segmentRevision: segment.segmentRevision,
     text: segment.text,
+    source: segment.source,
     speech: segment.speech,
     performance: segment.performance,
   };
@@ -404,6 +460,7 @@ function presentationUnit(response: ResponseRecord): PresentationUnit {
         segmentId: segment.segmentId,
         segmentRevision: segment.segmentRevision,
         text: segment.text,
+        source: segment.source,
       };
       if (segment.preparedSpeech !== undefined) result.speech = segment.preparedSpeech;
       if (segment.preparedPerformance !== undefined) result.performance = segment.preparedPerformance;

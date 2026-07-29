@@ -378,8 +378,8 @@ interface RouterAgentResult {
 
 ## 单角色 Char Agent 契约与时效性
 
-当前代码中的 `ReplyAgentEndpoint` 是过渡命名和最小文本生成契约。目标实现以
-`CharAgentEndpoint` 替换它，而不是在其后再增加一次角色润色：
+当前实现使用单角色 `CharAgentEndpoint`，从任务开始就携带角色上下文，而不是在通用回复
+之后再增加一次角色润色：
 
 ```ts
 interface CharAgentEndpoint {
@@ -444,7 +444,7 @@ WorkAssistant 的 `start_*_agent` 启动器已经验证了可复用模式：每�
 entry script，不把 Provider 设置写入全局配置。DesktopChar 后续采用相同原则，但拆成
 “可复用 Provider Profile + Agent 角色绑定”，避免每个角色复制整份连接信息。
 
-下面是目标配置形态，不是当前 `desktop-char.config.json` 已支持的 schema：
+下面是 Agent 配置形态。Char 部分已经支持；Router 部分将在路由实现阶段加入：
 
 ```json
 {
@@ -495,12 +495,10 @@ entry script，不把 Provider 设置写入全局配置。DesktopChar 后续采�
 - 任何启动脚本、示例 JSON、审计快照和前台状态都不得输出 token 或 API key；
 - Profile 热重载只影响新请求；已经冻结的路由决策和正在呈现的通知继续使用原 revision。
 
-当前已实现的配置仍只有 `conversation.maxAssistants` 与
-`conversation.reply.requestTimeoutMs`，Reply 固定为 managed Codex App Server。上述
-Provider/Profile 分层应在 Router/Char 接口落地时一并加入 schema、脱敏快照与配置测试，
-不能先把某个 DeepSeek endpoint 硬编码进业务逻辑。实现新 schema 时将旧的
-`conversation.maxAssistants` 一次性迁移为 `agentRoles.char.maxConcurrency`；不保留两个
-同义并发字段，示例配置、热重载快照、UI 标签和测试同时更新。
+Char Provider/Profile 分层、脱敏快照和配置测试已经落地，生产 Char 仍固定使用 managed
+Codex App Server。旧 `conversation.maxAssistants` 已一次性迁移为
+`agentRoles.char.maxConcurrency`，不保留同义字段。Router Provider 与 Role 将沿用相同
+结构加入，不能把某个 DeepSeek endpoint 硬编码进业务逻辑。
 
 ## 轻量 Char Agent MCP 测试面
 
@@ -560,12 +558,13 @@ Char Agent 的建议只是用户可见内容，不自动转化为 TaskCommand。
 
 ## 实施顺序
 
-1. 把过渡的 `ReplyAgentEndpoint` 收窄为单角色 `CharAgentEndpoint`，保持 Fake 注入和轻量
-   MCP 契约测试；先保留现有 managed Codex 实现。
+1. （已完成）把过渡的 Reply 契约收窄为单角色 `CharAgentEndpoint`，保持 Fake 注入、轻量
+   MCP 契约测试和现有 managed Codex 实现。
 2. 增加 Router 领域端口和确定性快速路径，只实现 `character/task-session` 两类目标。
 3. 先实现 Task Manager 的 marker/token 发现、Session Monitor 轮询、内存有界事实事件日志、
    cursor/ack、按 session 的 submission generation 和精确命令接口。
 4. DesktopChar 接收并保存有界事实事件，完成无 Agent 的确定性通知与播放闭环。
 5. 增加 `visibleTimeline`、候选 LRU、冻结 revision、显式 session 选择和二次确认。
 6. 实现 Char Agent 的角色化任务通知，并保持有界事实事件可审计、可重新处理。
-7. 最后落地 Provider Profile/Agent Role 配置、密钥引用、热重载和故障回退。
+7. 补齐 Router Provider Profile/Agent Role、密钥引用与热重载；Char Role 配置和首版应用
+   失败占位已随第 1 步落地。

@@ -7,6 +7,8 @@ const LOOPBACK_HOSTS = new Set(['127.0.0.1', 'localhost', '::1']);
 const TTS_PROFILE_DIRECTORY = 'tts-mcp-profiles';
 const DEFAULT_TTS_PROFILE_NAME = 'local';
 const DEFAULT_DESKTOP_CONFIG_EXAMPLE = 'desktop-char.config.example.json';
+const DEFAULT_CHAR_PROVIDER_NAME = 'codex-managed';
+const DEFAULT_CHAR_PROMPT_PROFILE = 'profiles/char/default.json';
 
 export function resolveDesktopConfigPath(env = process.env, cwd = process.cwd(), defaultFilePath) {
   const configuredPath = env.DESKTOP_CHAR_CONFIG_PATH ?? env.DESKTOP_CHAR_MCP_CONFIG_PATH;
@@ -49,6 +51,13 @@ export async function loadDesktopConfig(options = {}) {
     exampleConfigFilePath: exampleFilePath,
     cwd,
   });
+  const agentRoles = optionalRecord(fileConfig.agentRoles, 'agentRoles');
+  const charRole = optionalRecord(agentRoles.char, 'agentRoles.char');
+  const charPromptProfilePath = assetPath(
+    charRole.promptProfile ?? DEFAULT_CHAR_PROMPT_PROFILE,
+    'agentRoles.char.promptProfile',
+  );
+  const charPromptProfile = await loadCharPromptProfile(charPromptProfilePath, { cwd });
   return {
     filePath,
     exists,
@@ -60,13 +69,18 @@ export async function loadDesktopConfig(options = {}) {
       ttsProfilePath: ttsProfile.filePath,
       cwd,
       configFilePath: filePath,
+      charPromptProfilePath,
+      charPromptProfileConfig: charPromptProfile,
     }),
   };
 }
 
 export function normalizeDesktopConfig(fileConfig = {}, env = {}, options = {}) {
   if (!isRecord(fileConfig)) throw new TypeError('Desktop config root must be an object');
-  assertKnownKeys(fileConfig, ['$schema', 'version', 'interaction', 'window', 'conversation', 'agentHttp', 'character', 'performanceInference', 'ttsMcp', 'characterMcp'], 'Desktop config');
+  assertKnownKeys(fileConfig, [
+    '$schema', 'version', 'interaction', 'window', 'agentProviders', 'agentRoles',
+    'agentHttp', 'character', 'performanceInference', 'ttsMcp', 'characterMcp',
+  ], 'Desktop config');
   if (fileConfig.$schema !== undefined) text(fileConfig.$schema, '$schema');
   const version = fileConfig.version ?? 1;
   if (version !== 1) throw new TypeError('Desktop config version must be 1');
@@ -78,10 +92,28 @@ export function normalizeDesktopConfig(fileConfig = {}, env = {}, options = {}) 
   assertKnownKeys(window, ['defaultSize', 'defaultMarginDip', 'alwaysOnTop'], 'window');
   const defaultSize = optionalRecord(window.defaultSize, 'window.defaultSize');
   assertKnownKeys(defaultSize, ['width', 'height'], 'window.defaultSize');
-  const conversation = optionalRecord(fileConfig.conversation, 'conversation');
-  assertKnownKeys(conversation, ['maxAssistants', 'reply'], 'conversation');
-  const conversationReply = optionalRecord(conversation.reply, 'conversation.reply');
-  assertKnownKeys(conversationReply, ['requestTimeoutMs'], 'conversation.reply');
+  const agentProviders = optionalRecord(fileConfig.agentProviders, 'agentProviders');
+  const charRole = optionalRecord(optionalRecord(fileConfig.agentRoles, 'agentRoles').char, 'agentRoles.char');
+  assertKnownKeys(charRole, ['provider', 'promptProfile', 'maxConcurrency'], 'agentRoles.char');
+  const charProviderName = text(charRole.provider ?? DEFAULT_CHAR_PROVIDER_NAME, 'agentRoles.char.provider');
+  const charProvider = optionalRecord(agentProviders[charProviderName], `agentProviders.${charProviderName}`);
+  assertKnownKeys(
+    charProvider,
+    ['adapter', 'lifecycle', 'requestTimeoutMs'],
+    `agentProviders.${charProviderName}`,
+  );
+  const charAdapter = text(charProvider.adapter ?? 'codex-app-server', `agentProviders.${charProviderName}.adapter`);
+  if (charAdapter !== 'codex-app-server') {
+    throw new TypeError(`agentProviders.${charProviderName}.adapter must be codex-app-server for the char role`);
+  }
+  const charLifecycle = text(charProvider.lifecycle ?? 'managed', `agentProviders.${charProviderName}.lifecycle`);
+  if (charLifecycle !== 'managed') {
+    throw new TypeError(`agentProviders.${charProviderName}.lifecycle must be managed for the char role`);
+  }
+  const charPromptProfile = normalizeCharPromptProfile(
+    options.charPromptProfileConfig ?? defaultCharPromptProfile(),
+    options.charPromptProfilePath ?? charRole.promptProfile ?? DEFAULT_CHAR_PROMPT_PROFILE,
+  );
   const agentHttp = optionalRecord(fileConfig.agentHttp, 'agentHttp');
   assertKnownKeys(agentHttp, ['enabled', 'host', 'port'], 'agentHttp');
   const characterProfile = optionalRecord(fileConfig.character, 'character');
@@ -203,22 +235,39 @@ export function normalizeDesktopConfig(fileConfig = {}, env = {}, options = {}) 
       defaultMarginDip: nonNegative(window.defaultMarginDip, 24, 'window.defaultMarginDip'),
       alwaysOnTop: boolean(window.alwaysOnTop, true, 'window.alwaysOnTop'),
     },
-    conversation: {
-      maxAssistants: boundedInteger(
-        conversation.maxAssistants,
-        2,
-        1,
-        8,
-        'conversation.maxAssistants',
-      ),
-      reply: {
+    agentProviders: {
+      [charProviderName]: {
+        adapter: charAdapter,
+        lifecycle: charLifecycle,
         requestTimeoutMs: boundedInteger(
-          conversationReply.requestTimeoutMs,
+          charProvider.requestTimeoutMs,
           180_000,
           1_000,
           600_000,
-          'conversation.reply.requestTimeoutMs',
+          `agentProviders.${charProviderName}.requestTimeoutMs`,
         ),
+      },
+    },
+    agentRoles: {
+      char: {
+        provider: charProviderName,
+        promptProfile: assetPath(
+          charRole.promptProfile ?? DEFAULT_CHAR_PROMPT_PROFILE,
+          'agentRoles.char.promptProfile',
+        ),
+        maxConcurrency: boundedInteger(
+          charRole.maxConcurrency,
+          2,
+          1,
+          8,
+          'agentRoles.char.maxConcurrency',
+        ),
+        personaRevision: charPromptProfile.version,
+        persona: {
+          name: charPromptProfile.name,
+          instructions: [...charPromptProfile.instructions],
+        },
+        applicationFallbackText: charPromptProfile.applicationFallbackText,
       },
     },
     agentHttp: {
@@ -377,6 +426,13 @@ export const loadMcpServicesConfig = loadDesktopConfig;
 export const normalizeMcpServicesConfig = normalizeDesktopConfig;
 export const watchMcpServicesConfig = watchDesktopConfig;
 
+export async function loadCharPromptProfile(profilePath, options = {}) {
+  const safePath = assetPath(profilePath, 'agentRoles.char.promptProfile');
+  const filePath = path.resolve(options.cwd ?? process.cwd(), safePath);
+  const parsed = await readConfigObject(filePath, `Char prompt profile ${safePath}`);
+  return parsed;
+}
+
 export async function loadTtsProfileConfig(profileName, options = {}) {
   const candidates = ttsProfileCandidates(profileName, options);
   let lastError;
@@ -443,6 +499,32 @@ function ttsProfileCandidates(profileName, options = {}) {
   if (exampleConfigFilePath) directories.push(path.resolve(path.dirname(exampleConfigFilePath), TTS_PROFILE_DIRECTORY));
   directories.push(path.resolve(cwd, TTS_PROFILE_DIRECTORY));
   return [...new Set(directories)].flatMap(directory => filenames.map(filename => path.join(directory, filename)));
+}
+
+function normalizeCharPromptProfile(value, profilePath) {
+  const label = `Char prompt profile ${profilePath}`;
+  const profile = optionalRecord(value, label);
+  assertKnownKeys(
+    profile,
+    ['$schema', 'version', 'name', 'instructions', 'applicationFallbackText'],
+    label,
+  );
+  if (profile.$schema !== undefined) text(profile.$schema, `${label}.$schema`);
+  const version = profile.version ?? 1;
+  if (!Number.isInteger(version) || version < 1) throw new TypeError(`${label}.version must be a positive integer`);
+  const instructions = profile.instructions === undefined
+    ? defaultCharPromptProfile().instructions
+    : stringArray(profile.instructions, `${label}.instructions`).map((item, index) =>
+      text(item, `${label}.instructions[${index}]`));
+  return {
+    version,
+    name: text(profile.name ?? 'DesktopChar', `${label}.name`),
+    instructions,
+    applicationFallbackText: text(
+      profile.applicationFallbackText ?? '上一轮的回复没有收到，可以再说一次吗？',
+      `${label}.applicationFallbackText`,
+    ),
+  };
 }
 
 async function readConfigObject(filePath, label) {
@@ -635,6 +717,15 @@ function boundedInteger(value, fallback, minimum, maximum, label) {
     throw new TypeError(`${label} must be an integer from ${minimum} to ${maximum}`);
   }
   return result;
+}
+
+function defaultCharPromptProfile() {
+  return {
+    version: 1,
+    name: 'DesktopChar',
+    instructions: ['使用简短、自然、适合桌面角色说出的中文回复。'],
+    applicationFallbackText: '上一轮的回复没有收到，可以再说一次吗？',
+  };
 }
 
 function loopbackHttpUrl(value, label) {

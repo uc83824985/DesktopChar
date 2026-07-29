@@ -1,14 +1,14 @@
 import type {
   AgentConnectionSnapshot,
-  AgentExecution,
   AgentRegistration,
-  ReplyAgentEndpoint,
-  ReplyTask,
+  CharAgentEndpoint,
+  CharAgentExecution,
+  CharReplyTask,
 } from './types.ts';
 
 interface ConnectionRecord {
   registration: AgentRegistration;
-  endpoint: ReplyAgentEndpoint;
+  endpoint: CharAgentEndpoint;
   active: number;
   healthy: boolean;
   registrationOrder: number;
@@ -17,9 +17,9 @@ interface ConnectionRecord {
 }
 
 interface PendingDispatch {
-  task: ReplyTask;
+  task: CharReplyTask;
   signal: AbortSignal;
-  resolve: (execution: AgentExecution) => void;
+  resolve: (execution: CharAgentExecution) => void;
   reject: (error: unknown) => void;
   removeAbortListener: () => void;
 }
@@ -31,7 +31,7 @@ export class AgentConnectionManager {
   private assignmentSequence = 0;
   private closed = false;
 
-  register(registration: AgentRegistration, endpoint: ReplyAgentEndpoint): () => void {
+  register(registration: AgentRegistration, endpoint: CharAgentEndpoint): () => void {
     if (this.closed) throw new Error('AgentConnectionManager is closed');
     validateRegistration(registration);
     const key = connectionKey(registration.agentId, registration.instanceId);
@@ -69,7 +69,7 @@ export class AgentConnectionManager {
     this.pump();
   }
 
-  dispatch(task: ReplyTask, signal: AbortSignal): Promise<AgentExecution> {
+  dispatch(task: CharReplyTask, signal: AbortSignal): Promise<CharAgentExecution> {
     if (this.closed) return Promise.reject(new Error('AgentConnectionManager is closed'));
     if (signal.aborted) return Promise.reject(abortReason(signal));
     return new Promise((resolve, reject) => {
@@ -144,7 +144,7 @@ export class AgentConnectionManager {
   private selectConnection(nowMs = Date.now()): ConnectionRecord | undefined {
     return [...this.records.values()]
       .filter(record => record.healthy
-        && record.registration.capabilities.includes('reply')
+        && record.registration.capabilities.includes('char-reply')
         && record.active < record.registration.maxConcurrency
         && (record.registration.leaseExpiresAtMs === undefined || record.registration.leaseExpiresAtMs > nowMs))
       .sort((a, b) => {
@@ -181,7 +181,9 @@ export class AgentConnectionManager {
 function validateRegistration(value: AgentRegistration): void {
   if (!value.agentId.trim() || !value.instanceId.trim()) throw new TypeError('Agent registration requires agentId and instanceId');
   if (!value.protocolVersion.trim()) throw new TypeError('Agent registration requires protocolVersion');
-  if (!value.capabilities.includes('reply')) throw new TypeError('Agent registration must include the reply capability');
+  if (!value.capabilities.includes('char-reply')) {
+    throw new TypeError('Agent registration must include the char-reply capability');
+  }
   if (!Number.isInteger(value.maxConcurrency) || value.maxConcurrency <= 0) {
     throw new RangeError('Agent maxConcurrency must be a positive integer');
   }

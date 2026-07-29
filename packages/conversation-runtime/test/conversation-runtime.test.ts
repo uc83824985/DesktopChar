@@ -6,9 +6,9 @@ import {
   type PresentationPort,
   type PresentationUnit,
   type PreparationPort,
-  type ReplyAgentEndpoint,
-  type ReplyResult,
-  type ReplyTask,
+  type CharAgentEndpoint,
+  type CharReplyResult,
+  type CharReplyTask,
 } from '../src/index.ts';
 
 test('multi-agent connection manager uses separate reply capacity concurrently', async () => {
@@ -47,6 +47,10 @@ test('multi-agent replies prepare out of order but commit and present in turn or
     connections: manager,
     preparation,
     presentation,
+    persona: persona(),
+    personaRevision: 3,
+    replyTimeoutMs: 5_000,
+    applicationFallbackText: '上一轮的回复没有收到，可以再说一次吗？',
     idFactory: kind => `${kind}-${id++}`,
   });
 
@@ -84,14 +88,60 @@ test('multi-agent replies prepare out of order but commit and present in turn or
   manager.close();
 });
 
-class ControlledAgent implements ReplyAgentEndpoint {
+test('failed char reply seals an application fallback and unblocks later turns', async () => {
+  const manager = new AgentConnectionManager();
+  const first = new ControlledAgent();
+  const second = new ControlledAgent();
+  manager.register(registration('char-worker-a'), first);
+  manager.register(registration('char-worker-b'), second);
+  const preparation = new RecordingPreparation();
+  const presentation = new ControlledPresentation();
+  let id = 0;
+  const runtime = new ConversationRuntime({
+    conversationId: 'conversation-fallback',
+    connections: manager,
+    preparation,
+    presentation,
+    persona: persona(),
+    personaRevision: 3,
+    replyTimeoutMs: 5_000,
+    applicationFallbackText: '上一轮的回复没有收到，可以再说一次吗？',
+    idFactory: kind => `${kind}-${id++}`,
+  });
+
+  runtime.submitUserMessage('第一条');
+  runtime.submitUserMessage('第二条');
+  await waitUntil(() => first.calls.length === 1 && second.calls.length === 1);
+  second.complete(0, '第二条回复');
+  first.fail(0, new Error('provider unavailable'));
+  await waitUntil(() => presentation.started.length === 1);
+
+  const failed = runtime.getSnapshot().responses[0];
+  assert.equal(failed?.reply, 'sealed');
+  assert.equal(failed?.error, 'provider unavailable');
+  assert.equal(failed?.segments[0]?.source, 'application-fallback');
+  assert.equal(failed?.segments[0]?.text, '上一轮的回复没有收到，可以再说一次吗？');
+
+  presentation.complete(0);
+  await waitUntil(() => presentation.started.length === 2);
+  presentation.complete(1);
+  await runtime.waitForIdle();
+  assert.deepEqual(
+    runtime.getSnapshot().messages.filter(message => message.role === 'assistant').map(message => message.text),
+    ['上一轮的回复没有收到，可以再说一次吗？', '第二条回复'],
+  );
+  runtime.dispose();
+  manager.close();
+});
+
+class ControlledAgent implements CharAgentEndpoint {
   readonly calls: Array<{
-    task: ReplyTask;
-    resolve: (result: ReplyResult) => void;
+    task: CharReplyTask;
+    resolve: (result: CharReplyResult) => void;
     reject: (error: unknown) => void;
   }> = [];
 
-  execute(task: ReplyTask, signal: AbortSignal): Promise<ReplyResult> {
+  execute(task: CharReplyTask, signal: AbortSignal): Promise<CharReplyResult> {
     return new Promise((resolve, reject) => {
       signal.addEventListener('abort', () => reject(signal.reason), { once: true });
       this.calls.push({ task, resolve, reject });
@@ -107,8 +157,16 @@ class ControlledAgent implements ReplyAgentEndpoint {
       taskId: call.task.taskId,
       attemptId: call.task.attemptId,
       generation: call.task.generation,
+      baseContextRevision: call.task.context.baseContextRevision,
+      personaRevision: call.task.context.personaRevision,
       segments: [{ segmentId: `segment-${call.task.turnSequence}`, text }],
     });
+  }
+
+  fail(index: number, error: Error): void {
+    const call = this.calls[index];
+    if (!call) throw new Error(`Missing controlled call ${index}`);
+    call.reject(error);
   }
 }
 
@@ -147,13 +205,14 @@ function registration(agentId: string) {
   return {
     agentId,
     instanceId: `${agentId}-instance`,
-    protocolVersion: 'desktop-char.reply.v1',
-    capabilities: ['reply'] as const,
+    protocolVersion: 'desktop-char.char-reply.v1',
+    capabilities: ['char-reply'] as const,
     maxConcurrency: 1,
   };
 }
 
-function replyTask(sequence: number): ReplyTask {
+function replyTask(sequence: number): CharReplyTask {
+  const messageId = `message-${sequence}`;
   return {
     conversationId: 'conversation',
     turnId: `turn-${sequence}`,
@@ -161,9 +220,28 @@ function replyTask(sequence: number): ReplyTask {
     taskId: `task-${sequence}`,
     attemptId: `attempt-${sequence}`,
     generation: 0,
-    baseContextRevision: sequence + 1,
-    messages: [],
-    userMessage: `message-${sequence}`,
+    deadlineAtMs: Date.now() + 5_000,
+    context: {
+      schemaVersion: 'desktop-char.char-context.v1',
+      baseContextRevision: sequence + 1,
+      personaRevision: 3,
+      persona: persona(),
+      messages: [{
+        messageId,
+        sequence,
+        role: 'user',
+        text: `message-${sequence}`,
+        turnId: `turn-${sequence}`,
+      }],
+      focusMessageId: messageId,
+    },
+  };
+}
+
+function persona() {
+  return {
+    name: '测试角色',
+    instructions: ['使用简短自然的中文回复。'],
   };
 }
 

@@ -1,10 +1,10 @@
-export type ReplyCapability = 'reply';
+export type CharAgentCapability = 'char-reply';
 
 export interface AgentRegistration {
   agentId: string;
   instanceId: string;
   protocolVersion: string;
-  capabilities: readonly ReplyCapability[];
+  capabilities: readonly CharAgentCapability[];
   maxConcurrency: number;
   leaseExpiresAtMs?: number;
 }
@@ -17,16 +17,29 @@ export interface ConversationMessage {
   turnId: string;
 }
 
-export interface ReplyTask {
+export interface PersonaProjection {
+  name: string;
+  instructions: readonly string[];
+}
+
+export interface CharContextEnvelope {
+  schemaVersion: 'desktop-char.char-context.v1';
+  baseContextRevision: number;
+  personaRevision: number;
+  persona: PersonaProjection;
+  messages: readonly ConversationMessage[];
+  focusMessageId: string;
+}
+
+export interface CharReplyTask {
   conversationId: string;
   turnId: string;
   turnSequence: number;
   taskId: string;
   attemptId: string;
   generation: number;
-  baseContextRevision: number;
-  messages: readonly ConversationMessage[];
-  userMessage: string;
+  deadlineAtMs: number;
+  context: CharContextEnvelope;
 }
 
 export interface ReplySegment {
@@ -34,30 +47,32 @@ export interface ReplySegment {
   text: string;
 }
 
-export interface ReplyResult {
+export interface CharReplyResult {
   conversationId: string;
   turnId: string;
   taskId: string;
   attemptId: string;
   generation: number;
+  baseContextRevision: number;
+  personaRevision: number;
   segments: readonly ReplySegment[];
 }
 
-export interface ReplyAgentEndpoint {
-  execute(task: ReplyTask, signal: AbortSignal): Promise<ReplyResult>;
+export interface CharAgentEndpoint {
+  execute(task: CharReplyTask, signal: AbortSignal): Promise<CharReplyResult>;
 }
 
-export interface AgentExecution {
+export interface CharAgentExecution {
   agentId: string;
   instanceId: string;
-  result: ReplyResult;
+  result: CharReplyResult;
 }
 
 export interface AgentConnectionSnapshot {
   agentId: string;
   instanceId: string;
   protocolVersion: string;
-  capabilities: readonly ReplyCapability[];
+  capabilities: readonly CharAgentCapability[];
   maxConcurrency: number;
   active: number;
   healthy: boolean;
@@ -96,6 +111,7 @@ export interface PresentationSegment {
   segmentId: string;
   segmentRevision: number;
   text: string;
+  source: 'agent' | 'application-fallback';
   speech?: PreparedSpeech;
   performance?: PreparedPerformance;
 }
@@ -123,6 +139,7 @@ export interface ResponseSegmentSnapshot {
   segmentId: string;
   segmentRevision: number;
   text: string;
+  source: 'agent' | 'application-fallback';
   speech: PreparationState;
   performance: PerformancePreparationState;
 }
@@ -136,6 +153,8 @@ export interface ResponseSlotSnapshot {
   attemptId: string;
   generation: number;
   baseContextRevision: number;
+  personaRevision: number;
+  deadlineAtMs: number;
   reply: ReplyState;
   commit: CommitState;
   presentation: PresentationState;
@@ -163,9 +182,14 @@ export interface SubmittedTurn {
 export interface ConversationRuntimeOptions {
   conversationId: string;
   connections: {
-    dispatch(task: ReplyTask, signal: AbortSignal): Promise<AgentExecution>;
+    dispatch(task: CharReplyTask, signal: AbortSignal): Promise<CharAgentExecution>;
   };
   preparation: PreparationPort;
   presentation: PresentationPort;
+  persona: PersonaProjection;
+  personaRevision: number;
+  replyTimeoutMs: number;
+  applicationFallbackText: string;
+  now?: () => number;
   idFactory?: (kind: 'message' | 'turn' | 'task' | 'attempt' | 'response' | 'segment') => string;
 }

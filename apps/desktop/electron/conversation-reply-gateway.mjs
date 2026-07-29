@@ -28,7 +28,7 @@ export function createConversationReplyGateway(options) {
       providerAgentId: 'codex-app-server',
       providerInstanceId: 'managed-main',
       state: 'running',
-      input: task.userMessage,
+      input: focusMessageText(task),
       reply: null,
       startedAt: new Date().toISOString(),
       completedAt: null,
@@ -40,7 +40,7 @@ export function createConversationReplyGateway(options) {
       managedPhase = 'active';
       publish();
       if (!managedExecutor) {
-        managedExecutorTimeoutMs = config.reply.requestTimeoutMs;
+        managedExecutorTimeoutMs = config.requestTimeoutMs;
         managedExecutor = createManagedExecutor(managedExecutorTimeoutMs);
       }
       let result;
@@ -73,7 +73,7 @@ export function createConversationReplyGateway(options) {
 
   function configure(nextConfig) {
     if (closed) return;
-    const timeoutChanged = config.reply.requestTimeoutMs !== nextConfig.reply.requestTimeoutMs;
+    const timeoutChanged = config.requestTimeoutMs !== nextConfig.requestTimeoutMs;
     config = structuredClone(nextConfig);
     if (timeoutChanged && managedExecutor && managedActive === 0) {
       void closeManagedExecutor().then(publish);
@@ -86,11 +86,11 @@ export function createConversationReplyGateway(options) {
 
   function snapshot() {
     return {
-      maxAssistants: config.maxAssistants,
+      maxConcurrency: config.maxConcurrency,
       managed: {
         phase: managedPhase,
         active: managedActive,
-        requestTimeoutMs: managedExecutorTimeoutMs ?? config.reply.requestTimeoutMs,
+        requestTimeoutMs: managedExecutorTimeoutMs ?? config.requestTimeoutMs,
       },
       activities: activities.map(item => ({ ...item })),
     };
@@ -128,4 +128,11 @@ export function createConversationReplyGateway(options) {
   function publish() {
     onStateChanged();
   }
+}
+
+function focusMessageText(task) {
+  const messages = task?.context?.messages;
+  const focusMessageId = task?.context?.focusMessageId;
+  if (!Array.isArray(messages) || typeof focusMessageId !== 'string') return '';
+  return messages.find(message => message?.messageId === focusMessageId)?.text ?? '';
 }

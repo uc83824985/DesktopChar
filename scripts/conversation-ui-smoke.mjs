@@ -94,8 +94,8 @@ try {
     '第一条前台并行测试\n第二行',
     '第二条前台并行测试',
   ]) || conversation.assistants.length !== 2
-    || !conversation.tasks[0]?.includes('#1 assistant-1')
-    || !conversation.tasks[1]?.includes('#2 assistant-2')
+    || !conversation.tasks[0]?.includes('#1 char-worker-1')
+    || !conversation.tasks[1]?.includes('#2 char-worker-2')
     || conversation.tasks.some(task => !task.includes('play:completed'))) {
     throw new Error(`Conversation UI did not finish in order: ${JSON.stringify(conversation)}`);
   }
