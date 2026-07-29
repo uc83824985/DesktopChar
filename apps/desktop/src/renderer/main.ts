@@ -1834,8 +1834,18 @@ function initializeConversationTestRuntime(
   });
   routeCoordinator = new RouteCoordinator({
     router: {
-      async decide() {
-        throw new Error('Router Agent Provider 尚未配置；请显式选择 Char 或 Session。');
+      async decide(request, signal) {
+        if (!desktopShell) throw new Error('Desktop shell is unavailable');
+        const cancel = () =>
+          desktopShell.cancelRouteDecision(request.message.messageId, request.visibleContextRevision);
+        signal.addEventListener('abort', cancel, { once: true });
+        try {
+          if (signal.aborted) throw signal.reason;
+          return await desktopShell.requestRouteDecision(request);
+        }
+        finally {
+          signal.removeEventListener('abort', cancel);
+        }
       },
     },
     context: routingContext,
@@ -3636,6 +3646,16 @@ function initializeDesktopInteraction(initialState: Awaited<ReturnType<NonNullab
   const applyReadyState = (state: Awaited<ReturnType<NonNullable<typeof desktopShell>['ready']>>) => {
     applyPerformanceInferenceConfig(state.performanceInference);
     charMaxConcurrency = state.agentRoles.char.maxConcurrency;
+    routingContext?.configure({
+      maxTimelineEntries: state.agentRoles.router.maxTimelineEntries,
+      maxCandidates: state.agentRoles.router.maxCandidates,
+    });
+    routeCoordinator?.configure({
+      autoSubmitMinConfidence: state.agentRoles.router.autoSubmitMinConfidence,
+      autoSubmitMinMargin: state.agentRoles.router.autoSubmitMinMargin,
+      maxTimelineEntries: state.agentRoles.router.maxTimelineEntries,
+      maxCandidates: state.agentRoles.router.maxCandidates,
+    });
     reconcileConversationAgentSlots();
     dragGesture.setHoldDelayMs(state.interaction.dragHoldDelayMs);
     document.body.dataset.dragHoldDelayMs = state.interaction.dragHoldDelayMs.toString();

@@ -10,7 +10,8 @@ import {
   parseLoopbackDevUrl,
 } from './window-policy.mjs';
 import { createAgentHttpServer } from './agent-http-server.mjs';
-import { createCodexCharReplyExecutor } from './codex-conversation-agent.mjs';
+import { createCodexAppServerClient } from './codex-app-server-client.mjs';
+import { createCodexCharReplyExecutor, resolveCodexInvocation } from './codex-conversation-agent.mjs';
 import { createConversationReplyGateway } from './conversation-reply-gateway.mjs';
 import { createNativeCursorRefresh } from './cursor-refresh.mjs';
 import { createNativeWindowPosition } from './native-window-position.mjs';
@@ -18,6 +19,7 @@ import { createNativeWindowTopmost } from './native-window-topmost.mjs';
 import { createMcpServicesController } from './mcp-services-controller.mjs';
 import { normalizeDesktopConfig, resolveDesktopConfigPath } from './mcp-services-config.mjs';
 import { createPerformanceModelController } from './performance-model-controller.mjs';
+import { createRouterAgentGateway } from './router-agent.mjs';
 import { createShutdownCoordinator } from './shutdown-coordinator.mjs';
 import { createTaskManagerController } from './task-manager-controller.mjs';
 import { createTopmostEventMonitor } from './topmost-event-monitor.mjs';
@@ -58,6 +60,10 @@ const channels = {
   conversationCancel: 'conversation:cancel',
   conversationAgentsGet: 'conversation:agents:get-state',
   conversationAgentsState: 'conversation:agents:state',
+  routerDecide: 'router-agent:decide',
+  routerCancel: 'router-agent:cancel',
+  routerGet: 'router-agent:get-state',
+  routerState: 'router-agent:state',
   taskManagerGet: 'task-manager:get-state',
   taskManagerSubmit: 'task-manager:submit-command',
   taskManagerState: 'task-manager:state',
@@ -117,12 +123,19 @@ let agentServerOperation = Promise.resolve();
 let desktopStarted = false;
 let agentRuntimeState = { ready: false, snapshot: null };
 const conversationReplyControllers = new Map();
+const routerDecisionControllers = new Map();
+const sharedCodexAppServerClient = createCodexAppServerClient({
+  cwd: process.cwd(),
+  invocation: resolveCodexInvocation(process.env),
+});
 const conversationReplyGateway = createConversationReplyGateway({
   config: resolvedCharRole(desktopConfig),
   createManagedExecutor(timeoutMs) {
     return createCodexCharReplyExecutor({
       cwd: process.cwd(),
       timeoutMs,
+      client: sharedCodexAppServerClient,
+      ownsClient: false,
       schemaPath: path.resolve(
         app.isPackaged ? process.resourcesPath : process.cwd(),
         'packages/conversation-runtime/src/codex-reply.schema.json',
@@ -131,6 +144,15 @@ const conversationReplyGateway = createConversationReplyGateway({
   },
   onStateChanged() {
     publishConversationReplyState();
+  },
+});
+const routerAgentGateway = createRouterAgentGateway({
+  config: resolvedRouterRole(desktopConfig),
+  cwd: process.cwd(),
+  env: process.env,
+  codexClient: sharedCodexAppServerClient,
+  onStateChanged() {
+    publishRouterAgentState();
   },
 });
 let pointerPresentation = { passthrough: true, cursor: 'default' };
@@ -259,13 +281,19 @@ const shutdown = createShutdownCoordinator({
       controller.abort(new Error('DesktopChar is shutting down'));
     }
     conversationReplyControllers.clear();
+    for (const controller of routerDecisionControllers.values()) {
+      controller.abort(new Error('DesktopChar is shutting down'));
+    }
+    routerDecisionControllers.clear();
     await Promise.allSettled([
       agentServer?.close().catch(() => {}),
       conversationReplyGateway.close().catch(() => {}),
+      routerAgentGateway.close().catch(() => {}),
       mcpServices.close().catch(() => {}),
       taskManager.close().catch(() => {}),
       performanceModel.close().catch(() => {}),
     ]);
+    await sharedCodexAppServerClient.close().catch(() => {});
     safeLog('[desktop-char] shutdown complete', { reason });
   },
   finish() {
@@ -734,6 +762,37 @@ function registerIpc() {
     requireAvatarSender(event);
     return conversationReplyGateway.snapshot();
   });
+  ipcMain.handle(channels.routerDecide, async (event, request) => {
+    requireAvatarSender(event);
+    const key = routerDecisionKey(request);
+    if (routerDecisionControllers.has(key)) {
+      throw new Error(`Router Agent decision is already active: ${key}`);
+    }
+    const controller = new AbortController();
+    routerDecisionControllers.set(key, controller);
+    try {
+      return await routerAgentGateway.decide(request, controller.signal);
+    }
+    finally {
+      if (routerDecisionControllers.get(key) === controller) {
+        routerDecisionControllers.delete(key);
+      }
+    }
+  });
+  ipcMain.on(channels.routerCancel, (event, messageId, visibleContextRevision) => {
+    requireAvatarSender(event);
+    const key = routerDecisionKey({
+      message: { messageId },
+      visibleContextRevision,
+    });
+    routerDecisionControllers.get(key)?.abort(
+      new DOMException('Router Agent decision cancelled', 'AbortError'),
+    );
+  });
+  ipcMain.handle(channels.routerGet, event => {
+    requireAvatarSender(event);
+    return routerAgentGateway.snapshot();
+  });
   ipcMain.handle(channels.taskManagerGet, event => {
     requireAvatarSender(event);
     return taskManager.snapshot();
@@ -889,12 +948,14 @@ function windowState() {
     tts: mcpServices.currentTtsConfig(),
     mcpServices: mcpServices.snapshot(),
     taskManager: taskManager.snapshot(),
+    routerAgent: routerAgentGateway.snapshot(),
   };
 }
 
 function applyDesktopConfig(config, metadata = {}) {
   desktopConfig = config;
   conversationReplyGateway.configure(resolvedCharRole(config));
+  routerAgentGateway.configure(resolvedRouterRole(config));
   taskManager.configure(config.taskManager);
   void performanceModel.replace(config.performanceInference).catch(error => {
     safeError('[performance-model] config apply failed', error);
@@ -943,6 +1004,23 @@ function publishDesktopConfigState() {
 function publishConversationReplyState() {
   if (!avatarWindow || avatarWindow.isDestroyed()) return;
   avatarWindow.webContents.send(channels.conversationAgentsState, conversationReplyGateway.snapshot());
+}
+
+function publishRouterAgentState() {
+  if (!avatarWindow || avatarWindow.isDestroyed()) return;
+  avatarWindow.webContents.send(channels.routerState, routerAgentGateway.snapshot());
+}
+
+function routerDecisionKey(request) {
+  const messageId = request?.message?.messageId;
+  const visibleContextRevision = request?.visibleContextRevision;
+  if (typeof messageId !== 'string' || !messageId.trim()) {
+    throw new TypeError('Router Agent messageId must be a non-empty string');
+  }
+  if (!Number.isInteger(visibleContextRevision) || visibleContextRevision < 0) {
+    throw new TypeError('Router Agent visibleContextRevision must be a non-negative integer');
+  }
+  return `${messageId.trim()}:${visibleContextRevision}`;
 }
 
 async function rebindAgentServer(reason) {

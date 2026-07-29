@@ -16,13 +16,17 @@ interface CandidateRecord extends TaskSessionRouteCandidate {
 }
 
 export class VisibleRoutingContext implements RoutingContextPort {
-  private readonly options: VisibleRoutingContextOptions;
+  private options: VisibleRoutingContextOptions;
   private readonly exposures = new Map<string, ExposureRecord>();
   private readonly candidates = new Map<string, CandidateRecord>();
   private visibleContextRevision = 0;
   private visibleOrder = 0;
 
   constructor(options: VisibleRoutingContextOptions) {
+    this.options = validateOptions(options);
+  }
+
+  configure(options: VisibleRoutingContextOptions): void {
     this.options = validateOptions(options);
   }
 

@@ -238,6 +238,29 @@ test('Router receives a bounded immutable exposure and candidate snapshot', asyn
   assert.equal(fixture.router.requests[0]?.candidates[0]?.title, 'Session session-a');
 });
 
+test('updated thresholds apply only to later automatic requests', async () => {
+  const result = routerResult(8, {
+    decision: 'route',
+    target: { kind: 'task-session', sessionId: 'session-a' },
+    confidence: 0.8,
+  }, [
+    { sessionId: 'session-a', score: 0.8, reason: '较相关' },
+    { sessionId: 'session-b', score: 0.7, reason: '可能相关' },
+  ]);
+  const fixture = coordinator({ routerResults: [result, result] });
+  const first = await fixture.runtime.acceptUserMessage('第一次');
+  assert.equal(first.record.decision.decision, 'confirm');
+  fixture.runtime.cancelPendingConfirmation(first.message.messageId);
+  fixture.runtime.configure({
+    ...config,
+    autoSubmitMinConfidence: 0.75,
+    autoSubmitMinMargin: 0.05,
+  });
+  const second = await fixture.runtime.acceptUserMessage('第二次');
+  assert.equal(second.record.decision.decision, 'route');
+  assert.deepEqual(fixture.sessionMessages.map(item => item.sessionId), ['session-a']);
+});
+
 function coordinator(options: {
   initialSelection?: TargetSelection;
   context?: RoutingContextSnapshot;

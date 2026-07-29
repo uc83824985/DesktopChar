@@ -16,6 +16,10 @@ const channels = {
   conversationCancel: 'conversation:cancel',
   conversationAgentsGet: 'conversation:agents:get-state',
   conversationAgentsState: 'conversation:agents:state',
+  routerDecide: 'router-agent:decide',
+  routerCancel: 'router-agent:cancel',
+  routerGet: 'router-agent:get-state',
+  routerState: 'router-agent:state',
   taskManagerGet: 'task-manager:get-state',
   taskManagerSubmit: 'task-manager:submit-command',
   taskManagerState: 'task-manager:state',
@@ -45,6 +49,10 @@ contextBridge.exposeInMainWorld('desktopChar', {
   cancelConversationReply: (agentId, taskId, attemptId) =>
     ipcRenderer.send(channels.conversationCancel, agentId, taskId, attemptId),
   getConversationAgentState: () => ipcRenderer.invoke(channels.conversationAgentsGet),
+  requestRouteDecision: request => ipcRenderer.invoke(channels.routerDecide, request),
+  cancelRouteDecision: (messageId, visibleContextRevision) =>
+    ipcRenderer.send(channels.routerCancel, messageId, visibleContextRevision),
+  getRouterAgentState: () => ipcRenderer.invoke(channels.routerGet),
   getTaskManagerState: () => ipcRenderer.invoke(channels.taskManagerGet),
   submitTaskManagerCommand: command => ipcRenderer.invoke(channels.taskManagerSubmit, command),
   listTtsMcpTools: () => ipcRenderer.invoke(channels.mcpListTools),
@@ -69,6 +77,11 @@ contextBridge.exposeInMainWorld('desktopChar', {
     const listener = (_event, state) => callback(state);
     ipcRenderer.on(channels.conversationAgentsState, listener);
     return () => ipcRenderer.removeListener(channels.conversationAgentsState, listener);
+  },
+  onRouterAgentState(callback) {
+    const listener = (_event, state) => callback(state);
+    ipcRenderer.on(channels.routerState, listener);
+    return () => ipcRenderer.removeListener(channels.routerState, listener);
   },
   onTaskManagerState(callback) {
     const listener = (_event, state) => callback(state);

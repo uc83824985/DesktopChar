@@ -46,6 +46,7 @@ export interface DesktopWindowState {
   tts: DesktopTtsConfig;
   mcpServices: McpServicesState;
   taskManager: TaskManagerState;
+  routerAgent: RouterAgentState;
 }
 
 export interface DesktopCharacterConfig {
@@ -123,6 +124,11 @@ export interface DesktopCharApi {
   ): Promise<import('../../../../packages/conversation-runtime/src/index.ts').CharReplyResult>;
   cancelConversationReply(agentId: string, taskId: string, attemptId: string): void;
   getConversationAgentState(): Promise<ConversationAgentState>;
+  requestRouteDecision(
+    request: import('../../../../packages/interaction-routing/src/index.ts').RouterAgentRequest,
+  ): Promise<import('../../../../packages/interaction-routing/src/index.ts').RouterAgentResult>;
+  cancelRouteDecision(messageId: string, visibleContextRevision: number): void;
+  getRouterAgentState(): Promise<RouterAgentState>;
   getTaskManagerState(): Promise<TaskManagerState>;
   submitTaskManagerCommand(command: TaskManagerCommand): Promise<TaskManagerCommandState>;
   listTtsMcpTools(): Promise<McpToolDescriptor[]>;
@@ -136,6 +142,7 @@ export interface DesktopCharApi {
   onMcpServicesState(callback: (state: McpServicesState) => void): () => void;
   onDesktopConfigState(callback: (state: DesktopWindowState) => void): () => void;
   onConversationAgentState(callback: (state: ConversationAgentState) => void): () => void;
+  onRouterAgentState(callback: (state: RouterAgentState) => void): () => void;
   onTaskManagerState(callback: (state: TaskManagerState) => void): () => void;
   onAgentCommand(callback: (command: AgentCommand) => void): () => void;
   onBoundsChanged(callback: (bounds: DesktopRectangle) => void): () => void;
@@ -143,6 +150,18 @@ export interface DesktopCharApi {
 }
 
 export type DesktopWindowCommand = 'restore-default-position' | 'hide-avatar' | 'show-avatar' | 'quit';
+
+export interface RouterAgentState {
+  phase: 'standby' | 'active' | 'ready' | 'closed';
+  active: number;
+  provider: string;
+  adapter: 'codex-app-server' | 'openai-compatible';
+  requestTimeoutMs: number;
+  promptProfile: string;
+  profileRevision: number;
+  lastDecisionAt: string | null;
+  lastError: string | null;
+}
 
 export interface ConversationAgentActivityState {
   activityId: string;

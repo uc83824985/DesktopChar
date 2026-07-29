@@ -65,6 +65,17 @@ test('stale exposure revisions are ignored without changing the frozen revision'
   assert.equal(context.freeze().exposures[0]?.visibleText, '正在');
 });
 
+test('visible context limits can be reconfigured for later snapshots', () => {
+  const context = new VisibleRoutingContext({ maxTimelineEntries: 3, maxCandidates: 3 });
+  context.replaceCandidates([candidate('one'), candidate('two')]);
+  context.recordExposure(exposure('first', 'shown', '第一条', 1));
+  context.recordExposure(exposure('second', 'shown', '第二条', 1));
+  assert.equal(context.freeze().exposures.length, 2);
+  context.configure({ maxTimelineEntries: 1, maxCandidates: 1 });
+  assert.equal(context.freeze().exposures.length, 1);
+  assert.equal(context.freeze().candidates.length, 1);
+});
+
 function exposure(
   messageId: string,
   phase: 'showing' | 'shown',

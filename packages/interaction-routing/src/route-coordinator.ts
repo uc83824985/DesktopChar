@@ -22,7 +22,7 @@ export class RouteCoordinator {
   private readonly messages: InteractionMessage[] = [];
   private readonly routes: RouteRecord[] = [];
   private readonly confirmations: RouteConfirmationRecord[] = [];
-  private readonly config: RouteCoordinatorConfig;
+  private config: RouteCoordinatorConfig;
   private selection: TargetSelection;
   private pendingConfirmation: PendingRouteConfirmation | undefined;
   private sequence = 0;
@@ -35,6 +35,10 @@ export class RouteCoordinator {
 
   setSelection(selection: TargetSelection): void {
     this.selection = validateSelection(selection);
+  }
+
+  configure(config: RouteCoordinatorConfig): void {
+    this.config = validateConfig(config);
   }
 
   getSelection(): TargetSelection {
