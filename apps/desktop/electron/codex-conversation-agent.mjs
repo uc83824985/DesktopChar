@@ -14,6 +14,7 @@ export function createCodexCharReplyExecutor(options = {}) {
     invocation,
     ...(options.spawnProcess ? { spawnProcess: options.spawnProcess } : {}),
   });
+  const ownsClient = options.ownsClient ?? true;
 
   return {
     async execute(agentId, task, signal) {
@@ -54,7 +55,7 @@ export function createCodexCharReplyExecutor(options = {}) {
       }
     },
     close() {
-      return client.close();
+      return ownsClient ? client.close() : Promise.resolve();
     },
   };
 }

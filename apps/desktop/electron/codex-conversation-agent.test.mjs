@@ -58,6 +58,27 @@ test('Codex conversation executor rejects untrusted task shapes before spawning'
   assert.equal(called, false);
 });
 
+test('Codex conversation executor can share a client without closing its owner', async () => {
+  let closed = false;
+  const executor = createCodexCharReplyExecutor({
+    cwd: process.cwd(),
+    schemaPath: 'schema.json',
+    outputSchema: {},
+    ownsClient: false,
+    client: {
+      async execute() {
+        return '{"text":"共享回复"}';
+      },
+      async close() {
+        closed = true;
+      },
+    },
+  });
+  await executor.execute('codex-a', task(), new AbortController().signal);
+  await executor.close();
+  assert.equal(closed, false);
+});
+
 function task() {
   return {
     conversationId: 'conversation',
