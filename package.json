@@ -17,6 +17,9 @@
     "test:desktop": "node --test apps/desktop/electron/*.test.mjs",
     "test:multi-agent": "node --experimental-strip-types --test packages/conversation-runtime/test/*.test.ts",
     "test:char-mcp": "node --test apps/desktop/electron/char-agent-mcp-test-service.test.mjs",
+    "test:task-manager": "node --test task-manager/*.test.mjs",
+    "test:task-manager-monitor": "node scripts/task-manager-session-monitor-smoke.mjs",
+    "test:task-manager-service": "node scripts/task-manager-service-smoke.mjs",
     "test:codex-agent": "node --experimental-strip-types scripts/codex-multi-agent-smoke.ts",
     "test:codex-app-server": "node scripts/codex-app-server-smoke.mjs",
     "test:local-mcp": "node --test local-tts-mcp/*.test.mjs",
@@ -30,7 +33,7 @@
     "diagnose:drag": "npm run build && node scripts/drag-compositor-diagnostic.mjs",
     "diagnose:topmost": "node scripts/topmost-recovery-diagnostic.mjs",
     "motion:audit": "npm run build && node --experimental-strip-types scripts/motion-audit.ts",
-    "test": "node --experimental-strip-types --test packages/*/test/*.test.ts && npm run test:local-mcp && npm run test:desktop",
+    "test": "node --experimental-strip-types --test packages/*/test/*.test.ts && npm run test:local-mcp && npm run test:desktop && npm run test:task-manager",
     "typecheck": "tsc --noEmit",
     "check": "npm run typecheck && npm test && npm run test:native && npm run build"
   },

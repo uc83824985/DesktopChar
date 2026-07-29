@@ -39,6 +39,11 @@ Live2D Motion 可通过受全局帧预算约束的真实 WebGL 采集器导出 C
 负责角色化表达，两者允许绑定独立 Provider/Profile。边界、用户可见时间线和二次确认规则见
 [Task Manager 与会话路由设计](docs/task-manager-routing.md)。
 
+Task Manager 首个内存版本位于 `task-manager/`。设置 `SESSION_MONITOR_MARKER` 后可运行
+`node task-manager/server.mjs`；服务只监听 loopback，并在本机状态目录写入临时 marker/token。
+`npm run test:task-manager-monitor` 与 `npm run test:task-manager-service` 分别执行真实 Monitor
+只读发现和完整常驻服务只读验收，不会向任何 CLI 提交输入。
+
 表情和已有 Live2D 动作的语义选择暂由本地表现推理端口完成，Qwen3.5-2B non-thinking 只是首个验证 Profile，不进入外部 Agent 关键路径；同协议模型只需替换 Profile，不同协议通过新 Adapter 接入。首个模型使用 OpenAI-compatible HTTP，不新增 MCP；`external` 只连接现有 endpoint，`managed` 由 Electron Supervisor 启停入口进程，两者复用同一 Adapter。边界与生命周期见 [本地表现模型接入设计](docs/performance-model-integration.md)，实现新 Provider 时遵循 [表现模型 Provider 接入指南](docs/performance-model-provider-integration.md)，官方模型配置阅读结论见 [Qwen3.5-2B 阅读记录](docs/references/qwen3.5-2b.md)。
 
 段内表情当前采用自然分句并发分析和文本位置锚点，不依赖 TTS 字词时间戳；Qwen3-ForcedAligner

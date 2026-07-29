@@ -177,8 +177,9 @@ DesktopChar 发布旧 generation 的独立完成通知。
 
 ## Task Manager 服务边界
 
-Task Manager 适合作为随系统或用户会话启动的常驻脚本/服务。它读取 Session Monitor v3
-marker 和 token，通过 loopback HTTP 使用：
+Task Manager 适合作为随系统或用户会话启动的常驻脚本/服务。它读取 Session Monitor
+marker 和 token，并以 marker 中声明的 `capabilities.sessionInput` 为准；当前本机实现是
+v4，客户端同时接受具有该能力的 v3+ marker。通过 loopback HTTP 使用：
 
 - `GET /api/sessions`：读取会话摘要；
 - `GET /api/sessions/{sessionId}`：按需读取当前状态与有界可见文本；
@@ -250,6 +251,25 @@ hash/revision、协议上限内的 `visibleTextTail` 和可选的已验证结果
 ack；Task Manager 自身重启后不承诺恢复这些状态，也绝不自动重放旧命令。重启时重新发现
 session，并把重启前仍在观察的 submission 视为不可恢复，不补发其完成事件。跨重启幂等、
 事件保留、恢复检查点和持久化存储格式统一标记为后续待设计，不阻塞首个端到端流程。
+
+当前 `task-manager/` 已落地上述内存版本：
+
+- `session-monitor-client.mjs` 仅从显式 marker 路径读取 loopback 地址和 token 文件，验证
+  `submit` capability；token 不进入快照、URL或日志；
+- `task-manager-runtime.mjs` 立即提交精确命令；同 session 的新成功提交以递增 generation
+  supersede 旧观察，乱序 HTTP 确认也不能把旧 generation 重新设为当前；
+- 完成必须先观察提交后的 hash/时间变化，再连续两轮得到相同 `waiting_input` 快照；
+  `active` 本身和 `idle_unknown` 均不构成完成；
+- 中间采样不跨轮询拼接，事件只保存有界尾部；事件有单调 cursor 和幂等 ack，运行时状态、
+  命令与事件不跨进程重启恢复；
+- 声明结果文档在提交前校验允许根目录和路径逃逸，在完成时再次校验真实文件；Task Manager
+  只回传路径与 `openOnCompletion` 意图，不创建也不打开文件；
+- `http-service.mjs` 仅暴露 `/health`、`/sessions`、`/events`、`/commands` 和
+  `/events/{id}/ack`，除 health 外均需 bearer token，且拒绝非 loopback 绑定。
+
+真实 Session Monitor v4 的 marker/token、会话记录和独立 HTTP 服务启动已经完成只读验收；
+尚未在受控测试 session 中执行真实 `/input submit`，因此 active 状态下各目标 CLI 的具体
+补充/排队语义仍保留为后续实机验收项。
 
 DesktopChar 的首要需求是知道事项是否完成，不要求 Task Manager 重建任意长的完整对话。
 完成事件默认只携带有限信息：
@@ -569,8 +589,8 @@ Char Agent 的建议只是用户可见内容，不自动转化为 TaskCommand。
    MCP 契约测试和现有 managed Codex 实现。
 2. （已完成）增加 Router 领域端口和确定性快速路径，只实现
    `character/task-session` 两类目标；Provider 与前台接线留在后续步骤。
-3. 先实现 Task Manager 的 marker/token 发现、Session Monitor 轮询、内存有界事实事件日志、
-   cursor/ack、按 session 的 submission generation 和精确命令接口。
+3. （已完成）实现 Task Manager 的 marker/token 发现、Session Monitor 轮询、内存有界事实
+   事件日志、cursor/ack、按 session 的 submission generation 和精确命令接口。
 4. DesktopChar 接收并保存有界事实事件，完成无 Agent 的确定性通知与播放闭环。
 5. 增加 `visibleTimeline`、候选 LRU、冻结 revision、显式 session 选择和二次确认。
 6. 实现 Char Agent 的角色化任务通知，并保持有界事实事件可审计、可重新处理。

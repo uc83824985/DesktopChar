@@ -209,6 +209,16 @@ Provider/Profile 会在 Router 实现时加入；密钥只能通过环境变量�
 传递，不能在应用 JSON 中硬编码 DeepSeek 或其他 Provider 凭据。目标示例和角色边界见
 [Task Manager 与会话路由设计](task-manager-routing.md)。
 
+独立 Task Manager 使用环境变量启动，不把 Session Monitor token 写入应用 JSON：
+
+- `SESSION_MONITOR_MARKER`：必填，Session Monitor v3+ marker 的绝对路径；
+- `DESKTOP_CHAR_TASK_MANAGER_STATE_DIR`：可选，Task Manager 自身临时 marker/token 目录；
+- `DESKTOP_CHAR_TASK_MANAGER_PORT`：可选 loopback 端口，`0` 表示动态端口；
+- `DESKTOP_CHAR_TASK_MANAGER_ARTIFACT_ROOTS`：可选，使用系统路径分隔符连接的结果文档允许根。
+
+Task Manager 领域状态仍是 memory-only；状态目录只保存当前进程的发现 marker 和随机 token，
+服务停止时删除，不是任务持久化。
+
 `performanceInference.lifecycle` 接受 `external`、`managed` 字符串简写，或带启动和
 健康检查策略的对象。`external` 的动态开关只改变 Adapter 是否向现有 endpoint 发请求；
 `managed` 的动态开关由 Electron Supervisor 启停 owned 入口进程并等待 `healthUrl`
