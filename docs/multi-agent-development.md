@@ -133,8 +133,9 @@ DesktopChar main
 Abort 活跃 Turn，再统一关闭 App Server。Windows 下可通过
 `agentProviders.<name>.launcherScript` 指向 WorkAssistant 的
 `start_openai_codex.bat`：适配器读取该启动入口同目录的 UTF-8 `config.json`，
-沿用其中的 `command/args` 启动 App Server，不直接解析原生 `codex.exe`，且不请求隐藏
-子进程。
+沿用其中的 `command/args` 启动 App Server，不直接解析原生 `codex.exe`。该内部
+managed 进程隐藏前台窗口，但 stdin/stdout/stderr 始终保持管道连接；用户拥有的
+External 会话不经过此启动链，窗口仍可正常交互。
 
 `agentRoles.char.maxConcurrency` 是整数并发上限，不是 checkbox。旧
 `conversation.maxAssistants` 不作为兼容别名；schema、示例配置、快照、UI 和测试均已同步

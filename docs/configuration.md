@@ -221,7 +221,8 @@ Windows 通常对应 `%APPDATA%/DesktopChar/config.json`。程序只通过 Elect
 `codex-app-server` 的 `launcherScript` 为可选绝对路径。Windows 配置
 WorkAssistant 的 `start_openai_codex.bat` 后，DesktopChar 会把该入口同目录
 `config.json` 中的 `command/args` 当作启动 Profile，通过管道运行 App Server；不会
-解析原生 `codex.exe`，也不会请求隐藏子进程。该入口必须保持现有
+解析原生 `codex.exe`。内部 managed App Server 以隐藏窗口方式运行，但继续保留
+stdin/stdout/stderr 管道；External 会话由外部窗口拥有，不受该隐藏策略影响。该入口必须保持现有
 `start_<provider>/<script>.bat + config.json + ../_inner/lib_cli_launcher.ps1`
 目录契约。省略时继续使用 PATH 或全局 npm 安装的 Codex 入口。Char 与 Router 共用
 App Server 时，以 Char 绑定 Provider 的 `launcherScript` 为共享进程入口。

@@ -316,15 +316,19 @@ export function createCodexAppServerClient(options = {}) {
 }
 
 export function spawnAppServerProcess(command, args, options) {
-  return spawn(command, args, {
+  return spawn(command, args, createAppServerSpawnOptions(options));
+}
+
+export function createAppServerSpawnOptions(options) {
+  return {
     cwd: options.cwd,
-    windowsHide: false,
+    windowsHide: true,
     stdio: ['pipe', 'pipe', 'pipe'],
     env: {
       ...process.env,
       ...(process.versions.electron ? { ELECTRON_RUN_AS_NODE: '1' } : {}),
     },
-  });
+  };
 }
 
 function withTimeout(promise, timeoutMs, message) {

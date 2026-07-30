@@ -2,7 +2,17 @@ import assert from 'node:assert/strict';
 import { EventEmitter } from 'node:events';
 import { PassThrough, Writable } from 'node:stream';
 import test from 'node:test';
-import { createCodexAppServerClient } from './codex-app-server-client.mjs';
+import {
+  createAppServerSpawnOptions,
+  createCodexAppServerClient,
+} from './codex-app-server-client.mjs';
+
+test('managed app-server stays hidden while retaining piped stdio', () => {
+  const options = createAppServerSpawnOptions({ cwd: 'C:\\workspace' });
+  assert.equal(options.cwd, 'C:\\workspace');
+  assert.equal(options.windowsHide, true);
+  assert.deepEqual(options.stdio, ['pipe', 'pipe', 'pipe']);
+});
 
 test('one app-server process serves concurrent logical reply threads', async () => {
   const messages = [];
