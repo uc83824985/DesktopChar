@@ -25,6 +25,7 @@
     "test:routing-foreground": "npm run build && node scripts/routing-foreground-smoke.mjs",
     "test:codex-agent": "node --experimental-strip-types scripts/codex-multi-agent-smoke.ts",
     "test:codex-app-server": "node scripts/codex-app-server-smoke.mjs",
+    "test:task-notification-codex": "node --experimental-strip-types scripts/task-notification-codex-smoke.mjs",
     "test:local-mcp": "node --test local-tts-mcp/*.test.mjs",
     "test:native": "node scripts/run-koffi-electron-test.mjs",
     "test:desktop-smoke": "npm run build && node scripts/desktop-smoke.mjs",

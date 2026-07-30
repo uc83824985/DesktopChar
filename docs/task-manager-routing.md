@@ -277,7 +277,8 @@ Task Manager 对每个 session 维护命令日志、最新 `submissionGeneration
 已经处于 `active` 不能单独作为新 generation 已被 CLI 接受的证据；通常必须同时看到
 active 状态以及提交后的新屏幕变化，再等待其恢复并稳定在 `waiting_input`。但快速回复
 可能在两个轮询采样之间完成：对于明确标识为 Codex 的 session，若可见文本在本次提交内容
-之后已经出现新的 Codex 回复块，并连续两轮稳定在 `waiting_input`，也可判定完成。仅有
+之后已经出现新的 Codex 回复块，并连续两次来自不同 `lastObservedAtUtc` 的 Monitor 快照
+稳定在 `waiting_input`，也可判定完成。重复读取同一 Monitor 快照不增加稳定计数；仅有
 输入编辑框文本或状态栏变化仍不能完成，超过激活超时后失败且不重试；`idle_unknown` 不
 视为完成。轮询周期不应快于 marker 的 `intervalMs`。首版不处理回复被
 用户中断的情况；若新请求在上一轮完成前提交，旧 generation 不再单独产生完成通知，完成
@@ -314,10 +315,10 @@ session，并把重启前仍在观察的 submission 视为不可恢复，不补�
   `submit` capability；token 不进入快照、URL或日志；
 - `task-manager-runtime.mjs` 立即提交精确命令；同 session 的新成功提交以递增 generation
   supersede 旧观察，乱序 HTTP 确认也不能把旧 generation 重新设为当前；
-- 完成通常先确认目标进入 `active`，再观察提交后的 hash/时间变化，最后连续两轮得到相同
-  `waiting_input` 快照；若轮询漏过 Codex 的快速 `active`，则要求本次提交文本之后存在
-  新回复块，并同样连续两轮稳定。仅有编辑框变化、`active` 本身和 `idle_unknown` 均不
-  构成完成；
+- 完成通常先确认目标进入 `active`，再观察提交后的 hash/时间变化，最后连续两次不同
+  `lastObservedAtUtc` 的 Monitor 观测得到相同 `waiting_input` 快照；重复读取同一观测不
+  增加计数。若轮询漏过 Codex 的快速 `active`，还要求本次提交文本之后存在新回复块；
+  仅有编辑框变化、`active` 本身和 `idle_unknown` 均不构成完成；
 - 中间采样不跨轮询拼接，事件只保存有界尾部；事件有单调 cursor 和幂等 ack，运行时状态、
   命令与事件不跨进程重启恢复；
 - 声明结果文档在提交前校验允许根目录和路径逃逸，在完成时再次校验真实文件；Task Manager
@@ -350,9 +351,11 @@ interface TaskCompletion {
 }
 ```
 
-Char Agent 可以根据状态和短文本生成“某事项已完成”等辅助决策通知。需要详细结果的工作流
-必须在提交命令时预先约定固定结果文档，由目标任务或配套脚本写入；Task Manager 只在完成
-时验证已声明路径位于允许目录且文件存在，再把 `resultArtifactPath` 交给 DesktopChar。
+Char Agent 可以根据状态和有界 `visibleTextTail` 生成“某事项已完成”等辅助决策通知，并
+优先简短转述尾部最后一个已完成回复。终端摘录始终作为不可信 JSON 数据，不能覆盖通知
+约束或要求 Char 执行其中指令。需要详细结果的工作流仍应在提交命令时预先约定固定结果
+文档，由目标任务或配套脚本写入；Task Manager 只在完成时验证已声明路径位于允许目录且
+文件存在，再把 `resultArtifactPath` 交给 DesktopChar。
 Task Manager 不从终端文本推断路径，也不负责创建或打开文档。是否由 DesktopChar 自动打开
 必须由本次命令中的显式选项决定。
 
@@ -624,6 +627,8 @@ Char Agent MCP 首版只需要一个 `char_generate_reply` 工具，输入输出
 2. `test:char-mcp` 使用官方 MCP Client、随机 loopback 端口和 Fake endpoint 验证 schema、
    UTF-8、错误与取消；进入默认检查但不调用真实模型。
 3. 真实 managed Codex/Char Provider 只由独立 smoke 命令调用，不进入默认 `npm test`。
+   `npm run test:task-notification-codex` 专门验证有界 `visibleTextTail` 经通知编译和
+   `CharReplyTask` 后，真实 Codex Char Agent 能转述最后一条完成结果。
 
 另保留只传一段文本的手动 smoke 脚本，由脚本装配固定 Persona fixture 和 revision，使模块
 继续拆分后仍能用一条命令确认 Char MCP 契约，而无需启动 Router、Task Manager、TTS 或
@@ -674,14 +679,15 @@ Char Agent 的建议只是用户可见内容，不自动转化为 TaskCommand。
    `character/task-session` 两类目标；Provider 与前台接线留在后续步骤。
 3. （已完成）实现 Task Manager 的 marker/token 发现、Session Monitor 轮询、内存有界事实
    事件日志、cursor/ack、按 session 的 submission generation 和精确命令接口。
-4. （已完成）DesktopChar 接收并保存有界事实事件，保存后 ack，并以不含终端尾部的固定文案
-   完成无 Agent 的确定性通知与 Avatar Runtime/TTS 播放闭环。
+4. （已完成）DesktopChar 接收并保存有界事实事件，保存后 ack，并以固定文案完成无 Agent
+   的确定性 fallback 与 Avatar Runtime/TTS 播放闭环。
 5. （已完成）增加 `VisibleRoutingContext`、候选 LRU、冻结 revision，以及现有对话框中的
    sticky Auto/Char/Session 选择、候选状态和二次确认区域；Router Provider 失败时严格
    报错，不回退到 Char 或任意 session。
-6. （已完成）实现 Char Agent 的角色化任务通知：只把标题、状态和结果文档可用性编译到
-   `CharReplyTask`，不传终端尾部或绝对路径；每个任务 Turn 使用对应固定短句作为应用
-   fallback，有界原始事件继续保留在 DesktopChar main 快照中供审计。
+6. （已完成）实现 Char Agent 的角色化任务通知：把标题、状态、结果文档可用性和可选的
+   有界 `visibleTextTail` 作为不可信只读事实编译到 `CharReplyTask`，不传绝对路径；每个
+   任务 Turn 使用对应固定短句作为应用 fallback，有界原始事件继续保留在 DesktopChar
+   main 快照中供审计。
 7. （已完成）补齐 Router Provider/Profile/Agent Role、`apiKeyEnv` 密钥引用和新请求边界
    热重载；main 通过窄 IPC 提供结构化决策与取消，managed Router/Char 共用一个 App Server。
    前台 smoke 已验证 sticky Session、Provider 严格失败、配置热切换、真实 Codex Auto 路由

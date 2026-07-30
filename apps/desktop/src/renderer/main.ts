@@ -638,6 +638,7 @@ interface CharTaskNotificationEvent {
   status: string;
   title?: string;
   resultArtifactPath?: string;
+  visibleTextTail?: string;
 }
 
 let model: Live2DModel<Cubism4InternalModel> | undefined;
@@ -2014,6 +2015,7 @@ function applyTaskManagerState(state: TaskManagerState): void {
       status: event.status,
       ...(event.title ? { title: event.title } : {}),
       ...(event.resultArtifactPath ? { resultArtifactPath: event.resultArtifactPath } : {}),
+      ...(event.visibleTextTail ? { visibleTextTail: event.visibleTextTail } : {}),
     });
   }
   interactionPanelHost.refresh();
@@ -2085,6 +2087,7 @@ function applyConversationSessionEvent(event: ConversationSessionEventState): vo
     observedAtMs: event.observedAtMs,
     status: event.status,
     title: event.title,
+    ...(event.visibleTextTail ? { visibleTextTail: event.visibleTextTail } : {}),
   });
   void pumpTaskNotifications();
 }
@@ -2153,6 +2156,7 @@ function pumpTaskNotifications(): void {
     subject: event.title?.trim() || event.sessionId,
     status: event.status,
     resultArtifactAvailable: Boolean(event.resultArtifactPath),
+    ...(event.visibleTextTail ? { visibleTextTail: event.visibleTextTail } : {}),
   });
   const submitted = conversationRuntime.submitUserMessage(
     compiled.focusText,

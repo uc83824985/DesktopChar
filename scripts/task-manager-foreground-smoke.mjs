@@ -26,7 +26,7 @@ const event = {
   submissionGeneration: 1,
   commandId: 'foreground-smoke-command',
   title: '隔离前台任务',
-  visibleTextTail: 'CONFIDENTIAL_TERMINAL_TAIL_MUST_NOT_APPEAR',
+  visibleTextTail: '› 只回复最终结果\n\n• 隔离前台任务已完成，最终结果为红色苹果。\n\n› ',
   resultArtifactPath: path.join(temporaryDirectory, 'result.md'),
   openArtifactOnCompletion: false,
 };
@@ -157,19 +157,15 @@ try {
     || activity.providerAgentId !== 'codex-app-server'
     || activity.state !== 'completed'
     || !activity.reply
-    || final.notificationText !== activity.reply) {
+    || final.notificationText !== activity.reply
+    || !activity.input.includes('最终结果为红色苹果')
+    || !final.notificationText.includes('红色苹果')) {
     throw new Error(
       `Unexpected foreground Task Manager/Char state: ${JSON.stringify({ presenting, final })}`,
     );
   }
-  if (
-    presenting.notificationText.includes(event.visibleTextTail)
-    || presenting.bubbleText.includes(event.visibleTextTail)
-    || final.notificationText.includes(event.visibleTextTail)
-    || activity.input.includes(event.visibleTextTail)
-    || activity.input.includes(event.resultArtifactPath)
-  ) {
-    throw new Error('Task notification leaked terminal text or the result path into Char context');
+  if (activity.input.includes(event.resultArtifactPath)) {
+    throw new Error('Task notification leaked the result path into Char context');
   }
   if (ackCount < 1 || commandCount !== 0) {
     throw new Error(`Unexpected Task Manager side effects: ${JSON.stringify({ ackCount, commandCount })}`);
