@@ -432,6 +432,15 @@ interface RouterAgentResult {
 
 - 纯角色对话页、没有外部候选等明确场景直接路由 `character`，不调用模型。
 - 用户显式选择 session 时，确定性规则优先，不必调用 Router。
+- Auto 进入 Router Gateway 后还有一层保守的高置信度路径：消息以结构化 reference 引用
+  唯一 `sessionId`，或在正文中同时包含唯一会话 ID/标题与非否定任务动作时，直接生成
+  `0.99` 的 session 建议；不含任务动作、
+  不引用任何候选且完全匹配短问候/致谢等角色社交句时，直接建议 `character`。这层仍输出
+  完整 `RouterAgentResult` 并接受 RouteCoordinator 的 session 存活和阈值校验，不绕过
+  审计或提交边界。
+- 任何重复标题、多个 ID、泛指“之前那个”、复杂混合意图、待确认状态或不在白名单内的
+  表达都不猜测，继续调用已配置的 Router Provider。高置信度路径不是 Provider 失败回退；
+  Provider 已经开始调用后的超时、错误和非法结构仍直接报错。
 - Auto 是用户显式选择的自动路由模式。单个 session 候选同时达到配置的最低置信度，且相对
   第二候选的领先幅度达到配置阈值时，DesktopChar 可以直接提交到该 `task-session`。
 - 只有存在多个合理候选、但没有明显高概率领先者时才返回 `confirm`；DesktopChar 列出少量
@@ -582,7 +591,9 @@ Char 与 Router 的 Provider/Profile 分层、脱敏快照和配置测试均已�
 Profile。Provider 边界使用 Codex 严格 Schema 支持的扁平判别结构，主进程再还原为项目内
 `RouteDecision` 联合类型。旧 `conversation.maxAssistants` 已一次性迁移为
 `agentRoles.char.maxConcurrency`，根级 `routing` 也已迁入 `agentRoles.router`，均不保留
-同义字段。
+同义字段。Router 状态快照以 `lastDecisionSource = high-confidence | provider` 和
+`lastDecisionLatencyMs` 区分最近一次成功决策的来源及端到端耗时，便于验证短路是否实际
+命中；快照不包含 Provider 密钥或完整隐藏上下文。
 
 ## 轻量 Char Agent MCP 测试面
 

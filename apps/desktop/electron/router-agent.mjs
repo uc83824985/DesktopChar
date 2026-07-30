@@ -5,6 +5,11 @@ import { loadRouterPromptProfile } from './mcp-services-config.mjs';
 
 const ROUTER_ORIGINS = new Set(['user', 'task-event', 'char', 'system']);
 const ROUTER_STATUSES = new Set(['waiting-input', 'active', 'idle-unknown', 'unavailable']);
+const TASK_HANDOFF_PATTERN =
+  /(?:继续|修改|修复|实现|完成|处理|测试|提交|上传|发送|发给|交给|转给|补充|更新|执行|运行|构建|关闭|打开|检查|确认)/iu;
+const TASK_NEGATION_PATTERN = /(?:不要|不用|不必|别|无需)/iu;
+const CHARACTER_SOCIAL_PATTERN =
+  /^(?:你好|您好|嗨|哈[喽啰罗]|早上好|上午好|中午好|下午好|晚上好|晚安|谢谢(?:你)?|多谢|辛苦了|我也很高兴(?:见到你)?|很高兴(?:见到你)?)[!！。,.，～~？?…\s]*$/iu;
 
 export const ROUTER_AGENT_OUTPUT_SCHEMA = Object.freeze({
   type: 'object',
@@ -58,6 +63,8 @@ export function createRouterAgentGateway(options) {
   let profileRevision = config.profileRevision;
   let lastDecisionAt = null;
   let lastResult = null;
+  let lastDecisionSource = null;
+  let lastDecisionLatencyMs = null;
   let lastError = null;
   let closed = false;
 
@@ -70,6 +77,7 @@ export function createRouterAgentGateway(options) {
 
   async function decide(value, signal) {
     if (closed) throw new Error('Router Agent gateway is closed');
+    const startedAtMs = Date.now();
     const requestConfig = cloneRouterConfig(config);
     const request = validateRouterAgentRequest(value, requestConfig);
     active++;
@@ -77,6 +85,11 @@ export function createRouterAgentGateway(options) {
     lastError = null;
     publish();
     try {
+      const highConfidenceResult = resolveHighConfidenceRoute(request);
+      if (highConfidenceResult) {
+        recordDecision(highConfidenceResult, 'high-confidence', startedAtMs);
+        return highConfidenceResult;
+      }
       const profile = await loadProfile(requestConfig.promptProfile);
       profileRevision = profile.version;
       const prompt = routerAgentPrompt(profile, request);
@@ -99,8 +112,7 @@ export function createRouterAgentGateway(options) {
               fetchImplementation,
             );
         const result = parseRouterAgentOutput(output);
-        lastDecisionAt = new Date().toISOString();
-        lastResult = structuredClone(result);
+        recordDecision(result, 'provider', startedAtMs);
         return result;
       }
       finally {
@@ -137,6 +149,8 @@ export function createRouterAgentGateway(options) {
       profileRevision,
       lastDecisionAt,
       lastResult: lastResult ? structuredClone(lastResult) : null,
+      lastDecisionSource,
+      lastDecisionLatencyMs,
       lastError,
     };
   }
@@ -152,6 +166,114 @@ export function createRouterAgentGateway(options) {
   function publish() {
     onStateChanged();
   }
+
+  function recordDecision(result, source, startedAtMs) {
+    lastDecisionAt = new Date().toISOString();
+    lastResult = structuredClone(result);
+    lastDecisionSource = source;
+    lastDecisionLatencyMs = Math.max(0, Date.now() - startedAtMs);
+  }
+}
+
+/**
+ * Resolves only routes whose meaning is explicit enough not to need a model.
+ * Ambiguous wording deliberately returns undefined so the configured Router
+ * Provider remains authoritative.
+ */
+export function resolveHighConfidenceRoute(request) {
+  if (request.pendingConfirmation) return undefined;
+  const messageText = request.message.text.trim();
+  const comparableMessage = comparableRouteText(messageText);
+  const availableCandidates = request.candidates.filter(candidate => candidate.status !== 'unavailable');
+
+  const referencedIdMatches = availableCandidates.filter(candidate =>
+    request.message.references.includes(candidate.sessionId));
+  if (referencedIdMatches.length === 1) {
+    return highConfidenceTaskResult(request, referencedIdMatches[0], '消息结构明确引用会话 ID');
+  }
+  if (referencedIdMatches.length > 1) return undefined;
+
+  const writtenIdMatches = availableCandidates.filter(candidate =>
+    containsRouteToken(comparableMessage, comparableRouteText(candidate.sessionId)));
+  if (
+    writtenIdMatches.length === 1
+    && TASK_HANDOFF_PATTERN.test(messageText)
+    && !TASK_NEGATION_PATTERN.test(messageText)
+  ) {
+    return highConfidenceTaskResult(request, writtenIdMatches[0], '消息明确提及会话 ID 和任务动作');
+  }
+  if (writtenIdMatches.length > 0) return undefined;
+
+  const titleMatches = availableCandidates.filter(candidate => {
+    if (!candidate.title) return false;
+    const comparableTitle = comparableRouteText(candidate.title);
+    return comparableTitle.length >= 2 && containsRouteToken(comparableMessage, comparableTitle);
+  });
+  if (
+    titleMatches.length === 1
+    && TASK_HANDOFF_PATTERN.test(messageText)
+    && !TASK_NEGATION_PATTERN.test(messageText)
+  ) {
+    return highConfidenceTaskResult(request, titleMatches[0], '消息明确提及唯一会话标题和任务动作');
+  }
+  if (titleMatches.length > 0) return undefined;
+
+  if (
+    messageText.length <= 48
+    && !TASK_HANDOFF_PATTERN.test(messageText)
+    && CHARACTER_SOCIAL_PATTERN.test(messageText)
+  ) {
+    return highConfidenceCharacterResult(request);
+  }
+  return undefined;
+}
+
+function highConfidenceTaskResult(request, selectedCandidate, reason) {
+  return {
+    contextRevision: request.visibleContextRevision,
+    route: {
+      decision: 'route',
+      target: { kind: 'task-session', sessionId: selectedCandidate.sessionId },
+      confidence: 0.99,
+    },
+    candidates: highConfidenceCandidateScores(request.candidates, selectedCandidate.sessionId, reason),
+  };
+}
+
+function highConfidenceCharacterResult(request) {
+  return {
+    contextRevision: request.visibleContextRevision,
+    route: {
+      decision: 'route',
+      target: { kind: 'character' },
+      confidence: 0.99,
+    },
+    candidates: highConfidenceCandidateScores(
+      request.candidates,
+      undefined,
+      '简短且明确的角色社交消息',
+    ),
+  };
+}
+
+function highConfidenceCandidateScores(candidates, selectedSessionId, selectedReason) {
+  return candidates.map(candidate => ({
+    sessionId: candidate.sessionId,
+    score: candidate.sessionId === selectedSessionId ? 0.99 : 0.01,
+    reason: candidate.sessionId === selectedSessionId
+      ? selectedReason
+      : selectedSessionId
+        ? '未被消息明确引用'
+        : '消息明确面向角色',
+  }));
+}
+
+function comparableRouteText(value) {
+  return value.normalize('NFKC').toLocaleLowerCase();
+}
+
+function containsRouteToken(message, token) {
+  return token.length > 0 && message.includes(token);
 }
 
 export function validateRouterAgentRequest(value, config) {

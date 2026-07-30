@@ -2,6 +2,7 @@ import assert from 'node:assert/strict';
 import test from 'node:test';
 import {
   createRouterAgentGateway,
+  resolveHighConfidenceRoute,
   ROUTER_AGENT_OUTPUT_SCHEMA,
 } from './router-agent.mjs';
 
@@ -28,8 +29,97 @@ test('managed Codex Router returns one structured suggestion without side effect
   assert.match(calls[0].prompt, /不要调用工具，不要提交任务/);
   assert.match(calls[0].prompt, /"visibleContextRevision":7/);
   assert.equal(gateway.snapshot().profileRevision, 2);
+  assert.equal(gateway.snapshot().lastDecisionSource, 'provider');
+  assert.ok(gateway.snapshot().lastDecisionLatencyMs >= 0);
   await gateway.close();
   assert.equal(closed, false);
+});
+
+test('explicit session references use the high-confidence path without loading a provider', async () => {
+  let providerCalls = 0;
+  let profileLoads = 0;
+  const gateway = createRouterAgentGateway({
+    config: routerConfig(),
+    codexClient: {
+      async execute() {
+        providerCalls++;
+        throw new Error('provider must not run');
+      },
+      async close() {},
+    },
+    loadProfile: async () => {
+      profileLoads++;
+      return profile(1, 'route');
+    },
+  });
+  const result = await gateway.decide(routerRequest({
+    message: {
+      ...routerRequest().message,
+      text: '请继续处理 session-2',
+    },
+  }), new AbortController().signal);
+  assert.deepEqual(result.route, {
+    decision: 'route',
+    target: { kind: 'task-session', sessionId: 'session-2' },
+    confidence: 0.99,
+  });
+  assert.equal(providerCalls, 0);
+  assert.equal(profileLoads, 0);
+  assert.equal(gateway.snapshot().lastDecisionSource, 'high-confidence');
+});
+
+test('a unique title plus a task action is a high-confidence session route', () => {
+  const result = resolveHighConfidenceRoute(routerRequest({
+    message: {
+      ...routerRequest().message,
+      text: '请继续处理第二个会话',
+    },
+  }));
+  assert.equal(result.route.target.sessionId, 'session-2');
+  assert.equal(result.candidates[0].score, 0.99);
+});
+
+test('short social messages use the character high-confidence path', () => {
+  const result = resolveHighConfidenceRoute(routerRequest({
+    message: {
+      ...routerRequest().message,
+      text: '我也很高兴！',
+    },
+  }));
+  assert.deepEqual(result.route, {
+    decision: 'route',
+    target: { kind: 'character' },
+    confidence: 0.99,
+  });
+  assert.equal(result.candidates[0].score, 0.01);
+});
+
+test('negated session mentions are not treated as high-confidence handoffs', () => {
+  const result = resolveHighConfidenceRoute(routerRequest({
+    message: {
+      ...routerRequest().message,
+      text: '不要继续处理 session-2',
+    },
+  }));
+  assert.equal(result, undefined);
+});
+
+test('ambiguous task wording still requires the configured Router Provider', async () => {
+  let providerCalls = 0;
+  const gateway = createRouterAgentGateway({
+    config: routerConfig(),
+    codexClient: {
+      async execute() {
+        providerCalls++;
+        return routeResult();
+      },
+      async close() {},
+    },
+    loadProfile: async () => profile(1, 'route'),
+  });
+  await gateway.decide(routerRequest(), new AbortController().signal);
+  assert.equal(providerCalls, 1);
+  assert.equal(gateway.snapshot().lastDecisionSource, 'provider');
 });
 
 test('Router Profile reload affects only requests that start after the edit', async () => {
@@ -151,13 +241,13 @@ function profile(version, instruction) {
   };
 }
 
-function routerRequest() {
-  return {
+function routerRequest(overrides = {}) {
+  const base = {
     message: {
       messageId: 'message-1',
       sequence: 1,
       origin: 'user',
-      text: '继续处理第二个会话',
+      text: '继续处理先前提到的内容',
       createdAtMs: 1_000,
       references: [],
     },
@@ -175,6 +265,10 @@ function routerRequest() {
       status: 'waiting-input',
       lastVisibleEvent: '等待补充',
     }],
+  };
+  return {
+    ...base,
+    ...overrides,
   };
 }
 

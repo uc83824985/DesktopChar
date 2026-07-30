@@ -197,6 +197,8 @@ export interface RouterAgentState {
   profileRevision: number;
   lastDecisionAt: string | null;
   lastResult: import('../../../../packages/interaction-routing/src/index.ts').RouterAgentResult | null;
+  lastDecisionSource: 'high-confidence' | 'provider' | null;
+  lastDecisionLatencyMs: number | null;
   lastError: string | null;
 }
 

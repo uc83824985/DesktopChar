@@ -203,8 +203,7 @@ try {
     return state?.agentRoles.router.provider === 'router-codex-managed'
       && state?.routerAgent.adapter === 'codex-app-server';
   }, undefined, { timeout: 10_000 });
-  const managedAutoText =
-    `请把这条补充说明立即发给候选列表中唯一的任务会话“路由隔离会话”（sessionId=${registeredSessionId}），不要发给角色。`;
+  const managedAutoText = '请把这条补充说明立即发给候选列表中唯一的任务会话，不要发给角色。';
   await input.fill(managedAutoText);
   await input.press('Control+Enter');
   await page.waitForFunction(() => {
@@ -219,7 +218,10 @@ try {
     input: document.querySelector('.conversation-panel__form textarea')?.value ?? '',
     router: await window.desktopChar?.getRouterAgentState(),
   }));
-  if (managedAutoDiagnostics.phase !== 'sent') {
+  if (
+    managedAutoDiagnostics.phase !== 'sent'
+    || managedAutoDiagnostics.router?.lastDecisionSource !== 'provider'
+  ) {
     throw new Error(
       `Managed Router Codex did not produce a sent route: ${JSON.stringify({
         managedAutoDiagnostics,
