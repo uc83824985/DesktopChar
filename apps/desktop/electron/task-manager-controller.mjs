@@ -6,12 +6,21 @@ export function createTaskManagerController(initialConfig, options = {}) {
       markerPath: config.markerPath,
       requestTimeoutMs: config.requestTimeoutMs,
     }));
+  const launchManagedProcess = options.launchManagedProcess;
   const onStateChanged = options.onStateChanged ?? (() => {});
+  const restartDelayMs = options.restartDelayMs ?? 1_000;
   let config = normalizeConfig(initialConfig);
+  let enabledOverride;
   let client;
   let timer;
   let polling;
   let closed = false;
+  let activeProcess;
+  let processId = null;
+  let operation = Promise.resolve();
+  let restartTimer;
+  let reconnectAttempt = 0;
+  let activeSignature = '';
   let instanceId;
   let cursor = 0;
   let sessions = [];
@@ -26,63 +35,85 @@ export function createTaskManagerController(initialConfig, options = {}) {
     start,
     close,
     configure,
+    setEnabled,
     pollNow,
     submitCommand,
     snapshot,
   };
 
-  async function start() {
-    if (closed) throw new Error('Task Manager controller is closed');
-    if (!config.enabled) {
-      phase = 'disabled';
-      publish();
-      return snapshot();
-    }
-    schedule();
-    await pollNow().catch(() => {});
-    return snapshot();
+  function desiredEnabled() {
+    return enabledOverride ?? config.enabled;
   }
 
-  async function close() {
-    if (closed) return;
+  function enqueue(task) {
+    const next = operation.catch(() => {}).then(task);
+    operation = next.catch(() => {});
+    return next;
+  }
+
+  function start() {
+    if (closed) throw new Error('Task Manager controller is closed');
+    return enqueue(() => reconcile('startup'));
+  }
+
+  function close() {
+    if (closed) return operation;
     closed = true;
-    if (timer) clearInterval(timer);
-    timer = undefined;
-    phase = 'closed';
-    publish();
+    enabledOverride = false;
+    clearSchedule();
+    clearRestart();
+    invalidateEndpoint();
+    return enqueue(async () => {
+      await stopManagedProcess();
+      phase = 'closed';
+      processId = null;
+      publish();
+      return snapshot();
+    });
   }
 
   function configure(nextConfig) {
     const next = normalizeConfig(nextConfig);
     const endpointChanged = config.markerPath !== next.markerPath
-      || config.requestTimeoutMs !== next.requestTimeoutMs;
-    const intervalChanged = config.pollIntervalMs !== next.pollIntervalMs;
+      || config.requestTimeoutMs !== next.requestTimeoutMs
+      || config.lifecycle !== next.lifecycle
+      || config.sessionMonitorMarkerPath !== next.sessionMonitorMarkerPath
+      || config.stateDirectory !== next.stateDirectory;
     const activePoll = polling;
     config = next;
+    enabledOverride = undefined;
+    clearSchedule();
+    clearRestart();
     if (endpointChanged) {
-      endpointRevision++;
-      client = undefined;
-      instanceId = undefined;
-      cursor = 0;
-      pendingAckIds = new Set();
+      invalidateEndpoint();
     }
-    if (!config.enabled) {
-      if (timer) clearInterval(timer);
-      timer = undefined;
-      phase = 'disabled';
-      lastError = undefined;
-      publish();
-      return;
+    publish();
+    const proceed = activePoll ? activePoll.catch(() => {}) : Promise.resolve();
+    return enqueue(async () => {
+      await proceed;
+      return reconcile('config-reload');
+    });
+  }
+
+  function setEnabled(enabled) {
+    if (typeof enabled !== 'boolean') {
+      throw new TypeError('Task Manager enabled state must be boolean');
     }
-    if (intervalChanged || !timer) schedule();
-    if (endpointChanged && activePoll) {
-      void activePoll.catch(() => {}).finally(() => pollNow().catch(() => {}));
-    }
-    else void pollNow().catch(() => {});
+    if (closed) throw new Error('Task Manager controller is closed');
+    enabledOverride = enabled;
+    clearRestart();
+    publish();
+    return enqueue(() => reconcile('runtime-toggle'));
   }
 
   async function pollNow() {
-    if (closed || !config.enabled) return snapshot();
+    if (
+      closed
+      || !desiredEnabled()
+      || (config.lifecycle === 'managed' && !activeProcess)
+    ) {
+      return snapshot();
+    }
     if (polling) return polling;
     polling = performPoll().finally(() => { polling = undefined; });
     return polling;
@@ -90,7 +121,10 @@ export function createTaskManagerController(initialConfig, options = {}) {
 
   async function submitCommand(input) {
     if (closed) throw new Error('Task Manager controller is closed');
-    if (!config.enabled) throw new Error('Task Manager is disabled');
+    if (!desiredEnabled()) throw new Error('Task Manager is disabled');
+    if (config.lifecycle === 'managed' && !activeProcess) {
+      throw new Error('Task Manager managed service is unavailable');
+    }
     const command = normalizeCommand(input);
     client ??= createClient(config);
     await client.discover();
@@ -99,9 +133,122 @@ export function createTaskManagerController(initialConfig, options = {}) {
     return result;
   }
 
-  async function performPoll() {
+  async function reconcile(reason) {
+    if (closed) return snapshot();
+    clearSchedule();
+    clearRestart();
+    if (!desiredEnabled()) {
+      invalidateEndpoint();
+      await stopManagedProcess();
+      phase = 'disabled';
+      lastError = undefined;
+      reconnectAttempt = 0;
+      publish();
+      return snapshot();
+    }
+    if (config.lifecycle === 'external') {
+      await stopManagedProcess();
+      reconnectAttempt = 0;
+      schedule();
+      await pollNow().catch(() => {});
+      return snapshot();
+    }
+    if (!config.sessionMonitorMarkerPath) {
+      invalidateEndpoint();
+      await stopManagedProcess();
+      phase = 'reconnecting';
+      lastError = 'Managed Task Manager requires a Session Monitor marker';
+      publish();
+      return snapshot();
+    }
+    const signature = managedSignature(config);
+    if (activeProcess && activeSignature === signature) {
+      schedule();
+      await pollNow().catch(() => {});
+      return snapshot();
+    }
+    await stopManagedProcess();
+    if (typeof launchManagedProcess !== 'function') {
+      phase = 'reconnecting';
+      lastError = 'Managed Task Manager process launcher is unavailable';
+      publish();
+      return snapshot();
+    }
+
+    invalidateEndpoint();
+    phase = reason === 'failure-restart' ? 'reconnecting' : 'connecting';
+    lastError = undefined;
+    publish();
+    const targetConfig = config;
+    let candidate;
+    try {
+      candidate = await launchManagedProcess(targetConfig);
+      if (closed || !desiredEnabled() || config !== targetConfig) {
+        await candidate.close(targetConfig.shutdownTimeoutMs);
+        return snapshot();
+      }
+      activeProcess = candidate;
+      activeSignature = signature;
+      processId = candidate.pid ?? null;
+      observeManagedExit(candidate);
+      publish();
+      await waitUntilManagedReady(candidate, targetConfig);
+      if (
+        closed
+        || activeProcess !== candidate
+        || !desiredEnabled()
+        || config !== targetConfig
+      ) {
+        if (activeProcess === candidate) await stopManagedProcess();
+        return snapshot();
+      }
+      reconnectAttempt = 0;
+      schedule();
+      return snapshot();
+    }
+    catch (error) {
+      if (activeProcess === candidate) {
+        activeProcess = undefined;
+        activeSignature = '';
+        processId = null;
+      }
+      await candidate?.close(targetConfig.shutdownTimeoutMs).catch(() => {});
+      handleManagedFailure(error);
+      return snapshot();
+    }
+  }
+
+  async function waitUntilManagedReady(process, targetConfig) {
+    const deadline = Date.now() + targetConfig.startupTimeoutMs;
+    let latestError;
+    while (Date.now() < deadline) {
+      if (
+        closed
+        || activeProcess !== process
+        || !desiredEnabled()
+        || config !== targetConfig
+      ) {
+        throw new Error('Managed Task Manager startup was cancelled');
+      }
+      if (process.exitInfo) throw managedProcessExitError(process.exitInfo);
+      try {
+        await performPoll(true);
+        return;
+      }
+      catch (error) {
+        latestError = error;
+        await delay(100);
+      }
+    }
+    throw new Error(
+      `Managed Task Manager did not become ready within ${targetConfig.startupTimeoutMs} ms: `
+      + errorMessage(latestError),
+    );
+  }
+
+  async function performPoll(starting = false) {
     const operationRevision = endpointRevision;
-    phase = instanceId ? 'reconnecting' : 'connecting';
+    phase = starting ? 'connecting' : instanceId ? 'reconnecting' : 'connecting';
     publish();
     try {
       const operationClient = client ?? createClient(config);
@@ -154,7 +301,7 @@ export function createTaskManagerController(initialConfig, options = {}) {
       return snapshot();
     }
     catch (error) {
-      phase = 'reconnecting';
+      phase = starting ? 'connecting' : 'reconnecting';
       lastError = errorMessage(error);
       publish();
       throw error;
@@ -169,22 +316,94 @@ export function createTaskManagerController(initialConfig, options = {}) {
   }
 
   function schedule() {
-    if (timer) clearInterval(timer);
+    clearSchedule();
     timer = setInterval(() => {
       void pollNow().catch(() => {});
     }, config.pollIntervalMs);
     timer.unref?.();
   }
 
+  function clearSchedule() {
+    if (timer) clearInterval(timer);
+    timer = undefined;
+  }
+
+  function invalidateEndpoint() {
+    endpointRevision++;
+    client = undefined;
+    instanceId = undefined;
+    cursor = 0;
+    pendingAckIds = new Set();
+    sessions = [];
+  }
+
   function currentEndpointOperation(revision, operationClient) {
     return revision === endpointRevision && operationClient === client;
   }
 
+  function observeManagedExit(process) {
+    void process.exited.then(info => {
+      if (activeProcess !== process || closed) return;
+      activeProcess = undefined;
+      activeSignature = '';
+      processId = null;
+      clearSchedule();
+      invalidateEndpoint();
+      handleManagedFailure(managedProcessExitError(info));
+    });
+  }
+
+  function handleManagedFailure(error) {
+    lastError = errorMessage(error);
+    reconnectAttempt++;
+    if (
+      !closed
+      && desiredEnabled()
+      && config.lifecycle === 'managed'
+      && config.restartOnFailure
+      && config.sessionMonitorMarkerPath
+    ) {
+      phase = 'reconnecting';
+      scheduleRestart();
+    }
+    else {
+      phase = desiredEnabled() ? 'reconnecting' : 'disabled';
+    }
+    publish();
+  }
+
+  function scheduleRestart() {
+    clearRestart();
+    restartTimer = setTimeout(() => {
+      restartTimer = undefined;
+      void enqueue(() => reconcile('failure-restart'));
+    }, restartDelayMs);
+    restartTimer.unref?.();
+  }
+
+  function clearRestart() {
+    if (restartTimer) clearTimeout(restartTimer);
+    restartTimer = undefined;
+  }
+
+  async function stopManagedProcess() {
+    const process = activeProcess;
+    activeProcess = undefined;
+    activeSignature = '';
+    processId = null;
+    if (!process) return;
+    await process.close(config.shutdownTimeoutMs).catch(() => {});
+  }
+
   function snapshot() {
     return {
-      enabled: config.enabled,
+      enabled: desiredEnabled(),
+      lifecycle: config.lifecycle,
       phase,
       markerPath: config.markerPath,
+      sessionMonitorMarkerPath: config.sessionMonitorMarkerPath || null,
+      processId,
+      reconnectAttempt,
       instanceId: instanceId ?? null,
       cursor,
       pendingAckCount: pendingAckIds.size,
@@ -202,11 +421,35 @@ export function createTaskManagerController(initialConfig, options = {}) {
 
 function normalizeConfig(value = {}) {
   const enabled = value.enabled === true;
+  const lifecycle = value.lifecycle ?? 'external';
+  if (lifecycle !== 'managed' && lifecycle !== 'external') {
+    throw new TypeError('Task Manager lifecycle must be managed or external');
+  }
   const markerPath = typeof value.markerPath === 'string' ? value.markerPath.trim() : '';
   if (enabled && !markerPath) throw new TypeError('Enabled Task Manager requires markerPath');
   return {
     enabled,
+    lifecycle,
     markerPath,
+    sessionMonitorMarkerPath: typeof value.sessionMonitorMarkerPath === 'string'
+      ? value.sessionMonitorMarkerPath.trim()
+      : '',
+    stateDirectory: typeof value.stateDirectory === 'string' ? value.stateDirectory.trim() : '',
+    startupTimeoutMs: boundedInteger(
+      value.startupTimeoutMs,
+      10_000,
+      500,
+      120_000,
+      'startupTimeoutMs',
+    ),
+    shutdownTimeoutMs: boundedInteger(
+      value.shutdownTimeoutMs,
+      10_000,
+      500,
+      120_000,
+      'shutdownTimeoutMs',
+    ),
+    restartOnFailure: value.restartOnFailure !== false,
     pollIntervalMs: boundedInteger(value.pollIntervalMs, 1_000, 250, 60_000, 'pollIntervalMs'),
     requestTimeoutMs: boundedInteger(
       value.requestTimeoutMs,
@@ -387,4 +630,27 @@ function boundedTail(value, maximum) {
 
 function errorMessage(error) {
   return error instanceof Error ? error.message : String(error);
+}
+
+function managedProcessExitError(info) {
+  const detail = info?.stderrTail?.trim() || info?.stdoutTail?.trim();
+  return new Error(
+    `Managed Task Manager exited (code=${String(info?.code)}, `
+    + `signal=${String(info?.signal)})${detail ? `: ${detail}` : ''}`,
+  );
+}
+
+function managedSignature(config) {
+  return JSON.stringify({
+    markerPath: config.markerPath,
+    sessionMonitorMarkerPath: config.sessionMonitorMarkerPath,
+    stateDirectory: config.stateDirectory,
+  });
+}
+
+function delay(ms) {
+  return new Promise(resolve => {
+    const timer = setTimeout(resolve, ms);
+    timer.unref?.();
+  });
 }

@@ -194,7 +194,9 @@ Windows 通常对应 `%APPDATA%/DesktopChar/config.json`。程序只通过 Elect
     "port": 17373
   },
   "taskManager": {
-    "enabled": false,
+    "enabled": true,
+    "lifecycle": "managed",
+    "sessionMonitorMarkerPath": "C:\\WorkAssistant\\session_monitor.json",
     "pollIntervalMs": 1000,
     "requestTimeoutMs": 5000,
     "eventPageSize": 100,
@@ -249,7 +251,8 @@ Char 与 Router Agent 均采用“可复用 Provider + Agent 角色绑定”。R
 DeepSeek 或其他 Provider 凭据。目标示例和角色边界见
 [Task Manager 与会话路由设计](task-manager-routing.md)。
 
-独立 Task Manager 使用环境变量启动，不把 Session Monitor token 写入应用 JSON：
+Task Manager 服务不把 Session Monitor token 写入应用 JSON。默认 `managed` 模式由
+DesktopChar 托管独立子进程；独立启动和 managed 子进程共用以下环境边界：
 
 - `SESSION_MONITOR_MARKER`：必填，Session Monitor v3+ marker 的绝对路径；
 - `DESKTOP_CHAR_TASK_MANAGER_STATE_DIR`：可选，Task Manager 自身临时 marker/token 目录；
@@ -259,10 +262,13 @@ DeepSeek 或其他 Provider 凭据。目标示例和角色边界见
 Task Manager 领域状态仍是 memory-only；状态目录只保存当前进程的发现 marker 和随机 token，
 服务停止时删除，不是任务持久化。
 
-DesktopChar 侧通过应用 JSON 的 `taskManager` 读取该发现 marker。启用时必须设置
-`taskManager.markerPath` 为 Task Manager 写出的 `task_manager.json` 绝对路径；
+`taskManager.enabled` 默认 `true`，右键菜单可以仅对当前进程动态覆盖。`managed` 模式通过
+`taskManager.sessionMonitorMarkerPath`（或 `SESSION_MONITOR_MARKER`）接收 Session Monitor
+marker，并在 `stateDirectory` 启动/停止 owned 服务；`markerPath` 默认派生为该目录下的
+`task_manager.json`。`external` 模式不持有服务进程，启用时必须显式设置 `markerPath`。
 `pollIntervalMs`、`requestTimeoutMs`、`eventPageSize` 和 `maxEvents` 分别控制轮询、单次请求、
-分页和 main 内存事实上限。启动脚本也可以用
+分页和 main 内存事实上限；`startupTimeoutMs`、`shutdownTimeoutMs` 与
+`restartOnFailure` 控制 managed 生命周期。启动脚本也可以用
 `DESKTOP_CHAR_TASK_MANAGER_MARKER` 与 `DESKTOP_CHAR_TASK_MANAGER_ENABLED` 作首次引导，
 加载应用 JSON 后仍以 JSON 所有权为准。DesktopChar 不读取 Session Monitor token，也不把
 Task Manager marker/token 内容转发给 renderer。
@@ -386,7 +392,10 @@ CharacterProfileController -- asset revision ---+--> validate complete candidate
 - Avatar Runtime 通过 `runtime.effect-config-revised` 一类事件接收配置，保存当前 effect revision，并按字段的应用策略更新内部 Policy。旧 revision 的异步结果不能覆盖新 revision。
 - 纯参数更新不得重建 Avatar Runtime、清空计划、重置 gaze 开关、打断音频、重新创建窗口或使当前 Scene generation 失效。
 
-角色右键菜单将手动入口放在独立的“应用配置 · rN”分区并命名为“重新加载配置”。它与自动监听调用同一加载事务，只提供立即复核、错误反馈和监听异常时的恢复路径；“MCP 服务”分区只保留两端启停与连接测试，避免把统一应用配置误表达为 MCP 私有状态。
+角色右键菜单将手动入口放在独立的“应用配置 · rN”分区并命名为“重新加载配置”。它与
+自动监听调用同一加载事务，只提供立即复核、错误反馈和监听异常时的恢复路径；“接入服务”
+分区保留 Task Manager、两端 MCP 启停与 MCP 连接测试，避免把统一应用配置误表达为某一
+服务的私有状态。
 
 效果参数按应用边界分级：
 

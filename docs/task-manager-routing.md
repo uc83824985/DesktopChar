@@ -9,7 +9,7 @@ Session Monitor
   原始 session 状态、可见文本、精确输入接口
            |
            v
-Task Manager（独立常驻服务、确定性）
+Task Manager（独立服务、确定性，默认由 DesktopChar 托管）
   轮询 / 去重 / 游标 / 事件日志 / 命令执行
            |
            v
@@ -315,6 +315,9 @@ session，并把重启前仍在观察的 submission 视为不可恢复，不补�
   只回传路径与 `openOnCompletion` 意图，不创建也不打开文件；
 - `http-service.mjs` 仅暴露 `/health`、`/sessions`、`/events`、`/commands` 和
   `/events/{id}/ack`，除 health 外均需 bearer token，且拒绝非 loopback 绑定。
+- DesktopChar 默认以 `managed` 生命周期启动该独立子进程，右键“接入服务”可动态关闭和
+  重启；关闭会立即从注册表移除未绑定候选，已有 External 注册转为 unavailable，但不会
+  关闭或修改源窗口。`external` 生命周期继续兼容预先启动的 Task Manager marker。
 
 真实 Session Monitor v4 的 marker/token、会话记录和独立 HTTP 服务启动已经完成只读验收；
 尚未在受控测试 session 中执行真实 `/input submit`，因此 active 状态下各目标 CLI 的具体
@@ -675,3 +678,5 @@ Char Agent 的建议只是用户可见内容，不自动转化为 TaskCommand。
    External 会话 ID 和所有权；对话框可新建持久 Codex thread、从已发现窗口绑定 External
    会话，并按所有权执行归档关闭或仅断开。Router 候选只包含已注册会话；前台 smoke 同时
    验证绑定、sticky 路由、Managed 新建/归档及 External 断开不关闭源窗口。
+9. （已完成）为 Task Manager 增加 managed/external 生命周期、默认 managed 自启动和右键
+   动态开关；真实 Session Monitor 前台 smoke 验证 owned 子进程及候选列表随开关退出、恢复。

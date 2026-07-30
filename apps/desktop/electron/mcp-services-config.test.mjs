@@ -192,10 +192,24 @@ test('desktop config path prefers the new bootstrap variable and validates appli
     interaction: { conversationSidebar: { preferredSide: 'top' } },
   }), /must be left or right/);
   assert.throws(() => normalizeDesktopConfig({ agentHttp: { host: '0.0.0.0' } }), /loopback/);
-  assert.throws(() => normalizeDesktopConfig({ taskManager: { enabled: true } }), /requires markerPath/);
+  const defaultTaskManager = normalizeDesktopConfig({}).taskManager;
+  assert.equal(defaultTaskManager.enabled, true);
+  assert.equal(defaultTaskManager.lifecycle, 'managed');
+  assert.match(defaultTaskManager.markerPath, /DesktopChar[\\/]task-manager[\\/]task_manager\.json$/);
+  assert.throws(() => normalizeDesktopConfig({
+    taskManager: { enabled: true, lifecycle: 'external' },
+  }), /requires markerPath/);
   assert.throws(() => normalizeDesktopConfig({
     taskManager: { enabled: true, markerPath: 'relative.json' },
   }), /absolute path/);
+  assert.throws(() => normalizeDesktopConfig({
+    taskManager: {
+      enabled: true,
+      lifecycle: 'managed',
+      stateDirectory: 'C:\\DesktopChar\\task-manager',
+      markerPath: 'C:\\other\\task_manager.json',
+    },
+  }), /owned state directory|stateDirectory/);
   assert.throws(() => normalizeDesktopConfig({
     agentRoles: { router: { autoSubmitMinConfidence: 1.1 } },
   }), /0 to 1/);

@@ -1990,6 +1990,8 @@ function reconcileConversationAgentSlots(): void {
 
 function applyTaskManagerState(state: TaskManagerState): void {
   taskManagerState = state;
+  document.body.dataset.taskManagerEnabled = state.enabled ? 'true' : 'false';
+  document.body.dataset.taskManagerLifecycle = state.lifecycle;
   document.body.dataset.taskManagerPhase = state.phase;
   document.body.dataset.taskManagerSessions = state.sessions.length.toString();
   document.body.dataset.taskManagerEvents = state.events.length.toString();
@@ -3806,8 +3808,17 @@ function registerDevelopmentUi(): void {
       if (!services) return null;
       const runtimeIdle = runtime?.getSnapshot().state === 'idle';
       return {
-        label: 'MCP 服务',
+        label: '接入服务',
         items: [
+          ...(taskManagerState ? [{
+            type: 'checkbox' as const,
+            id: 'task-manager-enabled',
+            label: `Task Manager（${taskManagerState.lifecycle === 'managed' ? '托管' : '外部'}）`
+              + ` · ${taskManagerPhaseLabel(taskManagerState)}`,
+            checked: taskManagerState.enabled,
+            enabled: taskManagerState.phase !== 'closed',
+            invoke: setTaskManagerEnabled,
+          }] : []),
           {
             type: 'checkbox', id: 'character-mcp-enabled',
             label: `角色接入 MCP · ${mcpPhaseLabel(services.character)}`,
@@ -3875,6 +3886,11 @@ async function setMcpServiceEnabled(service: McpServiceId, enabled: boolean): Pr
   applyMcpServicesState(await desktopShell.setMcpServiceEnabled(service, enabled));
 }
 
+async function setTaskManagerEnabled(enabled: boolean): Promise<void> {
+  if (!desktopShell) return;
+  applyTaskManagerState(await desktopShell.setTaskManagerEnabled(enabled));
+}
+
 async function setPerformanceInferenceEnabled(enabled: boolean): Promise<void> {
   if (!desktopShell) return;
   const state = await desktopShell.setPerformanceInferenceEnabled(enabled);
@@ -3928,6 +3944,19 @@ async function reloadDesktopConfig(): Promise<void> {
 
 function mcpTransitioning(service: McpServiceState): boolean {
   return ['starting', 'reloading', 'stopping'].includes(service.phase);
+}
+
+function taskManagerPhaseLabel(state: TaskManagerState): string {
+  const labels: Record<TaskManagerState['phase'], string> = {
+    disabled: '已禁用',
+    standby: '待启动',
+    connecting: '启动中',
+    ready: '已连接',
+    degraded: '部分可用',
+    reconnecting: `重连中 #${state.reconnectAttempt}`,
+    closed: '已关闭',
+  };
+  return labels[state.phase];
 }
 
 function mcpPhaseLabel(service: McpServiceState): string {

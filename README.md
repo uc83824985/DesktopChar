@@ -26,7 +26,9 @@
 动态场景 UI 使用与 Scene Frame 同 revision 的框架无关 Surface，参考项目取舍和引擎/应用边界见 [桌面 UI 引擎层设计](docs/desktop-ui-engine.md)。
 Live2D Motion 可通过受全局帧预算约束的真实 WebGL 采集器导出 Contact Sheet、采样时点和参数轨迹，使用方式见 [自动动作审阅工具](docs/motion-audit.md)。
 角色语音可通过应用层聊天气泡以完整、渐进追加或 KTV 高亮方式投影，契约和 Agent 示例见 [角色聊天气泡](docs/speech-bubble.md)。
-语音合成 MCP Client 与角色接入 MCP Server 均支持右键动态启停、JSON 配置热重载、指数退避重连和官方 Client 连接测试，配置及角色工具见 [MCP 服务生命周期与角色接入接口](docs/mcp-services.md)。
+Task Manager、语音合成 MCP Client、角色接入 MCP Server 和表现推理均可从角色右键菜单动态
+启停；Task Manager 默认使用 managed 生命周期随主应用启动，用于发现可绑定的外部对话。
+JSON 配置热重载、重连和连接测试见 [MCP 服务生命周期与角色接入接口](docs/mcp-services.md)。
 
 可独立运行的样例见 [本地语音合成 MCP 参考服务](local-tts-mcp/README.md)；Adapter、流式 MCP/HTTP 绑定和真实服务接入契约见 [TTS Adapter 文档](docs/tts-adapter.md)；MCP 侧新增语速、sample 时间线和可选生成事件时参照 [Qwen3-TTS MCP 流式扩展说明](docs/tts-mcp-streaming-extension.md)；Qwen3-TTS 当前公开推理接口的流式能力核对见 [Qwen3-TTS 阅读记录](docs/references/qwen3-tts.md)。
 
@@ -34,19 +36,21 @@ Live2D Motion 可通过受全局帧预算约束的真实 WebGL 采集器导出 C
 
 高频输入、主动聊天和多 Agent 的目标架构由应用统一持有 ConversationLedger、版本化 Persona、Turn/Task 调度和唯一 PerformanceQueue。多 Agent 只跨 Turn 并行生成文本；sealed 文本尽早扇出到 TTS 与本地表情/动作准备队列，正式提交和播放仍保持单写顺序。生产 Reply 数据面采用 DesktopChar 托管的单个 Codex App Server，不连接或污染用户正在使用的 CLI 会话。总体约束见 [对话上下文与任务编排设计](docs/conversation-orchestration.md)，当前框架与测试方式见 [多 Agent 回复流水线开发说明](docs/multi-agent-development.md)。
 
-跨项目任务通知与回复路由是另一条链路：独立常驻 Task Manager 只监控会话并执行已经解析为
+跨项目任务通知与回复路由是另一条链路：独立子进程 Task Manager 只监控会话并执行已经解析为
 `sessionId + text` 的命令；DesktopChar 内部的 Router Agent 负责候选会话判断，Char Agent
 负责角色化表达，两者允许绑定独立 Provider/Profile。边界、用户可见时间线和二次确认规则见
 [Task Manager 与会话路由设计](docs/task-manager-routing.md)。
 
-Task Manager 首个内存版本位于 `task-manager/`。设置 `SESSION_MONITOR_MARKER` 后可运行
+Task Manager 首个内存版本位于 `task-manager/`。默认由 DesktopChar 根据
+`taskManager.sessionMonitorMarkerPath` 托管启动，也可设置 `SESSION_MONITOR_MARKER` 后独立运行
 `node task-manager/server.mjs`；服务只监听 loopback，并在本机状态目录写入临时 marker/token。
 `npm run test:task-manager-monitor` 与 `npm run test:task-manager-service` 分别执行真实 Monitor
 只读发现和完整常驻服务只读验收，不会向任何 CLI 提交输入。DesktopChar 已可通过
 `taskManager.markerPath` 接收有界事件、在 main 保存后 ack，再把标题、状态和结果文档是否可用
 编译为精简 CharReplyTask；角色化短句由前台 Avatar Runtime 播放，每个 Turn 自带固定终态
 fallback。`npm run test:task-manager-foreground` 使用隔离服务和真实 managed Codex 验证这条
-链路，不提交任务命令，也不把终端尾部或结果绝对路径交给 Char。
+链路；`npm run test:task-manager-managed-foreground` 使用真实 Session Monitor 验证右键关闭/
+重启 owned Task Manager 后候选同步消失和恢复。两者均不提交任务命令。
 现有角色对话框已增加 sticky 的 Auto/Char/Session 目标选择、候选状态与二次确认区域，并由
 主进程会话注册表提供“新建 / 绑定 / 关闭”管理：新建会话使用 DesktopChar 拥有的持久 Codex
 thread；绑定只注册 Task Manager 已发现的外部窗口；关闭 Managed 会中断并归档，关闭

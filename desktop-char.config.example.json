@@ -48,7 +48,8 @@
     "port": 17373
   },
   "taskManager": {
-    "enabled": false,
+    "enabled": true,
+    "lifecycle": "managed",
     "pollIntervalMs": 1000,
     "requestTimeoutMs": 5000,
     "eventPageSize": 100,

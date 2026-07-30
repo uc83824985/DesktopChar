@@ -96,7 +96,13 @@
       "additionalProperties": false,
       "properties": {
         "enabled": { "type": "boolean" },
+        "lifecycle": { "enum": ["managed", "external"] },
         "markerPath": { "type": "string", "minLength": 1 },
+        "sessionMonitorMarkerPath": { "type": "string", "minLength": 1 },
+        "stateDirectory": { "type": "string", "minLength": 1 },
+        "startupTimeoutMs": { "type": "integer", "minimum": 500, "maximum": 120000 },
+        "shutdownTimeoutMs": { "type": "integer", "minimum": 500, "maximum": 120000 },
+        "restartOnFailure": { "type": "boolean" },
         "pollIntervalMs": { "type": "integer", "minimum": 250, "maximum": 60000 },
         "requestTimeoutMs": { "type": "integer", "minimum": 100, "maximum": 60000 },
         "eventPageSize": { "type": "integer", "minimum": 1, "maximum": 1000 },

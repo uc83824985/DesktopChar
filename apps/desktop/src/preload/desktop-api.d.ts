@@ -147,6 +147,7 @@ export interface DesktopCharApi {
   cancelRouteDecision(messageId: string, visibleContextRevision: number): void;
   getRouterAgentState(): Promise<RouterAgentState>;
   getTaskManagerState(): Promise<TaskManagerState>;
+  setTaskManagerEnabled(enabled: boolean): Promise<TaskManagerState>;
   submitTaskManagerCommand(command: TaskManagerCommand): Promise<TaskManagerCommandState>;
   getConversationSessionsState(): Promise<ConversationSessionRegistryState>;
   createManagedConversationSession(request: { title?: string }): Promise<ConversationSessionState>;
@@ -266,8 +267,12 @@ export interface TaskManagerEventState {
 
 export interface TaskManagerState {
   enabled: boolean;
+  lifecycle: 'managed' | 'external';
   phase: TaskManagerPhase;
   markerPath: string;
+  sessionMonitorMarkerPath: string | null;
+  processId: number | null;
+  reconnectAttempt: number;
   instanceId: string | null;
   cursor: number;
   pendingAckCount: number;

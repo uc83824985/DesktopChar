@@ -1,4 +1,5 @@
 import { app, BrowserWindow, ipcMain, Menu, nativeImage, net, protocol, screen, Tray } from 'electron';
+import { rm } from 'node:fs/promises';
 import path from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 import {
@@ -20,6 +21,7 @@ import { createNativeCursorRefresh } from './cursor-refresh.mjs';
 import { createNativeWindowPosition } from './native-window-position.mjs';
 import { createNativeWindowTopmost } from './native-window-topmost.mjs';
 import { createMcpServicesController } from './mcp-services-controller.mjs';
+import { startManagedProcess } from './managed-process.mjs';
 import { normalizeDesktopConfig, resolveDesktopConfigPath } from './mcp-services-config.mjs';
 import { createPerformanceModelController } from './performance-model-controller.mjs';
 import { createRouterAgentGateway } from './router-agent.mjs';
@@ -68,6 +70,7 @@ const channels = {
   routerGet: 'router-agent:get-state',
   routerState: 'router-agent:state',
   taskManagerGet: 'task-manager:get-state',
+  taskManagerSetEnabled: 'task-manager:set-enabled',
   taskManagerSubmit: 'task-manager:submit-command',
   taskManagerState: 'task-manager:state',
   conversationSessionsGet: 'conversation-sessions:get-state',
@@ -233,6 +236,32 @@ const mcpServices = createMcpServicesController({
 });
 let conversationSessions;
 const taskManager = createTaskManagerController(desktopConfig.taskManager, {
+  async launchManagedProcess(config) {
+    const ownedMarkerPath = path.resolve(config.stateDirectory, 'task_manager.json');
+    if (path.resolve(config.markerPath) !== ownedMarkerPath) {
+      throw new Error('Managed Task Manager marker is outside its owned state directory');
+    }
+    await rm(config.markerPath, { force: true });
+    await rm(path.join(config.stateDirectory, 'task_manager_token.txt'), { force: true });
+    return startManagedProcess({
+      executable: process.execPath,
+      args: [path.resolve(
+        app.isPackaged ? process.resourcesPath : process.cwd(),
+        'task-manager/server.mjs',
+      )],
+      cwd: app.isPackaged ? process.resourcesPath : process.cwd(),
+      env: {
+        ELECTRON_RUN_AS_NODE: '1',
+        SESSION_MONITOR_MARKER: config.sessionMonitorMarkerPath,
+        DESKTOP_CHAR_TASK_MANAGER_STATE_DIR: config.stateDirectory,
+      },
+    }, {
+      onOutput(stream, chunk) {
+        const output = String(chunk).trimEnd();
+        if (output) safeLog(`[task-manager:${stream}] ${output}`);
+      },
+    });
+  },
   onStateChanged(state) {
     conversationSessions?.syncExternalSessions(state.enabled ? state.sessions : []);
     avatarWindow?.webContents.send(channels.taskManagerState, state);
@@ -855,6 +884,10 @@ function registerIpc() {
   ipcMain.handle(channels.taskManagerGet, event => {
     requireAvatarSender(event);
     return taskManager.snapshot();
+  });
+  ipcMain.handle(channels.taskManagerSetEnabled, (event, enabled) => {
+    requireAvatarSender(event);
+    return taskManager.setEnabled(enabled);
   });
   ipcMain.handle(channels.taskManagerSubmit, async (event, command) => {
     requireAvatarSender(event);

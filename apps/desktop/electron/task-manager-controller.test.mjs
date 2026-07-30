@@ -142,6 +142,60 @@ test('Task Manager controller validates and submits one exact routed command', a
   await controller.close();
 });
 
+test('managed Task Manager starts by default and can be disabled and restarted at runtime', async () => {
+  const client = new FakeClient();
+  const processes = [];
+  const controller = createTaskManagerController({
+    ...config(),
+    lifecycle: 'managed',
+    sessionMonitorMarkerPath: 'C:\\session_monitor.json',
+    stateDirectory: 'C:\\DesktopChar\\task-manager',
+    startupTimeoutMs: 1_000,
+    shutdownTimeoutMs: 1_000,
+    restartOnFailure: true,
+  }, {
+    createClient: () => client,
+    launchManagedProcess: async () => {
+      const exited = Promise.withResolvers();
+      const process = {
+        pid: 1_000 + processes.length,
+        exited: exited.promise,
+        exitInfo: undefined,
+        closeCalls: 0,
+        async close() {
+          this.closeCalls++;
+          const info = { code: 0, signal: null, stdoutTail: '', stderrTail: '' };
+          this.exitInfo = info;
+          exited.resolve(info);
+          return info;
+        },
+      };
+      processes.push(process);
+      return process;
+    },
+  });
+
+  await controller.start();
+  assert.equal(controller.snapshot().phase, 'ready');
+  assert.equal(controller.snapshot().lifecycle, 'managed');
+  assert.equal(controller.snapshot().processId, 1_000);
+  assert.equal(controller.snapshot().sessions.length, 1);
+
+  await controller.setEnabled(false);
+  assert.equal(controller.snapshot().enabled, false);
+  assert.equal(controller.snapshot().phase, 'disabled');
+  assert.equal(controller.snapshot().processId, null);
+  assert.equal(controller.snapshot().sessions.length, 0);
+  assert.equal(processes[0].closeCalls, 1);
+
+  await controller.setEnabled(true);
+  assert.equal(controller.snapshot().enabled, true);
+  assert.equal(controller.snapshot().phase, 'ready');
+  assert.equal(controller.snapshot().processId, 1_001);
+  assert.equal(processes.length, 2);
+  await controller.close();
+});
+
 class FakeClient {
   instanceId = 'instance-a';
   pages = [];

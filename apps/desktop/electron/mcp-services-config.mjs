@@ -1,5 +1,6 @@
 import { watchFile, unwatchFile } from 'node:fs';
 import { readFile } from 'node:fs/promises';
+import os from 'node:os';
 import path from 'node:path';
 
 const AUDIO_FORMATS = new Set(['wav', 'mp3', 'ogg', 'opus', 'pcm_s16le', 'pcm_f32le']);
@@ -150,19 +151,58 @@ export function normalizeDesktopConfig(fileConfig = {}, env = {}, options = {}) 
   const taskManager = optionalRecord(fileConfig.taskManager, 'taskManager');
   assertKnownKeys(
     taskManager,
-    ['enabled', 'markerPath', 'pollIntervalMs', 'requestTimeoutMs', 'eventPageSize', 'maxEvents'],
+    [
+      'enabled', 'lifecycle', 'markerPath', 'sessionMonitorMarkerPath', 'stateDirectory',
+      'startupTimeoutMs', 'shutdownTimeoutMs', 'restartOnFailure', 'pollIntervalMs',
+      'requestTimeoutMs', 'eventPageSize', 'maxEvents',
+    ],
     'taskManager',
   );
+  const configuredTaskManagerMarker =
+    taskManager.markerPath ?? env.DESKTOP_CHAR_TASK_MANAGER_MARKER;
+  const configuredSessionMonitorMarker =
+    taskManager.sessionMonitorMarkerPath ?? env.SESSION_MONITOR_MARKER;
+  const taskManagerLifecycle = taskManagerLifecycleType(
+    taskManager.lifecycle,
+    configuredTaskManagerMarker,
+    configuredSessionMonitorMarker,
+  );
+  const taskManagerStateDirectory = path.resolve(
+    optionalText(
+      taskManager.stateDirectory ?? env.DESKTOP_CHAR_TASK_MANAGER_STATE_DIR,
+      'taskManager.stateDirectory',
+    ) ?? path.join(env.LOCALAPPDATA ?? os.tmpdir(), 'DesktopChar', 'task-manager'),
+  );
+  const managedTaskManagerMarkerPath = path.join(
+    taskManagerStateDirectory,
+    'task_manager.json',
+  );
+  if (
+    taskManagerLifecycle === 'managed'
+    && taskManager.markerPath !== undefined
+    && path.resolve(text(taskManager.markerPath, 'taskManager.markerPath'))
+      !== managedTaskManagerMarkerPath
+  ) {
+    throw new TypeError(
+      'Managed taskManager.markerPath must be stateDirectory/task_manager.json',
+    );
+  }
   const taskManagerMarkerPath = optionalText(
-    taskManager.markerPath ?? env.DESKTOP_CHAR_TASK_MANAGER_MARKER,
+    taskManagerLifecycle === 'managed'
+      ? managedTaskManagerMarkerPath
+      : configuredTaskManagerMarker,
     'taskManager.markerPath',
+  );
+  const sessionMonitorMarkerPath = optionalText(
+    configuredSessionMonitorMarker,
+    'taskManager.sessionMonitorMarkerPath',
   );
   const taskManagerEnabled = boolean(
     taskManager.enabled ?? env.DESKTOP_CHAR_TASK_MANAGER_ENABLED,
-    Boolean(taskManagerMarkerPath),
+    true,
     'taskManager.enabled',
   );
-  if (taskManagerEnabled && !taskManagerMarkerPath) {
+  if (taskManagerEnabled && taskManagerLifecycle === 'external' && !taskManagerMarkerPath) {
     throw new TypeError('Enabled taskManager requires markerPath');
   }
   const characterProfile = optionalRecord(fileConfig.character, 'character');
@@ -367,9 +407,39 @@ export function normalizeDesktopConfig(fileConfig = {}, env = {}, options = {}) 
     },
     taskManager: {
       enabled: taskManagerEnabled,
+      lifecycle: taskManagerLifecycle,
       markerPath: taskManagerMarkerPath
         ? absoluteFilePath(taskManagerMarkerPath, 'taskManager.markerPath')
         : '',
+      sessionMonitorMarkerPath: sessionMonitorMarkerPath
+        ? absoluteFilePath(
+            sessionMonitorMarkerPath,
+            'taskManager.sessionMonitorMarkerPath',
+          )
+        : '',
+      stateDirectory: absoluteDirectoryPath(
+        taskManagerStateDirectory,
+        'taskManager.stateDirectory',
+      ),
+      startupTimeoutMs: boundedInteger(
+        taskManager.startupTimeoutMs,
+        10_000,
+        500,
+        120_000,
+        'taskManager.startupTimeoutMs',
+      ),
+      shutdownTimeoutMs: boundedInteger(
+        taskManager.shutdownTimeoutMs,
+        10_000,
+        500,
+        120_000,
+        'taskManager.shutdownTimeoutMs',
+      ),
+      restartOnFailure: boolean(
+        taskManager.restartOnFailure,
+        true,
+        'taskManager.restartOnFailure',
+      ),
       pollIntervalMs: boundedInteger(
         taskManager.pollIntervalMs,
         1_000,
@@ -882,6 +952,23 @@ function absoluteFilePath(value, label) {
   const result = text(value, label);
   if (!path.isAbsolute(result)) throw new TypeError(`${label} must be an absolute path`);
   return path.resolve(result);
+}
+
+function absoluteDirectoryPath(value, label) {
+  const result = text(value, label);
+  if (!path.isAbsolute(result)) throw new TypeError(`${label} must be an absolute path`);
+  return path.resolve(result);
+}
+
+function taskManagerLifecycleType(value, markerPath, sessionMonitorMarkerPath) {
+  if (value === undefined || value === '') {
+    return markerPath && !sessionMonitorMarkerPath ? 'external' : 'managed';
+  }
+  const result = text(value, 'taskManager.lifecycle');
+  if (result !== 'managed' && result !== 'external') {
+    throw new TypeError('taskManager.lifecycle must be managed or external');
+  }
+  return result;
 }
 
 function defaultCharPromptProfile() {

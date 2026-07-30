@@ -21,6 +21,7 @@ const channels = {
   routerGet: 'router-agent:get-state',
   routerState: 'router-agent:state',
   taskManagerGet: 'task-manager:get-state',
+  taskManagerSetEnabled: 'task-manager:set-enabled',
   taskManagerSubmit: 'task-manager:submit-command',
   taskManagerState: 'task-manager:state',
   conversationSessionsGet: 'conversation-sessions:get-state',
@@ -63,6 +64,8 @@ contextBridge.exposeInMainWorld('desktopChar', {
     ipcRenderer.send(channels.routerCancel, messageId, visibleContextRevision),
   getRouterAgentState: () => ipcRenderer.invoke(channels.routerGet),
   getTaskManagerState: () => ipcRenderer.invoke(channels.taskManagerGet),
+  setTaskManagerEnabled: enabled =>
+    ipcRenderer.invoke(channels.taskManagerSetEnabled, enabled),
   submitTaskManagerCommand: command => ipcRenderer.invoke(channels.taskManagerSubmit, command),
   getConversationSessionsState: () => ipcRenderer.invoke(channels.conversationSessionsGet),
   createManagedConversationSession: request =>
