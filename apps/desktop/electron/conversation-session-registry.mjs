@@ -87,7 +87,7 @@ export function createConversationSessionRegistry(options = {}) {
     return publicSession(session);
   }
 
-  function bindExternalSession(input) {
+  async function bindExternalSession(input) {
     requireOpen();
     if (!record(input)) throw new TypeError('External conversation binding must be an object');
     exactKeys(input, ['sourceSessionId'], 'External conversation binding');
@@ -102,6 +102,10 @@ export function createConversationSessionRegistry(options = {}) {
     const existing = [...sessions.values()].find(
       session => session.ownership === 'external' && session.sourceSessionId === sourceSessionId,
     );
+    if (typeof externalController.watchSession !== 'function') {
+      throw new Error('External conversation controller does not support passive observation');
+    }
+    await externalController.watchSession(sourceSessionId);
     if (existing) return publicSession(existing);
     const timestamp = now();
     const session = {
@@ -130,6 +134,9 @@ export function createConversationSessionRegistry(options = {}) {
     const session = sessions.get(normalizedSessionId);
     if (!session) throw new Error(`Conversation session is not registered: ${normalizedSessionId}`);
     if (session.ownership === 'external') {
+      await Promise.resolve(
+        externalController.unwatchSession?.(session.sourceSessionId),
+      ).catch(() => {});
       sessions.delete(normalizedSessionId);
       publish();
       return { sessionId: normalizedSessionId, action: 'disconnected' };
@@ -296,7 +303,11 @@ export function createConversationSessionRegistry(options = {}) {
     phase = 'closing';
     publish();
     const managed = [...sessions.values()].filter(session => session.ownership === 'managed');
-    await Promise.allSettled(managed.map(session => managedClient.archiveThread(session.threadId)));
+    const external = [...sessions.values()].filter(session => session.ownership === 'external');
+    await Promise.allSettled([
+      ...managed.map(session => managedClient.archiveThread(session.threadId)),
+      ...external.map(session => externalController.unwatchSession?.(session.sourceSessionId)),
+    ]);
     sessions.clear();
     externalCandidates.clear();
     phase = 'closed';

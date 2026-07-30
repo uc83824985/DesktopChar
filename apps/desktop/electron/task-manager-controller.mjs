@@ -26,6 +26,8 @@ export function createTaskManagerController(initialConfig, options = {}) {
   let sessions = [];
   let events = [];
   let pendingAckIds = new Set();
+  const watchedSessionIds = new Set();
+  const remoteWatchedSessionIds = new Set();
   let endpointRevision = 0;
   let phase = config.enabled ? 'standby' : 'disabled';
   let lastError;
@@ -38,6 +40,8 @@ export function createTaskManagerController(initialConfig, options = {}) {
     setEnabled,
     pollNow,
     submitCommand,
+    watchSession,
+    unwatchSession,
     snapshot,
   };
 
@@ -131,6 +135,49 @@ export function createTaskManagerController(initialConfig, options = {}) {
     const result = await client.submitCommand(command);
     void pollNow().catch(() => {});
     return result;
+  }
+
+  function watchSession(sessionId) {
+    const normalizedSessionId = nonEmptyText(sessionId, 'Task Manager watched sessionId');
+    if (closed) throw new Error('Task Manager controller is closed');
+    if (!desiredEnabled()) throw new Error('Task Manager is disabled');
+    watchedSessionIds.add(normalizedSessionId);
+    publish();
+    return enqueue(async () => {
+      try {
+        const operationClient = client ?? createClient(config);
+        client = operationClient;
+        await operationClient.discover();
+        const watch = await operationClient.watchSession(normalizedSessionId);
+        remoteWatchedSessionIds.add(normalizedSessionId);
+        return watch;
+      }
+      catch (error) {
+        watchedSessionIds.delete(normalizedSessionId);
+        remoteWatchedSessionIds.delete(normalizedSessionId);
+        publish();
+        throw error;
+      }
+    });
+  }
+
+  function unwatchSession(sessionId) {
+    const normalizedSessionId = nonEmptyText(sessionId, 'Task Manager watched sessionId');
+    const removed = watchedSessionIds.delete(normalizedSessionId);
+    publish();
+    return enqueue(async () => {
+      const operationClient = client;
+      if (closed || !operationClient || !remoteWatchedSessionIds.has(normalizedSessionId)) {
+        remoteWatchedSessionIds.delete(normalizedSessionId);
+        return { sessionId: normalizedSessionId, removed };
+      }
+      try {
+        return await operationClient.unwatchSession(normalizedSessionId);
+      }
+      finally {
+        remoteWatchedSessionIds.delete(normalizedSessionId);
+      }
+    });
   }
 
   async function reconcile(reason) {
@@ -266,8 +313,10 @@ export function createTaskManagerController(initialConfig, options = {}) {
         instanceId = sourceInstanceId;
         cursor = 0;
         pendingAckIds = new Set();
+        remoteWatchedSessionIds.clear();
       }
-      let degradedError;
+      let degradedError = await syncPassiveWatches(operationClient);
+      if (!currentEndpointOperation(operationRevision, operationClient)) return snapshot();
       await retryAcks(operationClient);
       if (!currentEndpointOperation(operationRevision, operationClient)) return snapshot();
       const nextSessions = (await operationClient.listSessions()).map(normalizeSession);
@@ -321,6 +370,21 @@ export function createTaskManagerController(initialConfig, options = {}) {
     }
   }
 
+  async function syncPassiveWatches(targetClient) {
+    let latestError;
+    for (const sessionId of watchedSessionIds) {
+      if (remoteWatchedSessionIds.has(sessionId)) continue;
+      try {
+        await targetClient.watchSession(sessionId);
+        remoteWatchedSessionIds.add(sessionId);
+      }
+      catch (error) {
+        latestError = `Passive watch ${sessionId}: ${errorMessage(error)}`;
+      }
+    }
+    return latestError;
+  }
+
   function schedule() {
     clearSchedule();
     timer = setInterval(() => {
@@ -340,6 +404,7 @@ export function createTaskManagerController(initialConfig, options = {}) {
     instanceId = undefined;
     cursor = 0;
     pendingAckIds = new Set();
+    remoteWatchedSessionIds.clear();
     sessions = [];
   }
 
@@ -413,6 +478,7 @@ export function createTaskManagerController(initialConfig, options = {}) {
       instanceId: instanceId ?? null,
       cursor,
       pendingAckCount: pendingAckIds.size,
+      watchedSessionCount: watchedSessionIds.size,
       lastPollAtMs: lastPollAtMs ?? null,
       lastError: lastError ?? null,
       sessions: sessions.map(item => ({ ...item })),
@@ -537,7 +603,13 @@ function normalizeEvent(value, instanceId) {
   if (!record(value)) throw new TypeError('Task Manager event must be an object');
   const type = enumText(
     value.type,
-    ['session-changed', 'task-completed', 'task-failed', 'task-unavailable'],
+    [
+      'session-changed',
+      'external-turn-completed',
+      'task-completed',
+      'task-failed',
+      'task-unavailable',
+    ],
     'Task Manager event type',
   );
   return {
@@ -550,6 +622,9 @@ function normalizeEvent(value, instanceId) {
     status: nonEmptyText(value.status, 'Task Manager event status'),
     ...(Number.isInteger(value.submissionGeneration) && value.submissionGeneration > 0
       ? { submissionGeneration: value.submissionGeneration }
+      : {}),
+    ...(Number.isInteger(value.externalTurnSequence) && value.externalTurnSequence > 0
+      ? { externalTurnSequence: value.externalTurnSequence }
       : {}),
     ...(optionalText(value.commandId) ? { commandId: optionalText(value.commandId) } : {}),
     ...(optionalText(value.title) ? { title: boundedTail(value.title, 300) } : {}),

@@ -20,6 +20,9 @@ const instanceId = randomUUID();
 const sessionId = 'session-routing-smoke';
 const registeredSessionId = `external:${sessionId}`;
 const commands = [];
+const watchedSessions = new Set();
+const taskEvents = [];
+const acknowledgedEventIds = [];
 let taskManagerAvailable = true;
 const runtime = {
   getSnapshot() {
@@ -37,11 +40,17 @@ const runtime = {
       lastScreenChangedAtUtc: '2026-07-29T12:00:00Z',
     }];
   },
-  eventsAfter() {
-    return { earliestCursor: 1, latestCursor: 0, gap: false, events: [] };
+  eventsAfter(after, limit) {
+    return {
+      earliestCursor: taskEvents[0]?.cursor ?? taskEvents.length + 1,
+      latestCursor: taskEvents.at(-1)?.cursor ?? 0,
+      gap: false,
+      events: taskEvents.filter(event => event.cursor > after).slice(0, limit),
+    };
   },
   ackEvent(eventId) {
-    throw new Error(`No event should be acknowledged: ${eventId}`);
+    acknowledgedEventIds.push(eventId);
+    return taskEvents.find(event => event.eventId === eventId);
   },
   submitCommand(command) {
     commands.push(structuredClone(command));
@@ -51,6 +60,20 @@ const runtime = {
       status: 'observing',
       createdAtMs: Date.now(),
       submittedAtMs: Date.now(),
+    };
+  },
+  watchSession(watchedSessionId) {
+    watchedSessions.add(watchedSessionId);
+    return {
+      sessionId: watchedSessionId,
+      phase: 'waiting',
+      turnSequence: 0,
+    };
+  },
+  unwatchSession(watchedSessionId) {
+    return {
+      sessionId: watchedSessionId,
+      removed: watchedSessions.delete(watchedSessionId),
     };
   },
 };
@@ -101,6 +124,7 @@ try {
       DESKTOP_CHAR_TASK_MANAGER_MARKER: markerPath,
       DESKTOP_CHAR_TASK_MANAGER_ENABLED: '1',
       DESKTOP_CHAR_ROUTER_SMOKE_KEY: 'foreground-smoke-only',
+      DESKTOP_CHAR_CONVERSATION_PANEL_TEST: '1',
     },
   });
   originalCursorPoint = await application.evaluate(({ screen }) => screen.getCursorScreenPoint());
@@ -117,6 +141,15 @@ try {
       + '[data-task-manager-phase="ready"][data-conversation-external-candidates="1"]'
       + '[data-routing-candidates="0"]',
   ).waitFor({ timeout: 20_000 });
+  await application.evaluate(({ BrowserWindow, screen }) => {
+    const window = BrowserWindow.getAllWindows()[0];
+    if (!window) return;
+    const workArea = screen.getPrimaryDisplay().workArea;
+    window.setPosition(workArea.x + 20, workArea.y + 20, false);
+    window.setAlwaysOnTop(true, 'screen-saver');
+    window.focus();
+  });
+  await page.waitForTimeout(300);
 
   const shellState = await page.evaluate(() => window.desktopChar?.getWindowState());
   if (!shellState) throw new Error('Desktop shell state is unavailable');
@@ -139,6 +172,9 @@ try {
     `body[data-routing-selection="session:${registeredSessionId}"]`
       + '[data-routing-candidates="1"][data-conversation-sessions="1"]',
   ).waitFor({ timeout: 5_000 });
+  if (!watchedSessions.has(sessionId)) {
+    throw new Error('External binding did not establish a passive Task Manager watch');
+  }
   const sessionActionCursors = await page.evaluate(() => ({
     bind: getComputedStyle(document.querySelector('button[data-action="bind-external"]')).cursor,
     close: getComputedStyle(document.querySelector('button[data-action="close-session"]')).cursor,
@@ -390,6 +426,27 @@ try {
       && !state?.sessions.some(session => session.sessionId === managedSessionId);
   }, managedSession.sessionId, { timeout: 20_000 });
 
+  const passiveEventId = 'external-turn-1';
+  taskEvents.push({
+    eventId: passiveEventId,
+    cursor: 1,
+    sessionId,
+    type: 'external-turn-completed',
+    observedAtMs: Date.now(),
+    status: 'completed',
+    externalTurnSequence: 1,
+    title: '路由隔离会话',
+    lastVisibleLine: '手动外部回复已完成',
+    visibleTextTail: '› 手动输入\n\n• 手动外部回复已完成\n\n› ',
+  });
+  await page.waitForFunction(expectedEvent => {
+    return document.body.dataset.taskNotificationEvent === expectedEvent
+      && document.body.dataset.taskNotification === 'completed';
+  }, `${instanceId}:${passiveEventId}`, { timeout: 180_000 });
+  if (!acknowledgedEventIds.includes(passiveEventId)) {
+    throw new Error('Passively observed external Turn was not acknowledged');
+  }
+
   await selector.selectOption('character');
   await page.locator('body[data-routing-selection="character"]').waitFor({ timeout: 5_000 });
   await selector.selectOption(`session:${registeredSessionId}`);
@@ -406,6 +463,9 @@ try {
       )
       && manager?.sessions.some(session => session.sessionId === sourceSessionId);
   }, sessionId, { timeout: 10_000 });
+  if (watchedSessions.has(sessionId)) {
+    throw new Error('Disconnecting the external session kept its passive watch active');
+  }
 
   if (rendererErrors.length) {
     throw new Error(`Foreground routing renderer errors:\n${rendererErrors.join('\n')}`);
@@ -422,13 +482,33 @@ finally {
 }
 
 async function openConversationPanel(page, shellState, pointer) {
+  const panel = page.locator('.scene-interaction-panel');
+  if (await panel.isVisible().catch(() => false)) {
+    const sidebarState = await page.evaluate(() => window.desktopChar?.getWindowState());
+    if (!sidebarState?.conversationSidebar.visible) {
+      throw new Error('Test-opened conversation sidebar did not publish a visible layout');
+    }
+    const panelBounds = await panel.boundingBox();
+    if (panelBounds) {
+      pointer.move({
+        x: sidebarState.bounds.x + panelBounds.x + panelBounds.width / 2,
+        y: sidebarState.bounds.y + panelBounds.y + Math.min(24, panelBounds.height / 2),
+      });
+    }
+    return sidebarState;
+  }
   const bounds = shellState.bounds;
   const avatarViewport = shellState.conversationSidebar.avatarViewport;
-  for (const local of [
-    { x: 230, y: 350 },
-    { x: 230, y: 270 },
-    { x: 230, y: 450 },
-  ]) {
+  const modelX = Number(await page.locator('body').getAttribute('data-model-position-x'));
+  const centerX = Number.isFinite(modelX)
+    ? modelX - avatarViewport.x
+    : avatarViewport.width / 2;
+  const candidates = [0.52, 0.4, 0.64, 0.28, 0.76].flatMap(yRatio =>
+    [0, -0.12, 0.12].map(xOffset => ({
+      x: centerX + avatarViewport.width * xOffset,
+      y: bounds.height * yRatio,
+    })));
+  for (const local of candidates) {
     const absolute = {
       x: bounds.x + avatarViewport.x + local.x,
       y: bounds.y + local.y,
@@ -438,7 +518,6 @@ async function openConversationPanel(page, shellState, pointer) {
     if (await page.locator('body').getAttribute('data-pixel-selection') !== 'covered') continue;
     pointer.click();
     try {
-      const panel = page.locator('.scene-interaction-panel');
       await panel.waitFor({ state: 'visible', timeout: 3_000 });
       const sidebarState = await page.evaluate(() => window.desktopChar?.getWindowState());
       if (!sidebarState?.conversationSidebar.visible) {

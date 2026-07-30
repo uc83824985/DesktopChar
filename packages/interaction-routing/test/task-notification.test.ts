@@ -41,3 +41,16 @@ test('task notification compiler distinguishes unavailable from failed', () => {
     resultArtifactAvailable: false,
   }).fallbackText, '「会话 A」当前不可用。');
 });
+
+test('passively observed external turns reuse the bounded Char notification contract', () => {
+  const compiled = compileTaskNotification({
+    type: 'external-turn-completed',
+    subject: '外部 Codex 对话',
+    status: 'completed',
+    resultArtifactAvailable: false,
+    visibleTextTail: '› 手动请求\n\n• 已完成手动请求\n\n› ',
+  });
+  assert.equal(compiled.fallbackText, '「外部 Codex 对话」有新回复。');
+  assert.match(compiled.focusText, /"notificationType":"external-turn-completed"/);
+  assert.match(compiled.focusText, /已完成手动请求/);
+});

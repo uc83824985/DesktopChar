@@ -75,6 +75,30 @@ export function createTaskManagerClient(options) {
       }
       return structuredClone(payload.command);
     },
+    async watchSession(sessionId, signal) {
+      const normalizedSessionId = nonEmptyText(sessionId, 'Task Manager watched sessionId');
+      const payload = await request(
+        `/watches/${encodeURIComponent(normalizedSessionId)}`,
+        { method: 'PUT' },
+        signal,
+      );
+      if (!record(payload) || payload.ok !== true || !record(payload.watch)) {
+        throw new TaskManagerClientError('invalid-response', 'Task Manager watch response is invalid');
+      }
+      return structuredClone(payload.watch);
+    },
+    async unwatchSession(sessionId, signal) {
+      const normalizedSessionId = nonEmptyText(sessionId, 'Task Manager watched sessionId');
+      const payload = await request(
+        `/watches/${encodeURIComponent(normalizedSessionId)}`,
+        { method: 'DELETE' },
+        signal,
+      );
+      if (!record(payload) || payload.ok !== true || !record(payload.watch)) {
+        throw new TaskManagerClientError('invalid-response', 'Task Manager unwatch response is invalid');
+      }
+      return structuredClone(payload.watch);
+    },
     getDiscovery() {
       return discovery ? publicDiscovery(discovery) : undefined;
     },

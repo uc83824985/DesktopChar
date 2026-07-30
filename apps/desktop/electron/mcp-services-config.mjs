@@ -442,7 +442,7 @@ export function normalizeDesktopConfig(fileConfig = {}, env = {}, options = {}) 
       ),
       pollIntervalMs: boundedInteger(
         taskManager.pollIntervalMs,
-        1_000,
+        250,
         250,
         60_000,
         'taskManager.pollIntervalMs',

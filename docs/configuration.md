@@ -197,7 +197,7 @@ Windows 通常对应 `%APPDATA%/DesktopChar/config.json`。程序只通过 Elect
     "enabled": true,
     "lifecycle": "managed",
     "sessionMonitorMarkerPath": "C:\\WorkAssistant\\session_monitor.json",
-    "pollIntervalMs": 1000,
+    "pollIntervalMs": 250,
     "requestTimeoutMs": 5000,
     "eventPageSize": 100,
     "maxEvents": 200
@@ -267,8 +267,10 @@ Task Manager 领域状态仍是 memory-only；状态目录只保存当前进程�
 `taskManager.sessionMonitorMarkerPath`（或 `SESSION_MONITOR_MARKER`）接收 Session Monitor
 marker，并在 `stateDirectory` 启动/停止 owned 服务；`markerPath` 默认派生为该目录下的
 `task_manager.json`。`external` 模式不持有服务进程，启用时必须显式设置 `markerPath`。
-`pollIntervalMs`、`requestTimeoutMs`、`eventPageSize` 和 `maxEvents` 分别控制轮询、单次请求、
-分页和 main 内存事实上限；`startupTimeoutMs`、`shutdownTimeoutMs` 与
+`pollIntervalMs`（默认 `250` ms）、`requestTimeoutMs`、`eventPageSize` 和 `maxEvents`
+分别控制 DesktopChar 获取事件的轮询、单次请求、分页和 main 内存事实上限；Task Manager
+读取会话状态的实际周期不会快于 Session Monitor marker 声明的 `intervalMs`。
+`startupTimeoutMs`、`shutdownTimeoutMs` 与
 `restartOnFailure` 控制 managed 生命周期。启动脚本也可以用
 `DESKTOP_CHAR_TASK_MANAGER_MARKER` 与 `DESKTOP_CHAR_TASK_MANAGER_ENABLED` 作首次引导，
 加载应用 JSON 后仍以 JSON 所有权为准。DesktopChar 不读取 Session Monitor token，也不把

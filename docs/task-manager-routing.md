@@ -274,6 +274,26 @@ Task Manager 对每个 session 维护命令日志、最新 `submissionGeneration
  -> 以最后一次有界可见文本采样完成最新 generation
 ```
 
+External 会话完成注册时，DesktopChar 还会显式建立一个被动 Turn watch。watch 以绑定时
+的可见文本 hash/revision 为基线，在 Task Manager 进程内维护独立 `turnSequence` 和
+`waiting / active / settling / command` 状态：
+
+```text
+绑定 External session
+ -> 保存当前 hash / revision / visibleText 基线
+ -> 观察到 active 后持续吸收流式变化，不产生完成事件
+ -> active 恢复为 waiting_input 且内容已变化，立即完成一个被动 Turn
+ -> 若轮询跨过了极快的 active，仅在新增文本包含 Codex 请求、回复块和新提示符，
+    并由两个不同 Monitor 快照确认稳定后完成
+ -> 发布一次 external-turn-completed，递增 turnSequence 并重置基线
+```
+
+输入框编辑、重复 Monitor 快照、`idle_unknown` 和流式中间帧不完成被动 Turn。若同一
+External session 的输入来自 DesktopChar TaskCommand，被动 watch 在该 generation
+期间进入 `command` 状态，最终只发布原有 `task-completed`，不会重复发布
+`external-turn-completed`。解绑会撤销 watch；Task Manager 进程重启后 DesktopChar
+按仍保留的 External 注册重新建立基线，不回放重启前的旧文本。
+
 已经处于 `active` 不能单独作为新 generation 已被 CLI 接受的证据；通常必须同时看到
 active 状态以及提交后的新屏幕变化，再等待其恢复并稳定在 `waiting_input`。但快速回复
 可能在两个轮询采样之间完成：对于明确标识为 Codex 的 session，若可见文本在本次提交内容
@@ -295,6 +315,8 @@ GET  /health
 GET  /sessions
 GET  /events?after=<cursor>
 POST /commands
+PUT  /watches/<sessionId>
+DELETE /watches/<sessionId>
 POST /events/<eventId>/ack
 ```
 
@@ -315,6 +337,9 @@ session，并把重启前仍在观察的 submission 视为不可恢复，不补�
   `submit` capability；token 不进入快照、URL或日志；
 - `task-manager-runtime.mjs` 立即提交精确命令；同 session 的新成功提交以递增 generation
   supersede 旧观察，乱序 HTTP 确认也不能把旧 generation 重新设为当前；
+- External 注册通过显式 watch 建立被动 Turn 基线；流式期间保持待响应，恢复
+  `waiting_input` 后发布单个 `external-turn-completed`。watch 维护独立轮次序号，
+  忽略重复快照和输入编辑，并抑制 DesktopChar 自有 command 的重复完成事件；
 - 完成通常先确认目标进入 `active`，再观察提交后的 hash/时间变化，最后连续两次不同
   `lastObservedAtUtc` 的 Monitor 观测得到相同 `waiting_input` 快照；重复读取同一观测不
   增加计数。若轮询漏过 Codex 的快速 `active`，还要求本次提交文本之后存在新回复块；
@@ -323,8 +348,9 @@ session，并把重启前仍在观察的 submission 视为不可恢复，不补�
   命令与事件不跨进程重启恢复；
 - 声明结果文档在提交前校验允许根目录和路径逃逸，在完成时再次校验真实文件；Task Manager
   只回传路径与 `openOnCompletion` 意图，不创建也不打开文件；
-- `http-service.mjs` 仅暴露 `/health`、`/sessions`、`/events`、`/commands` 和
-  `/events/{id}/ack`，除 health 外均需 bearer token，且拒绝非 loopback 绑定。
+- `http-service.mjs` 仅暴露 `/health`、`/sessions`、`/events`、`/commands`、
+  `/watches/{sessionId}` 和 `/events/{id}/ack`，除 health 外均需 bearer token，
+  且拒绝非 loopback 绑定。
 - DesktopChar 默认以 `managed` 生命周期启动该独立子进程，右键“接入服务”可动态关闭和
   重启；关闭会立即从注册表移除未绑定候选，已有 External 注册转为 unavailable，但不会
   关闭或修改源窗口。`external` 生命周期继续兼容预先启动的 Task Manager marker。

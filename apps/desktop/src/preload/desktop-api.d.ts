@@ -252,10 +252,16 @@ export interface TaskManagerEventState {
   eventId: string;
   cursor: number;
   sessionId: string;
-  type: 'session-changed' | 'task-completed' | 'task-failed' | 'task-unavailable';
+  type:
+    | 'session-changed'
+    | 'external-turn-completed'
+    | 'task-completed'
+    | 'task-failed'
+    | 'task-unavailable';
   observedAtMs: number;
   status: string;
   submissionGeneration?: number;
+  externalTurnSequence?: number;
   commandId?: string;
   title?: string;
   lastVisibleLine?: string;
@@ -276,6 +282,7 @@ export interface TaskManagerState {
   instanceId: string | null;
   cursor: number;
   pendingAckCount: number;
+  watchedSessionCount: number;
   lastPollAtMs: number | null;
   lastError: string | null;
   sessions: TaskManagerSessionState[];

@@ -142,6 +142,8 @@ const motionAuditRequested = !desktopShell
   && new URLSearchParams(location.search).get('motionAudit') === '1';
 const expressionFlowAuditRequested =
   new URLSearchParams(location.search).get('expressionFlowAudit') === '1';
+const conversationPanelTestRequested =
+  new URLSearchParams(location.search).get('conversationPanelTest') === '1';
 if (desktopShell) {
   document.documentElement.dataset.shell = 'floating';
   document.body.dataset.shell = 'floating';
@@ -1139,6 +1141,9 @@ try {
   }, { once: true });
 
   document.body.dataset.ready = 'true';
+  if (desktopShell && conversationPanelTestRequested && !interactionPanelHost.isOpen) {
+    openAvatarInteractionPanel('test', undefined);
+  }
 }
 catch (error) {
   const failedSnapshot = {
@@ -2139,6 +2144,7 @@ function isTaskNotificationEvent(
   event: TaskManagerEventState,
 ): event is TaskManagerEventState & { type: TaskNotificationType } {
   return event.type === 'task-completed'
+    || event.type === 'external-turn-completed'
     || event.type === 'task-failed'
     || event.type === 'task-unavailable';
 }
@@ -2162,7 +2168,9 @@ function pumpTaskNotifications(): void {
     compiled.focusText,
     { applicationFallbackText: compiled.fallbackText },
   );
-  const relatedMessageId = latestRoutedMessageIdForSession(event.sessionId);
+  const relatedMessageId = event.type === 'external-turn-completed'
+    ? undefined
+    : latestRoutedMessageIdForSession(event.sessionId);
   const work: TaskNotificationTurn = {
     event,
     ...(relatedMessageId ? { relatedMessageId } : {}),

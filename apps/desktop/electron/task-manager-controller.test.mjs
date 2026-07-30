@@ -8,7 +8,7 @@ test('Task Manager controller stores bounded events before ack and deduplicates 
     earliestCursor: 1,
     latestCursor: 1,
     gap: false,
-    events: [taskEvent(1, 'task-completed')],
+    events: [taskEvent(1, 'external-turn-completed')],
   });
   client.pages.push({
     earliestCursor: 1,
@@ -26,6 +26,8 @@ test('Task Manager controller stores bounded events before ack and deduplicates 
   assert.equal(snapshot.cursor, 1);
   assert.equal(snapshot.pendingAckCount, 0);
   assert.equal(snapshot.events.length, 1);
+  assert.equal(snapshot.events[0].type, 'external-turn-completed');
+  assert.equal(snapshot.events[0].externalTurnSequence, 1);
   assert.equal(snapshot.events[0].visibleTextTail, '完成');
   assert.deepEqual(client.acked, ['event-1']);
   await controller.close();
@@ -142,6 +144,28 @@ test('Task Manager controller validates and submits one exact routed command', a
   await controller.close();
 });
 
+test('passive watches survive Task Manager instance replacement and can be removed', async () => {
+  const client = new FakeClient();
+  const controller = createTaskManagerController(config(), {
+    createClient: () => client,
+  });
+  await controller.pollNow();
+  const watch = await controller.watchSession('session-a');
+  assert.equal(watch.sessionId, 'session-a');
+  assert.equal(controller.snapshot().watchedSessionCount, 1);
+  await controller.pollNow();
+  assert.deepEqual(client.watched, ['session-a']);
+
+  client.instanceId = 'instance-b';
+  await controller.pollNow();
+  assert.deepEqual(client.watched, ['session-a', 'session-a']);
+
+  await controller.unwatchSession('session-a');
+  assert.deepEqual(client.unwatched, ['session-a']);
+  assert.equal(controller.snapshot().watchedSessionCount, 0);
+  await controller.close();
+});
+
 test('managed Task Manager starts by default and can be disabled and restarted at runtime', async () => {
   const client = new FakeClient();
   const processes = [];
@@ -236,6 +260,8 @@ class FakeClient {
   pages = [];
   acked = [];
   commands = [];
+  watched = [];
+  unwatched = [];
   ackFailures = 0;
   pauseFirstSessionList;
   firstSessionListStarted = Promise.withResolvers();
@@ -294,6 +320,16 @@ class FakeClient {
     this.commands.push(structuredClone(command));
     return { ...command, submissionGeneration: 1, status: 'observing' };
   }
+
+  async watchSession(sessionId) {
+    this.watched.push(sessionId);
+    return { sessionId, phase: 'waiting', turnSequence: 0 };
+  }
+
+  async unwatchSession(sessionId) {
+    this.unwatched.push(sessionId);
+    return { sessionId, removed: true };
+  }
 }
 
 function config() {
@@ -314,8 +350,12 @@ function taskEvent(cursor, type) {
     sessionId: 'session-a',
     type,
     observedAtMs: 1_000 + cursor,
-    status: type === 'task-completed' ? 'completed' : 'failed',
-    submissionGeneration: cursor,
+    status: type === 'task-completed' || type === 'external-turn-completed'
+      ? 'completed'
+      : 'failed',
+    ...(type === 'external-turn-completed'
+      ? { externalTurnSequence: cursor }
+      : { submissionGeneration: cursor }),
     title: '测试会话',
     lastVisibleLine: '完成',
     visibleTextTail: '完成',

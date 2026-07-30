@@ -50,7 +50,7 @@
   "taskManager": {
     "enabled": true,
     "lifecycle": "managed",
-    "pollIntervalMs": 1000,
+    "pollIntervalMs": 250,
     "requestTimeoutMs": 5000,
     "eventPageSize": 100,
     "maxEvents": 200

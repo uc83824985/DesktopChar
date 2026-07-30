@@ -4,6 +4,8 @@ import { createConversationSessionRegistry } from './conversation-session-regist
 
 test('external conversation binding registers a discovered window and disconnects without closing it', async () => {
   const externalCommands = [];
+  const watched = [];
+  const unwatched = [];
   let stateChanges = 0;
   const registry = createConversationSessionRegistry({
     managedClient: new FakeManagedClient(),
@@ -11,6 +13,14 @@ test('external conversation binding registers a discovered window and disconnect
       async submitCommand(command) {
         externalCommands.push(structuredClone(command));
         return { ...command, submissionGeneration: 1, status: 'observing' };
+      },
+      async watchSession(sessionId) {
+        watched.push(sessionId);
+        return { sessionId, phase: 'waiting', turnSequence: 0 };
+      },
+      async unwatchSession(sessionId) {
+        unwatched.push(sessionId);
+        return { sessionId, removed: true };
       },
     },
     onStateChanged() {
@@ -22,10 +32,11 @@ test('external conversation binding registers a discovered window and disconnect
   assert.equal(stateChanges, 1);
   assert.equal(registry.snapshot().availableExternalSessions.length, 1);
 
-  const bound = registry.bindExternalSession({ sourceSessionId: 'session-a' });
+  const bound = await registry.bindExternalSession({ sourceSessionId: 'session-a' });
   assert.equal(bound.sessionId, 'external:session-a');
   assert.equal(bound.ownership, 'external');
   assert.equal(registry.snapshot().availableExternalSessions.length, 0);
+  assert.deepEqual(watched, ['session-a']);
 
   const submitted = await registry.submitCommand(command(bound.sessionId, '立即补充说明'));
   assert.equal(submitted.sessionId, bound.sessionId);
@@ -34,6 +45,7 @@ test('external conversation binding registers a discovered window and disconnect
 
   const closed = await registry.closeSession(bound.sessionId);
   assert.deepEqual(closed, { sessionId: bound.sessionId, action: 'disconnected' });
+  assert.deepEqual(unwatched, ['session-a']);
   assert.equal(registry.snapshot().sessions.length, 0);
   assert.equal(registry.snapshot().availableExternalSessions.length, 1);
   await registry.close();
@@ -90,10 +102,14 @@ test('managed conversation owns one persistent thread, steers active work, and a
 test('a missing external window remains registered as unavailable until the user disconnects it', async () => {
   const registry = createConversationSessionRegistry({
     managedClient: new FakeManagedClient(),
-    externalController: { submitCommand: async () => assert.fail('submit is unexpected') },
+    externalController: {
+      submitCommand: async () => assert.fail('submit is unexpected'),
+      watchSession: async sessionId => ({ sessionId }),
+      unwatchSession: async sessionId => ({ sessionId, removed: true }),
+    },
   });
   registry.syncExternalSessions([externalSession('session-a', '会话 A')]);
-  const bound = registry.bindExternalSession({ sourceSessionId: 'session-a' });
+  const bound = await registry.bindExternalSession({ sourceSessionId: 'session-a' });
   registry.syncExternalSessions([], {
     unavailableReason: 'Task Manager connection was interrupted',
   });

@@ -45,6 +45,8 @@ const rendererRoot = path.resolve(directory, '../dist');
 const devUrl = parseLoopbackDevUrl(process.env.DESKTOP_CHAR_DEV_URL);
 const expressionFlowAuditRequested =
   process.env.DESKTOP_CHAR_EXPRESSION_FLOW_AUDIT === '1';
+const conversationPanelTestRequested =
+  process.env.DESKTOP_CHAR_CONVERSATION_PANEL_TEST === '1';
 const packagedConfigPath = app.isPackaged ? path.join(app.getPath('userData'), 'config.json') : undefined;
 const packagedExampleConfigPath = app.isPackaged
   ? path.join(process.resourcesPath, 'desktop-char.config.example.json')
@@ -502,6 +504,7 @@ function createAvatarWindow() {
   }
   const rendererUrl = new URL(devUrl ?? 'desktop-char://app/');
   if (expressionFlowAuditRequested) rendererUrl.searchParams.set('expressionFlowAudit', '1');
+  if (conversationPanelTestRequested) rendererUrl.searchParams.set('conversationPanelTest', '1');
   void avatarWindow.loadURL(rendererUrl.href);
 
   cursorTimer = setInterval(() => {
