@@ -133,8 +133,9 @@ type ConversationSession =
 - “新建”调用同一个 managed Codex App Server 的稳定 `thread/start`，但创建
   `ephemeral: false` 的持久 thread；后续显式选择该 Session 时一直向同一 thread 发送
   `turn/start`，活动 Turn 中的新补充使用 `turn/steer`。App Server 子进程使用
-  `windowsHide: true` 和管道 stdio，不创建 Electron/CLI 对话窗口；用户只在 DesktopChar
-  自身对话面板中管理它。
+  管道 stdio；Windows 可配置 WorkAssistant `start_openai_codex` 入口作为启动 Profile，
+  DesktopChar 从其同目录配置解析命令，不直接解析或绑定原生 `codex.exe`，也不再请求隐藏
+  子进程。用户仍只在 DesktopChar 自身对话面板中管理逻辑 Session。
 - “绑定”只从 Session Monitor/Task Manager 已发现且尚未注册的窗口列表中选择，以稳定
   `sourceSessionId` 建立 External 注册。首版不猜测当前前台窗口，也不依赖窗口激活顺序；
   标题、工作目录和启发式状态只用于帮助用户识别候选。

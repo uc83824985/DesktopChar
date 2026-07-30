@@ -76,8 +76,8 @@ Persona 改变、明确取消、generation 变化或 deadline 到期才硬拒绝
 
 当前桌面端按 `agentRoles.char.maxConcurrency` 注册 1–8 个容量均为 1 的逻辑 endpoint，
 默认 `char-worker-1`、`char-worker-2`。所有
-endpoint 通过 Electron main 共享一个隐藏的官方
-`codex app-server` 进程，不为每个助手或每个 Turn 启动 CLI/窗口。每次回复请求在该
+endpoint 通过 Electron main 共享一个官方
+`codex app-server` 进程，不为每个助手或每个 Turn 启动独立 CLI。每次回复请求在该
 进程内建立独立 ephemeral thread，并通过 `turn/start` 的 JSON `outputSchema` 得到结构化
 回复；应用的 ConversationLedger 仍是规范上下文。
 
@@ -124,15 +124,17 @@ Electron 集成使用 stdio JSONL：
 
 ```text
 DesktopChar main
-  └─ codex app-server --listen stdio://       # 一个隐藏进程
+  └─ codex app-server --listen stdio://       # 一个共享进程
        ├─ ephemeral thread: char-worker-1 / Turn N
        └─ ephemeral thread: char-worker-2 / Turn N+1
 ```
 
 每个 thread/turn 均设置 `approvalPolicy: never` 和只读 sandbox；窗口关闭时 main 先
-Abort 活跃 Turn，再统一关闭 App Server。Windows 下启动 npm 安装的 `codex.js` 时显式
-设置 `ELECTRON_RUN_AS_NODE=1`，避免把 Electron 的 `process.execPath` 当成 Node 后新建
-前台窗口。
+Abort 活跃 Turn，再统一关闭 App Server。Windows 下可通过
+`agentProviders.<name>.launcherScript` 指向 WorkAssistant 的
+`start_openai_codex.bat`：适配器读取该启动入口同目录的 UTF-8 `config.json`，
+沿用其中的 `command/args` 启动 App Server，不直接解析原生 `codex.exe`，且不请求隐藏
+子进程。
 
 `agentRoles.char.maxConcurrency` 是整数并发上限，不是 checkbox。旧
 `conversation.maxAssistants` 不作为兼容别名；schema、示例配置、快照、UI 和测试均已同步
@@ -140,7 +142,7 @@ Abort 活跃 Turn，再统一关闭 App Server。Windows 下启动 npm 安装的
 增减逻辑 endpoint，不中断现有 Turn。
 
 当前生产 Char Provider 只有 `managed`：DesktopChar 只拥有一个 Codex App Server，
-所有逻辑 Char worker 共享该隐藏进程，并以独立 ephemeral thread 隔离每次任务。此前探索的
+所有逻辑 Char worker 共享该进程，并以独立 ephemeral thread 隔离每次任务。此前探索的
 External Reply Agent 注册、租约和 callback 数据面不再保留；它既会增加生命周期与鉴权
 复杂度，也不能比 App Server 更好地满足“受控多次对话请求”。
 
@@ -242,8 +244,8 @@ MCP 契约测试
   先返回；后续 Turn 的 speech/
   performance 准备立即启动，但 commit 保持 blocked，最终提交和 Presentation 顺序均为
   `0 -> 1`。
-- 官方 Codex App Server 验收由一个隐藏进程同时处理两个 ephemeral thread，分别返回
-  “助手一就绪”和“助手二就绪”；不会创建新的 Electron/CLI 前台窗口。
+- 官方 Codex App Server 验收由一个共享进程同时处理两个 ephemeral thread，分别返回
+  “助手一就绪”和“助手二就绪”。
 - 浏览器前台专用回归已验证“后一 Turn 先准备、前一 Turn 先播放”，并验证角色对话/
   资源调试分类切换、Enter 换行/Ctrl+Enter 发送，以及用户向上滚动后不被强制置底；
   真实桌面端通过相同 Renderer UI 改由 Electron IPC 调用单个 Codex App Server。
