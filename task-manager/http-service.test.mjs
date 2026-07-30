@@ -4,6 +4,7 @@ import { createTaskManagerHttpService } from './http-service.mjs';
 
 test('Task Manager HTTP service exposes only authenticated narrow domain endpoints', async () => {
   const calls = [];
+  const watches = [];
   const runtime = {
     getSnapshot: () => ({
       phase: 'running',
@@ -21,6 +22,14 @@ test('Task Manager HTTP service exposes only authenticated narrow domain endpoin
     async submitCommand(command) {
       calls.push(command);
       return { ...command, submissionGeneration: 1, status: 'observing' };
+    },
+    async watchSession(sessionId) {
+      watches.push(['watch', sessionId]);
+      return { sessionId, phase: 'waiting', turnSequence: 0 };
+    },
+    unwatchSession(sessionId) {
+      watches.push(['unwatch', sessionId]);
+      return { sessionId, removed: true };
     },
     ackEvent(eventId) {
       return { eventId, cursor: 3, acknowledgedAtMs: 2_000 };
@@ -74,6 +83,28 @@ test('Task Manager HTTP service exposes only authenticated narrow domain endpoin
     assert.equal(submitted.status, 202);
     assert.equal((await submitted.json()).command.status, 'observing');
     assert.deepEqual(calls, [command]);
+
+    const watched = await fetch(`${address.baseUrl}/watches/session-a`, {
+      method: 'PUT',
+      headers,
+    });
+    assert.deepEqual((await watched.json()).watch, {
+      sessionId: 'session-a',
+      phase: 'waiting',
+      turnSequence: 0,
+    });
+    const unwatched = await fetch(`${address.baseUrl}/watches/session-a`, {
+      method: 'DELETE',
+      headers,
+    });
+    assert.deepEqual((await unwatched.json()).watch, {
+      sessionId: 'session-a',
+      removed: true,
+    });
+    assert.deepEqual(watches, [
+      ['watch', 'session-a'],
+      ['unwatch', 'session-a'],
+    ]);
 
     const ack = await fetch(`${address.baseUrl}/events/event-3/ack`, {
       method: 'POST',

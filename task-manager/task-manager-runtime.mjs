@@ -36,6 +36,7 @@ export function createTaskManagerRuntime(options) {
   const sessionFacts = new Map();
   const generations = new Map();
   const observations = new Map();
+  const passiveWatches = new Map();
   const commands = new Map();
   const commandOrder = [];
   const events = [];
@@ -52,6 +53,8 @@ export function createTaskManagerRuntime(options) {
     close,
     pollOnce,
     submitCommand,
+    watchSession,
+    unwatchSession,
     listSessions,
     eventsAfter,
     ackEvent,
@@ -153,11 +156,14 @@ export function createTaskManagerRuntime(options) {
       return cloneCommand(record);
     }
 
+    const passiveWatch = passiveWatches.get(command.sessionId);
+    if (passiveWatch) suspendPassiveWatch(passiveWatch);
     let submission;
     try {
       submission = await monitor.submitInput(command.sessionId, command.text);
     }
     catch (error) {
+      if (passiveWatch) resetPassiveWatch(passiveWatch, detail);
       record.status = 'failed';
       record.completedAtMs = now();
       record.error = errorMessage(error);
@@ -193,6 +199,38 @@ export function createTaskManagerRuntime(options) {
     });
     sessionFacts.set(command.sessionId, sessionFingerprint(detail));
     return cloneCommand(record);
+  }
+
+  async function watchSession(sessionId) {
+    ensureOpen();
+    const normalizedSessionId = nonEmptyText(sessionId, 'watched sessionId');
+    const existing = passiveWatches.get(normalizedSessionId);
+    if (existing) return publicPassiveWatch(existing);
+    let detail;
+    try {
+      detail = normalizeSession(await monitor.getSession(normalizedSessionId));
+    }
+    catch (error) {
+      throw new TaskManagerError(
+        'session-unavailable',
+        `Cannot watch unavailable session ${normalizedSessionId}`,
+        { cause: error },
+      );
+    }
+    sessions.set(detail.sessionId, detail);
+    sessionFacts.set(detail.sessionId, sessionFingerprint(detail));
+    const watch = createPassiveWatch(detail);
+    passiveWatches.set(detail.sessionId, watch);
+    return publicPassiveWatch(watch);
+  }
+
+  function unwatchSession(sessionId) {
+    ensureOpen();
+    const normalizedSessionId = nonEmptyText(sessionId, 'watched sessionId');
+    return {
+      sessionId: normalizedSessionId,
+      removed: passiveWatches.delete(normalizedSessionId),
+    };
   }
 
   function listSessions() {
@@ -236,6 +274,8 @@ export function createTaskManagerRuntime(options) {
       latestCursor: cursor,
       sessionCount: sessions.size,
       activeObservationCount: observations.size,
+      passiveWatchCount: passiveWatches.size,
+      passiveWatches: [...passiveWatches.values()].map(publicPassiveWatch),
       sessions: listSessions(),
       commands: commandOrder.map(commandId => cloneCommand(commands.get(commandId))),
     };
@@ -245,6 +285,7 @@ export function createTaskManagerRuntime(options) {
     const previousFingerprint = sessionFacts.get(session.sessionId);
     const nextFingerprint = sessionFingerprint(session);
     const observation = observations.get(session.sessionId);
+    const passiveWatch = passiveWatches.get(session.sessionId);
     if (observation) {
       if (session.state !== 'running') {
         await settleUnavailable(observation, `Session became ${session.state}`, session);
@@ -252,6 +293,19 @@ export function createTaskManagerRuntime(options) {
       else {
         await advanceObservation(observation, session);
       }
+      if (passiveWatch) {
+        if (observations.has(session.sessionId)) {
+          suspendPassiveWatch(passiveWatch);
+        }
+        else {
+          resetPassiveWatch(passiveWatch, session);
+        }
+      }
+      sessionFacts.set(session.sessionId, nextFingerprint);
+      return;
+    }
+    if (passiveWatch) {
+      advancePassiveWatch(passiveWatch, session);
       sessionFacts.set(session.sessionId, nextFingerprint);
       return;
     }
@@ -352,6 +406,96 @@ export function createTaskManagerRuntime(options) {
     };
     emitTaskEvent('task-completed', command, session, 'completed');
     observations.delete(observation.sessionId);
+  }
+
+  function advancePassiveWatch(watch, session) {
+    if (session.state !== 'running' || session.monitorState !== 'observed') {
+      resetPassiveWatch(watch, session, 'baseline');
+      return;
+    }
+    if (watch.phase === 'baseline' || watch.phase === 'command') {
+      resetPassiveWatch(watch, session);
+      return;
+    }
+
+    const changed = changedAfterPassiveBaseline(watch, session);
+    if (session.agentState === 'active') {
+      watch.phase = 'active';
+      watch.observedActive = true;
+      watch.observedChange ||= changed;
+      clearPassiveWaiting(watch);
+      return;
+    }
+    if (session.agentState !== 'waiting_input') {
+      if (changed) {
+        watch.observedChange = true;
+        if (watch.phase === 'waiting') watch.phase = 'settling';
+      }
+      clearPassiveWaiting(watch);
+      return;
+    }
+
+    watch.observedChange ||= changed;
+    if (!watch.observedChange) {
+      resetPassiveWatch(watch, session);
+      return;
+    }
+    if (watch.observedActive) {
+      completePassiveTurn(watch, session);
+      return;
+    }
+    watch.phase = 'settling';
+    if (!hasFastPassiveCompletionEvidence(watch, session)) {
+      clearPassiveWaiting(watch);
+      return;
+    }
+    if (!countStablePassiveWaiting(watch, session)) return;
+    completePassiveTurn(watch, session);
+  }
+
+  function completePassiveTurn(watch, session) {
+    watch.turnSequence++;
+    appendEvent({
+      sessionId: session.sessionId,
+      type: 'external-turn-completed',
+      observedAtMs: now(),
+      status: 'completed',
+      externalTurnSequence: watch.turnSequence,
+      sourceHash: session.lastVisibleTextHash,
+      sourceRevision: session.lastScreenChangedAtUtc,
+      ...(session.title ? { title: session.title } : {}),
+      ...(session.lastVisibleNonEmptyLine
+        ? { lastVisibleLine: boundedTail(session.lastVisibleNonEmptyLine, 500) }
+        : {}),
+      ...(session.lastVisibleText
+        ? { visibleTextTail: boundedTail(session.lastVisibleText, maxVisibleTextTailChars) }
+        : {}),
+    });
+    resetPassiveWatch(watch, session);
+  }
+
+  function countStablePassiveWaiting(watch, session) {
+    const waitingFingerprint = [
+      session.lastVisibleTextHash ?? '',
+      session.lastScreenChangedAtUtc ?? '',
+      session.agentState,
+    ].join('|');
+    if (
+      session.lastObservedAtUtc
+      && watch.lastWaitingObservedAtUtc
+      && compareUtc(session.lastObservedAtUtc, watch.lastWaitingObservedAtUtc) <= 0
+    ) {
+      return false;
+    }
+    watch.lastWaitingObservedAtUtc = session.lastObservedAtUtc;
+    if (watch.lastWaitingFingerprint === waitingFingerprint) {
+      watch.stableWaitingCount++;
+    }
+    else {
+      watch.lastWaitingFingerprint = waitingFingerprint;
+      watch.stableWaitingCount = 1;
+    }
+    return watch.stableWaitingCount >= stableWaitingPolls;
   }
 
   async function settleUnavailable(observation, reason, session = sessions.get(observation.sessionId)) {
@@ -545,6 +689,60 @@ export function createTaskManagerRuntime(options) {
     }
   }
 
+  function createPassiveWatch(session) {
+    const watch = {
+      sessionId: session.sessionId,
+      phase: 'baseline',
+      turnSequence: 0,
+      baselineSourceHash: undefined,
+      baselineSourceRevision: undefined,
+      baselineVisibleText: '',
+      observedActive: false,
+      observedChange: false,
+      stableWaitingCount: 0,
+      lastWaitingFingerprint: undefined,
+      lastWaitingObservedAtUtc: undefined,
+    };
+    resetPassiveWatch(watch, session);
+    return watch;
+  }
+
+  function resetPassiveWatch(watch, session, forcedPhase) {
+    watch.phase = forcedPhase
+      ?? (session.state === 'running' && session.monitorState === 'observed'
+        ? session.agentState === 'active' ? 'active' : 'waiting'
+        : 'baseline');
+    watch.baselineSourceHash = session.lastVisibleTextHash;
+    watch.baselineSourceRevision = session.lastScreenChangedAtUtc;
+    watch.baselineVisibleText = boundedTail(session.lastVisibleText ?? '', 4_000);
+    watch.observedActive = watch.phase === 'active';
+    watch.observedChange = false;
+    clearPassiveWaiting(watch);
+  }
+
+  function suspendPassiveWatch(watch) {
+    watch.phase = 'command';
+    watch.observedActive = false;
+    watch.observedChange = false;
+    clearPassiveWaiting(watch);
+  }
+
+  function clearPassiveWaiting(watch) {
+    watch.stableWaitingCount = 0;
+    watch.lastWaitingFingerprint = undefined;
+    watch.lastWaitingObservedAtUtc = undefined;
+  }
+
+  function publicPassiveWatch(watch) {
+    return {
+      sessionId: watch.sessionId,
+      phase: watch.phase,
+      turnSequence: watch.turnSequence,
+      sourceHash: watch.baselineSourceHash ?? null,
+      sourceRevision: watch.baselineSourceRevision ?? null,
+    };
+  }
+
   function ensureOpen() {
     if (closed) throw new TaskManagerError('closed', 'Task Manager is closed');
   }
@@ -590,6 +788,38 @@ function changedAfterSubmission(observation, session) {
     && session.lastVisibleTextHash !== observation.beforeVisibleTextHash
   ) return true;
   return compareUtc(session.lastScreenChangedAtUtc, observation.beforeScreenChangedAtUtc) > 0;
+}
+
+function changedAfterPassiveBaseline(watch, session) {
+  if (session.lastVisibleTextHash) {
+    return session.lastVisibleTextHash !== watch.baselineSourceHash;
+  }
+  return compareUtc(session.lastScreenChangedAtUtc, watch.baselineSourceRevision) > 0;
+}
+
+function hasFastPassiveCompletionEvidence(watch, session) {
+  if (session.agent?.toLocaleLowerCase('en-US') !== 'codex') return false;
+  const current = boundedTail(session.lastVisibleText ?? '', 4_000);
+  if (!current || !watch.baselineVisibleText) return false;
+  const appended = appendedVisibleText(watch.baselineVisibleText, current);
+  if (!appended || appended.overlapLength === 0) return false;
+  const baselineLastLine = watch.baselineVisibleText.split(/\r?\n/u).at(-1) ?? '';
+  const candidate = `${baselineLastLine}${appended.text}`;
+  return /(?:^|\n)\s*[›>]\s+\S[\s\S]*?(?:^|\n)\s*[•●]\s+\S[\s\S]*?(?:^|\n)\s*[›>]\s*$/u
+    .test(candidate);
+}
+
+function appendedVisibleText(previous, current) {
+  const maximum = Math.min(previous.length, current.length, 2_000);
+  for (let length = maximum; length > 0; length--) {
+    if (previous.endsWith(current.slice(0, length))) {
+      return {
+        overlapLength: length,
+        text: current.slice(length),
+      };
+    }
+  }
+  return { overlapLength: 0, text: current };
 }
 
 function hasFastCodexCompletionEvidence(commandText, session) {

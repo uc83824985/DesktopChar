@@ -75,6 +75,16 @@ export function createTaskManagerHttpService(options) {
       const command = await readJsonBody(request, maxBodyBytes);
       return sendJson(response, 202, { ok: true, command: await runtime.submitCommand(command) });
     }
+    const watchMatch = /^\/watches\/([^/]+)$/.exec(url.pathname);
+    if (request.method === 'PUT' && watchMatch) {
+      await readJsonBody(request, maxBodyBytes, true);
+      const watch = await runtime.watchSession(decodeURIComponent(watchMatch[1]));
+      return sendJson(response, 200, { ok: true, watch });
+    }
+    if (request.method === 'DELETE' && watchMatch) {
+      const watch = runtime.unwatchSession(decodeURIComponent(watchMatch[1]));
+      return sendJson(response, 200, { ok: true, watch });
+    }
     const ackMatch = /^\/events\/([^/]+)\/ack$/.exec(url.pathname);
     if (request.method === 'POST' && ackMatch) {
       await readJsonBody(request, maxBodyBytes, true);
@@ -140,6 +150,8 @@ function sendError(response, error) {
   if (error instanceof TaskManagerError) {
     const status = error.code === 'event-not-found'
       ? 404
+      : error.code === 'session-unavailable'
+        ? 404
       : error.code === 'idempotency-conflict'
         ? 409
         : error.code === 'closed'

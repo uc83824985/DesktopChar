@@ -267,6 +267,175 @@ test('session changes emit deduplicated bounded facts with cursor and ack', asyn
   assert.equal(runtime.ackEvent('event-1').acknowledgedAtMs, 7_000);
 });
 
+test('passive watch emits one completion after a streaming external turn returns to input', async () => {
+  const monitor = new FakeMonitor(session({
+    agentState: 'waiting_input',
+    hash: 'A',
+    changed: 1,
+    text: '• 上一轮\n\n› ',
+  }));
+  const runtime = createTaskManagerRuntime({
+    monitor,
+    idFactory: cursor => `event-${cursor}`,
+    now: () => 8_000,
+  });
+  await runtime.pollOnce();
+  assert.deepEqual(await runtime.watchSession('session-a'), {
+    sessionId: 'session-a',
+    phase: 'waiting',
+    turnSequence: 0,
+    sourceHash: 'A',
+    sourceRevision: '2026-07-29T10:00:01Z',
+  });
+
+  monitor.current = session({
+    agentState: 'active',
+    hash: 'B',
+    changed: 2,
+    text: '• 上一轮\n\n› 手动请求\n\n• 流式',
+  });
+  await runtime.pollOnce();
+  monitor.current = session({
+    agentState: 'active',
+    hash: 'C',
+    changed: 3,
+    text: '• 上一轮\n\n› 手动请求\n\n• 流式结果尚未结束',
+  });
+  await runtime.pollOnce();
+  assert.equal(runtime.eventsAfter().events.length, 0);
+
+  monitor.current = session({
+    agentState: 'waiting_input',
+    hash: 'D',
+    changed: 4,
+    text: '• 上一轮\n\n› 手动请求\n\n• 完整结果\n\n› ',
+  });
+  await runtime.pollOnce();
+  await runtime.pollOnce();
+  const firstTurn = runtime.eventsAfter().events;
+  assert.equal(firstTurn.length, 1);
+  assert.equal(firstTurn[0].type, 'external-turn-completed');
+  assert.equal(firstTurn[0].externalTurnSequence, 1);
+  assert.equal(firstTurn[0].visibleTextTail, '• 上一轮\n\n› 手动请求\n\n• 完整结果\n\n› ');
+
+  monitor.current = session({
+    agentState: 'active',
+    hash: 'E',
+    changed: 5,
+    text: '› 第二轮\n\n• 处理中',
+  });
+  await runtime.pollOnce();
+  monitor.current = session({
+    agentState: 'waiting_input',
+    hash: 'F',
+    changed: 6,
+    text: '› 第二轮\n\n• 第二轮结果\n\n› ',
+  });
+  await runtime.pollOnce();
+  const turns = runtime.eventsAfter().events;
+  assert.deepEqual(
+    turns.map(event => [event.type, event.externalTurnSequence]),
+    [
+      ['external-turn-completed', 1],
+      ['external-turn-completed', 2],
+    ],
+  );
+});
+
+test('passive watch conservatively recovers a fast Codex turn missed between polls', async () => {
+  const monitor = new FakeMonitor(session({
+    agentState: 'waiting_input',
+    hash: 'A',
+    changed: 1,
+    text: '• 旧结果\n\n› ',
+  }));
+  const runtime = createTaskManagerRuntime({ monitor });
+  await runtime.pollOnce();
+  await runtime.watchSession('session-a');
+
+  monitor.current = session({
+    agentState: 'waiting_input',
+    hash: 'B',
+    changed: 2,
+    observed: 2,
+    text: '• 旧结果\n\n› 快速请求\n\n• 快速结果\n\n› ',
+  });
+  await runtime.pollOnce();
+  await runtime.pollOnce();
+  assert.equal(runtime.eventsAfter().events.length, 0);
+  monitor.current = session({
+    agentState: 'waiting_input',
+    hash: 'B',
+    changed: 2,
+    observed: 3,
+    text: '• 旧结果\n\n› 快速请求\n\n• 快速结果\n\n› ',
+  });
+  await runtime.pollOnce();
+  assert.equal(runtime.eventsAfter().events[0].type, 'external-turn-completed');
+});
+
+test('passive watch ignores waiting-input edits and suppresses command-owned turns', async () => {
+  const monitor = new FakeMonitor(session({
+    agentState: 'waiting_input',
+    hash: 'A',
+    changed: 1,
+    text: '› ',
+  }));
+  const runtime = createTaskManagerRuntime({ monitor });
+  await runtime.pollOnce();
+  await runtime.watchSession('session-a');
+
+  monitor.current = session({
+    agentState: 'waiting_input',
+    hash: 'B',
+    changed: 2,
+    observed: 2,
+    text: '› 尚未提交',
+  });
+  await runtime.pollOnce();
+  monitor.current = session({
+    agentState: 'waiting_input',
+    hash: 'B',
+    changed: 2,
+    observed: 3,
+    text: '› 尚未提交',
+  });
+  await runtime.pollOnce();
+  assert.equal(runtime.eventsAfter().events.length, 0);
+
+  await runtime.submitCommand(command('owned-command', '由 DesktopChar 提交'));
+  monitor.current = session({
+    agentState: 'active',
+    hash: 'C',
+    changed: 3,
+    text: '› 由 DesktopChar 提交\n\n• 处理中',
+  });
+  await runtime.pollOnce();
+  monitor.current = session({
+    agentState: 'waiting_input',
+    hash: 'D',
+    changed: 4,
+    observed: 4,
+    text: '› 由 DesktopChar 提交\n\n• 已完成\n\n› ',
+  });
+  await runtime.pollOnce();
+  monitor.current = session({
+    agentState: 'waiting_input',
+    hash: 'D',
+    changed: 4,
+    observed: 5,
+    text: '› 由 DesktopChar 提交\n\n• 已完成\n\n› ',
+  });
+  await runtime.pollOnce();
+  assert.deepEqual(
+    runtime.eventsAfter().events.map(event => event.type),
+    ['task-completed'],
+  );
+
+  assert.equal(runtime.unwatchSession('session-a').removed, true);
+  assert.equal(runtime.getSnapshot().passiveWatchCount, 0);
+});
+
 test('declared result artifact is validated before submit and again at completion', async () => {
   const temporaryDirectory = await mkdtemp(path.join(os.tmpdir(), 'desktop-char-task-artifact-'));
   const resultPath = path.join(temporaryDirectory, 'result.md');
