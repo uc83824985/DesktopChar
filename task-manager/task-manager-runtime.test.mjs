@@ -61,6 +61,41 @@ test('command idempotency prevents repeated input and conflicts fail closed', as
   assert.equal(monitor.submissions.length, 1);
 });
 
+test('waiting-input editor changes never masquerade as task completion', async () => {
+  const monitor = new FakeMonitor(
+    session({ agentState: 'waiting_input', hash: 'A', changed: 1, text: '> ' }),
+  );
+  let now = 1_000;
+  const runtime = createTaskManagerRuntime({
+    monitor,
+    now: () => now,
+    activationTimeoutMs: 5_000,
+  });
+  await runtime.pollOnce();
+  const submitted = await runtime.submitCommand(
+    command('editor-only-command', '这段文字只进入了输入框'),
+  );
+  assert.equal(submitted.status, 'observing');
+
+  monitor.current = session({
+    agentState: 'waiting_input',
+    hash: 'B',
+    changed: 2,
+    text: '> 这段文字只进入了输入框',
+  });
+  await runtime.pollOnce();
+  await runtime.pollOnce();
+  assert.equal(runtime.eventsAfter().events.length, 0);
+  assert.equal(runtime.getSnapshot().activeObservationCount, 1);
+
+  now = 6_001;
+  await runtime.pollOnce();
+  const [failed] = runtime.eventsAfter().events;
+  assert.equal(failed.type, 'task-failed');
+  assert.match(failed.error, /did not enter active state/);
+  assert.equal(runtime.getSnapshot().commands[0].status, 'failed');
+});
+
 test('out-of-order submit acknowledgements cannot replace the latest generation observer', async () => {
   const monitor = new DeferredSubmitMonitor(
     session({ agentState: 'active', hash: 'A', changed: 1 }),

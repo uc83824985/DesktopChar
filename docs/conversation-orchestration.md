@@ -764,8 +764,11 @@ Router 与 Task Manager 实现前已经定案：
 Manager 持久化也不阻塞跑通：首版仅保证单进程生命周期内的 cursor/ack、submission
 generation 和命令幂等，跨重启恢复与持久化格式标记为后续待设计。
 
-仍需通过实际目标 CLI 验证 Session Monitor 在 `active` 状态下调用 `/input` 究竟表示运行中
-补充还是下一轮排队，并确认现有提示符启发式是否足以判断最后一次 submission 完成。这是
-实现验收项，不再阻塞领域接口和模块拆分。
+2026-07-30 的 Codex CLI 实机测试确认，Session Monitor 的 `submitted: true` 仅表示控制台
+输入事件已写入：一次测试中正文进入了输入编辑框，但目标没有进入 `active`，Enter 也没有
+实际触发提交。Task Manager 因此必须先观察 `active`，再观察屏幕变化和稳定恢复到
+`waiting_input`，否则在激活超时后报告失败，不能发布虚假的完成通知或自动重试。
+Session Monitor 的 Enter 提交可靠性仍需在 WorkAssistant 侧修复；active 状态下 `/input`
+究竟表示运行中补充还是下一轮排队，也继续作为目标 CLI 的实机验收项。
 
 在这些策略确定前，不实现让多个 Agent 直接调用播放器或并发写正式 ConversationLedger 的路径。

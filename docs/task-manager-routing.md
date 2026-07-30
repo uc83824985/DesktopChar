@@ -219,10 +219,10 @@ Manager 的执行策略扩展；Router 继续只选择目标。session 关闭或
 不自动改投其他目标。
 
 `submissionGeneration` 只定义 Task Manager 的观测和通知边界，不能替目标 CLI 定义并发
-语义。Session Monitor 返回 `submitted: true` 只证明文本和 Enter 已写入控制台输入队列；
-目标 CLI 可能把它当作运行中补充、下一轮排队输入或普通终端输入。首版必须分别用实际支持的
-CLI 验收 active 状态下的 `/input` 行为；Task Manager 只能承诺立即投递，以及不向
-DesktopChar 发布旧 generation 的独立完成通知。
+语义。Session Monitor 返回 `submitted: true` 只证明文本和 Enter 已写入控制台输入队列，
+不证明目标 CLI 已接受提交；目标 CLI 可能把它当作运行中补充、下一轮排队输入或仍留在编辑框
+中的普通终端输入。首版必须分别用实际支持的 CLI 验收 active 状态下的 `/input` 行为；Task
+Manager 只能承诺已请求立即投递，以及不向 DesktopChar 发布旧 generation 的独立完成通知。
 
 ## Task Manager 服务边界
 
@@ -263,6 +263,7 @@ Task Manager 对每个 session 维护命令日志、最新 `submissionGeneration
 每次提交前保存 visibleTextHash / lastScreenChangedAt
  -> 递增 submissionGeneration
  -> 立即 POST /input mode=submit
+ -> 必须观察目标进入 active（提交回执或后续轮询）
  -> 至少观察一次最新 generation 提交后的 hash / lastScreenChangedAt 变化
  -> 若又有新请求，立即提交并再次递增 generation
  -> 持续轮询 session 状态与有界文本尾部
@@ -270,8 +271,9 @@ Task Manager 对每个 session 维护命令日志、最新 `submissionGeneration
  -> 以最后一次有界可见文本采样完成最新 generation
 ```
 
-已经处于 `active` 不能单独作为新 generation 已被 CLI 接受的证据；需要看到提交后的新屏幕
-变化，再等待其恢复并稳定在 `waiting_input`。`idle_unknown` 不视为完成。轮询周期不应快于
+已经处于 `active` 不能单独作为新 generation 已被 CLI 接受的证据；必须同时看到 active
+状态以及提交后的新屏幕变化，再等待其恢复并稳定在 `waiting_input`。若在激活超时内始终
+未观察到 `active`，本次命令失败且不重试；`idle_unknown` 不视为完成。轮询周期不应快于
 marker 的 `intervalMs`。首版不处理回复被
 用户中断的情况；若新请求在上一轮完成前提交，旧 generation 不再单独产生完成通知，完成
 事件以最后一次提交后的稳定快照为准。由于 `lastVisibleText` 是有限长度的终端可见文本，
@@ -307,7 +309,8 @@ session，并把重启前仍在观察的 submission 视为不可恢复，不补�
   `submit` capability；token 不进入快照、URL或日志；
 - `task-manager-runtime.mjs` 立即提交精确命令；同 session 的新成功提交以递增 generation
   supersede 旧观察，乱序 HTTP 确认也不能把旧 generation 重新设为当前；
-- 完成必须先观察提交后的 hash/时间变化，再连续两轮得到相同 `waiting_input` 快照；
+- 完成必须先确认目标进入 `active`，再观察提交后的 hash/时间变化，最后连续两轮得到相同
+  `waiting_input` 快照；未在 15 秒内进入 `active` 会产生 `task-failed`，不重试；
   `active` 本身和 `idle_unknown` 均不构成完成；
 - 中间采样不跨轮询拼接，事件只保存有界尾部；事件有单调 cursor 和幂等 ack，运行时状态、
   命令与事件不跨进程重启恢复；
@@ -319,9 +322,12 @@ session，并把重启前仍在观察的 submission 视为不可恢复，不补�
   重启；关闭会立即从注册表移除未绑定候选，已有 External 注册转为 unavailable，但不会
   关闭或修改源窗口。`external` 生命周期继续兼容预先启动的 Task Manager marker。
 
-真实 Session Monitor v4 的 marker/token、会话记录和独立 HTTP 服务启动已经完成只读验收；
-尚未在受控测试 session 中执行真实 `/input submit`，因此 active 状态下各目标 CLI 的具体
-补充/排队语义仍保留为后续实机验收项。
+真实 Session Monitor v4 的 marker/token、会话记录和独立 HTTP 服务启动已经完成验收。
+2026-07-30 的 Codex CLI 实机测试中，Session Monitor 接受了 `mode=submit` 并写入 48 个
+控制台输入事件，但目标始终保持 `waiting_input`，文本仍留在输入编辑框。DesktopChar 因此
+不能把 `submitted: true` 或仅有的编辑框 hash 变化解释为完成；当前会在激活超时后明确发布
+失败。Session Monitor 对 Enter 的实际提交及确认仍需在 WorkAssistant 侧修复，active 状态下
+各目标 CLI 的补充/排队语义也继续保留为实机验收项。
 
 DesktopChar 的首要需求是知道事项是否完成，不要求 Task Manager 重建任意长的完整对话。
 完成事件默认只携带有限信息：

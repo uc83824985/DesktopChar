@@ -20,6 +20,13 @@ export function createTaskManagerRuntime(options) {
     12_000,
     'maxVisibleTextTailChars',
   );
+  const activationTimeoutMs = boundedInteger(
+    options.activationTimeoutMs,
+    15_000,
+    1_000,
+    120_000,
+    'activationTimeoutMs',
+  );
   const allowedArtifactRoots = (options.allowedArtifactRoots ?? []).map(root =>
     path.resolve(nonEmptyText(root, 'allowed artifact root')));
   const fileSystem = options.fileSystem ?? { realpath, stat };
@@ -146,8 +153,9 @@ export function createTaskManagerRuntime(options) {
       return cloneCommand(record);
     }
 
+    let submission;
     try {
-      await monitor.submitInput(command.sessionId, command.text);
+      submission = await monitor.submitInput(command.sessionId, command.text);
     }
     catch (error) {
       record.status = 'failed';
@@ -176,6 +184,8 @@ export function createTaskManagerRuntime(options) {
       generation,
       beforeVisibleTextHash: detail.lastVisibleTextHash,
       beforeScreenChangedAtUtc: detail.lastScreenChangedAtUtc,
+      observedActive:
+        detail.agentState === 'active' || submission?.agentState === 'active',
       observedChange: false,
       stableWaitingCount: 0,
       lastWaitingFingerprint: undefined,
@@ -253,6 +263,25 @@ export function createTaskManagerRuntime(options) {
   async function advanceObservation(observation, session) {
     const changed = changedAfterSubmission(observation, session);
     if (changed) observation.observedChange = true;
+    if (session.agentState === 'active') observation.observedActive = true;
+    const command = commands.get(observation.commandId);
+    if (!command || command.status !== 'observing') {
+      observations.delete(observation.sessionId);
+      return;
+    }
+    if (!observation.observedActive) {
+      observation.stableWaitingCount = 0;
+      observation.lastWaitingFingerprint = undefined;
+      if (now() - command.submittedAtMs >= activationTimeoutMs) {
+        command.status = 'failed';
+        command.completedAtMs = now();
+        command.error =
+          `Session did not enter active state within ${activationTimeoutMs} ms after submission`;
+        emitTaskEvent('task-failed', command, session, 'failed', command.error);
+        observations.delete(observation.sessionId);
+      }
+      return;
+    }
     if (!observation.observedChange || session.agentState !== 'waiting_input') {
       observation.stableWaitingCount = 0;
       observation.lastWaitingFingerprint = undefined;
@@ -272,11 +301,6 @@ export function createTaskManagerRuntime(options) {
     }
     if (observation.stableWaitingCount < stableWaitingPolls) return;
 
-    const command = commands.get(observation.commandId);
-    if (!command || command.status !== 'observing') {
-      observations.delete(observation.sessionId);
-      return;
-    }
     const artifact = command.resultArtifact;
     if (artifact) {
       try {

@@ -87,6 +87,24 @@ try {
   ) {
     throw new Error(`Managed Task Manager did not start: ${JSON.stringify(initial)}`);
   }
+  const healthyPollPhases = await page.evaluate(async () => {
+    const phases = [];
+    const observer = new MutationObserver(() => {
+      phases.push(document.body.dataset.taskManagerPhase);
+    });
+    observer.observe(document.body, {
+      attributes: true,
+      attributeFilter: ['data-task-manager-phase'],
+    });
+    await new Promise(resolve => setTimeout(resolve, 1_250));
+    observer.disconnect();
+    return phases;
+  });
+  if (healthyPollPhases.some(phase => phase !== 'ready')) {
+    throw new Error(
+      `Healthy Task Manager polling changed phase: ${JSON.stringify(healthyPollPhases)}`,
+    );
+  }
 
   await page.evaluate(() => document.querySelector('#avatar')?.dispatchEvent(
     new KeyboardEvent('keydown', { key: 'ContextMenu', bubbles: true }),

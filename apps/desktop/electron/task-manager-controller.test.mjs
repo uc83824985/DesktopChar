@@ -196,6 +196,20 @@ test('managed Task Manager starts by default and can be disabled and restarted a
   await controller.close();
 });
 
+test('healthy polling keeps the ready phase instead of flashing reconnecting', async () => {
+  const client = new FakeClient();
+  const phases = [];
+  const controller = createTaskManagerController(config(), {
+    createClient: () => client,
+    onStateChanged: state => phases.push(state.phase),
+  });
+  await controller.pollNow();
+  phases.length = 0;
+  await controller.pollNow();
+  assert.deepEqual(phases, ['ready']);
+  await controller.close();
+});
+
 class FakeClient {
   instanceId = 'instance-a';
   pages = [];

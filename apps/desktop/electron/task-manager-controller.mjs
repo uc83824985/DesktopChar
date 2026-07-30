@@ -248,8 +248,11 @@ export function createTaskManagerController(initialConfig, options = {}) {
 
   async function performPoll(starting = false) {
     const operationRevision = endpointRevision;
-    phase = starting ? 'connecting' : instanceId ? 'reconnecting' : 'connecting';
-    publish();
+    const operationalPoll = !starting && (phase === 'ready' || phase === 'degraded');
+    if (!operationalPoll) {
+      phase = starting ? 'connecting' : instanceId ? 'reconnecting' : 'connecting';
+      publish();
+    }
     try {
       const operationClient = client ?? createClient(config);
       client = operationClient;

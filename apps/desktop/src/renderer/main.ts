@@ -2931,7 +2931,9 @@ function applyRouteOutcome(outcome: RouteOutcome): void {
     : taskSessionLabel(decision.target.sessionId);
   routingUiState = {
     phase: 'sent',
-    text: `已发送到 ${targetLabel}：“${outcome.message.text}”`,
+    text: decision.target.kind === 'character'
+      ? `已发送到 ${targetLabel}：“${outcome.message.text}”`
+      : `已提交到 ${targetLabel}，等待目标会话开始处理：“${outcome.message.text}”`,
     messageId: outcome.message.messageId,
     targetLabel,
   };
