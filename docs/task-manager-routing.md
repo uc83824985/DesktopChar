@@ -109,6 +109,49 @@ session，也不改变当前 sticky 选择。UI 保留该选择并显示可重�
 选择器应显示 `waiting-input/active/idle-unknown/unavailable` 等只读状态，但不把启发式状态
 伪装成官方 CLI 状态。
 
+### 主应用会话注册与所有权
+
+Auto/Char/Session 选择器只展示 DesktopChar 主进程
+`ConversationSessionRegistry` 中已注册的会话，不再把 Task Manager 发现的全部窗口自动暴露给
+Router。注册表使用独立的应用级 `sessionId`，避免把 Codex `threadId`、Session Monitor
+`sessionId` 和 UI 选择值混为同一个标识：
+
+```ts
+type ConversationSession =
+  | {
+      sessionId: `managed:${string}`;
+      ownership: 'managed';
+      threadId: string;
+    }
+  | {
+      sessionId: `external:${string}`;
+      ownership: 'external';
+      sourceSessionId: string;
+    };
+```
+
+- “新建”调用同一个 managed Codex App Server 的稳定 `thread/start`，但创建
+  `ephemeral: false` 的持久 thread；后续显式选择该 Session 时一直向同一 thread 发送
+  `turn/start`，活动 Turn 中的新补充使用 `turn/steer`。App Server 子进程使用
+  `windowsHide: true` 和管道 stdio，不创建 Electron/CLI 对话窗口；用户只在 DesktopChar
+  自身对话面板中管理它。
+- “绑定”只从 Session Monitor/Task Manager 已发现且尚未注册的窗口列表中选择，以稳定
+  `sourceSessionId` 建立 External 注册。首版不猜测当前前台窗口，也不依赖窗口激活顺序；
+  标题、工作目录和启发式状态只用于帮助用户识别候选。
+- Managed 会话由 DesktopChar 拥有。用户关闭时，主应用先中断活动 Turn，再调用
+  `thread/archive` 并移除注册；归档而非永久删除，避免不可恢复的数据破坏。
+- External 会话仍由外部应用/CLI 拥有。用户关闭时只移除 DesktopChar 注册，不向 Session
+  Monitor 发送关闭窗口或结束进程的命令；原对话窗口保持运行，并重新出现在可绑定列表中。
+- 会话消失时保留 External 注册但标记为 `unavailable`，不自动切换或投递；用户可以等待其
+  恢复或主动断开。
+- 新建、绑定和关闭成功后由用户动作决定 sticky 目标：新建/绑定自动选择该 Session，关闭/
+  断开后切换到 Auto。Router 只能看到注册表中的会话，不能自动选择未绑定窗口。
+
+首版注册表与 Task Manager 一样只在当前 DesktopChar 进程内存中保存。Managed thread 会
+持久写入 Codex 会话存储，但应用退出时会按所有权归档；External 绑定关系不跨应用重启恢复。
+注册表恢复、Managed thread 重新接管和 External 自动重绑统一标记为后续待设计，不阻塞当前
+新建、连续发送、绑定和关闭闭环。
+
 `RouteCoordinator` 是消息入口门面，内部区分直连与自动路由：
 
 ```text
@@ -136,7 +179,8 @@ RouteCoordinator 变成同时持有所有领域状态的 God Object。
 | 目标 | 执行者 | 并发规则 | 上下文来源 |
 | --- | --- | --- | --- |
 | `character` | Char Agent Pool | 不同 Turn 可并行 | DesktopChar 显式编译的 Ledger、Persona 和场景快照 |
-| `task-session:{id}` | Task Manager | 默认立即提交；以同一 session 最后一次提交后的最终回复为准 | 目标 CLI 自身持续维护的会话上下文 |
+| `managed:{threadId}` | Codex App Server | 空闲时开始 Turn；活动时立即 steer 当前 Turn | DesktopChar 拥有的持久 Codex thread |
+| `external:{sourceSessionId}` | Task Manager | 默认立即提交；以同一 session 最后一次提交后的最终回复为准 | 目标 CLI 自身持续维护的会话上下文 |
 
 角色通道不等待前一轮模型完成：
 
@@ -609,3 +653,7 @@ Char Agent 的建议只是用户可见内容，不自动转化为 TaskCommand。
    热重载；main 通过窄 IPC 提供结构化决策与取消，managed Router/Char 共用一个 App Server。
    前台 smoke 已验证 sticky Session、Provider 严格失败、配置热切换、真实 Codex Auto 路由
    和随后 Char 回复。
+8. （已完成）在 DesktopChar main 增加内存 `ConversationSessionRegistry`，统一 Managed 与
+   External 会话 ID 和所有权；对话框可新建持久 Codex thread、从已发现窗口绑定 External
+   会话，并按所有权执行归档关闭或仅断开。Router 候选只包含已注册会话；前台 smoke 同时
+   验证绑定、sticky 路由、Managed 新建/归档及 External 断开不关闭源窗口。
