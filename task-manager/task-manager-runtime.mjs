@@ -269,7 +269,11 @@ export function createTaskManagerRuntime(options) {
       observations.delete(observation.sessionId);
       return;
     }
-    if (!observation.observedActive) {
+    const fastCompletionVisible =
+      observation.observedChange
+      && session.agentState === 'waiting_input'
+      && hasFastCodexCompletionEvidence(command.text, session);
+    if (!observation.observedActive && !fastCompletionVisible) {
       observation.stableWaitingCount = 0;
       observation.lastWaitingFingerprint = undefined;
       if (now() - command.submittedAtMs >= activationTimeoutMs) {
@@ -558,6 +562,7 @@ function normalizeSession(value) {
       ['waiting_input', 'active', 'idle_unknown', 'unknown', 'closed'],
       'session.agentState',
     ),
+    agent: optionalText(value.agent),
     title: optionalText(value.title),
     workDir: optionalText(value.workDir),
     lastVisibleText: optionalText(value.lastVisibleText, true),
@@ -574,6 +579,21 @@ function changedAfterSubmission(observation, session) {
     && session.lastVisibleTextHash !== observation.beforeVisibleTextHash
   ) return true;
   return compareUtc(session.lastScreenChangedAtUtc, observation.beforeScreenChangedAtUtc) > 0;
+}
+
+function hasFastCodexCompletionEvidence(commandText, session) {
+  if (session.agent?.toLocaleLowerCase('en-US') !== 'codex') return false;
+  const visibleText = compactWhitespace(session.lastVisibleText);
+  const submittedText = compactWhitespace(commandText);
+  if (!visibleText || !submittedText) return false;
+  const submittedAt = visibleText.lastIndexOf(submittedText);
+  if (submittedAt < 0) return false;
+  const textAfterSubmission = visibleText.slice(submittedAt + submittedText.length);
+  return /(?:^|\s)[•●]\s+\S/u.test(textAfterSubmission);
+}
+
+function compactWhitespace(value) {
+  return typeof value === 'string' ? value.replace(/\s+/gu, ' ').trim() : '';
 }
 
 function sessionFingerprint(session) {

@@ -96,6 +96,31 @@ test('waiting-input editor changes never masquerade as task completion', async (
   assert.equal(runtime.getSnapshot().commands[0].status, 'failed');
 });
 
+test('a fast Codex reply can complete when polling misses the active state', async () => {
+  const request = '只回复：快速完成';
+  const monitor = new FakeMonitor(
+    session({ agentState: 'waiting_input', hash: 'A', changed: 1, text: '› ' }),
+  );
+  const runtime = createTaskManagerRuntime({ monitor });
+  await runtime.pollOnce();
+  const submitted = await runtime.submitCommand(command('fast-command', request));
+  assert.equal(submitted.status, 'observing');
+
+  monitor.current = session({
+    agentState: 'waiting_input',
+    hash: 'B',
+    changed: 2,
+    text: `› ${request}\n\n• 快速完成\n\n› `,
+  });
+  await runtime.pollOnce();
+  assert.equal(runtime.eventsAfter().events.length, 0);
+  await runtime.pollOnce();
+  const [completed] = runtime.eventsAfter().events;
+  assert.equal(completed.type, 'task-completed');
+  assert.equal(completed.status, 'completed');
+  assert.equal(runtime.getSnapshot().commands[0].status, 'completed');
+});
+
 test('out-of-order submit acknowledgements cannot replace the latest generation observer', async () => {
   const monitor = new DeferredSubmitMonitor(
     session({ agentState: 'active', hash: 'A', changed: 1 }),
@@ -292,6 +317,7 @@ function session({
     state: 'running',
     monitorState: 'observed',
     agentState,
+    agent: 'Codex',
     title: '测试会话',
     workDir: 'C:\\workspace',
     lastVisibleText: text,

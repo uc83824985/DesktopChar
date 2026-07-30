@@ -266,6 +266,7 @@ function normalizeSession(value, label) {
       ['waiting_input', 'active', 'idle_unknown', 'unknown', 'closed'],
       `${label}.agentState`,
     ),
+    agent: optionalText(value.agent),
     title: optionalText(value.desiredTitle ?? value.currentTitle ?? value.baseTitle),
     workDir: optionalText(value.workDir ?? value.root),
     lastVisibleText: optionalText(value.lastVisibleText, true),

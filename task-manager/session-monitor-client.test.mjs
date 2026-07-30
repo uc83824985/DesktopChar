@@ -70,7 +70,9 @@ test('Session Monitor client discovers v4 capability and submits UTF-8 through b
     const discovery = await client.discover();
     assert.equal(discovery.markerVersion, 4);
     assert.equal('token' in discovery, false);
-    assert.equal((await client.listSessions())[0].lastVisibleText, '任务处理中');
+    const [listed] = await client.listSessions();
+    assert.equal(listed.lastVisibleText, '任务处理中');
+    assert.equal(listed.agent, 'Codex');
     assert.equal((await client.getSession('session-a')).agentState, 'active');
     assert.deepEqual(await client.submitInput('session-a', '继续检查 UTF-8：你好'), {
       sessionId: 'session-a',
@@ -130,6 +132,7 @@ function session() {
     state: 'running',
     monitorState: 'observed',
     agentState: 'active',
+    agent: 'Codex',
     desiredTitle: '测试会话',
     workDir: 'C:\\workspace',
     lastVisibleText: '任务处理中',
