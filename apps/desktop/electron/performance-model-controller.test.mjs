@@ -62,6 +62,29 @@ test('managed performance Provider waits for health and closes its owned process
   assert.equal(controller.snapshot().processId, null);
 });
 
+test('successful periodic health checks do not emit unchanged state', async () => {
+  const process = fakeProcess(4322);
+  let healthCalls = 0;
+  const states = [];
+  const controller = createPerformanceModelController(config({
+    enabled: true,
+    lifecycle: managedLifecycle({ healthIntervalMs: 5 }),
+  }), {
+    launchProcess: async () => process,
+    fetcher: async () => {
+      healthCalls += 1;
+      return { ok: true, status: 200 };
+    },
+    onStateChanged: state => states.push(state),
+  });
+
+  await controller.start();
+  const startupStateCount = states.length;
+  await waitFor(() => healthCalls >= 3);
+  assert.equal(states.length, startupStateCount);
+  await controller.close();
+});
+
 test('managed performance Provider restarts after an unexpected entry-process exit', async () => {
   const processes = [fakeProcess(1001), fakeProcess(1002)];
   let launches = 0;

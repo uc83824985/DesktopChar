@@ -24,6 +24,10 @@ import { createMcpServicesController } from './mcp-services-controller.mjs';
 import { startManagedProcess } from './managed-process.mjs';
 import { normalizeDesktopConfig, resolveDesktopConfigPath } from './mcp-services-config.mjs';
 import { createPerformanceModelController } from './performance-model-controller.mjs';
+import {
+  createPerformanceModelStateLogger,
+  filterPerformanceModelOutput,
+} from './performance-model-log.mjs';
 import { createRouterAgentGateway } from './router-agent.mjs';
 import { createShutdownCoordinator } from './shutdown-coordinator.mjs';
 import { createTaskManagerController } from './task-manager-controller.mjs';
@@ -199,12 +203,19 @@ const ttsContext = {
   mcpCancelTool: 'tts_cancel_synthesis',
   transport: null,
 };
+const logPerformanceModelState = createPerformanceModelStateLogger(safeLog);
 const performanceModel = createPerformanceModelController(
   desktopConfig.performanceInference,
   {
-    onStateChanged() { publishDesktopConfigState(); },
+    onStateChanged(state) {
+      logPerformanceModelState(state);
+      publishDesktopConfigState();
+    },
     onOutput(stream, chunk) {
-      const output = String(chunk).trimEnd();
+      const output = filterPerformanceModelOutput(
+        chunk,
+        desktopConfig.performanceInference.healthUrl,
+      ).trimEnd();
       if (output) safeLog(`[performance-model:${stream}] ${output}`);
     },
   },
