@@ -210,6 +210,27 @@ test('healthy polling keeps the ready phase instead of flashing reconnecting', a
   await controller.close();
 });
 
+test('a failed poll invalidates stale sessions until the connection recovers', async () => {
+  const client = new FakeClient();
+  const controller = createTaskManagerController(config(), {
+    createClient: () => client,
+  });
+  await controller.pollNow();
+  assert.equal(controller.snapshot().sessions.length, 1);
+
+  client.sessionListFailures = 1;
+  await assert.rejects(controller.pollNow(), /simulated Task Manager disconnect/);
+  assert.equal(controller.snapshot().phase, 'reconnecting');
+  assert.equal(controller.snapshot().reconnectAttempt, 1);
+  assert.equal(controller.snapshot().sessions.length, 0);
+
+  await controller.pollNow();
+  assert.equal(controller.snapshot().phase, 'ready');
+  assert.equal(controller.snapshot().reconnectAttempt, 0);
+  assert.equal(controller.snapshot().sessions.length, 1);
+  await controller.close();
+});
+
 class FakeClient {
   instanceId = 'instance-a';
   pages = [];
@@ -219,6 +240,7 @@ class FakeClient {
   pauseFirstSessionList;
   firstSessionListStarted = Promise.withResolvers();
   sessionListCalls = 0;
+  sessionListFailures = 0;
 
   async discover() {
     return {
@@ -230,6 +252,10 @@ class FakeClient {
 
   async listSessions() {
     this.sessionListCalls++;
+    if (this.sessionListFailures > 0) {
+      this.sessionListFailures--;
+      throw new Error('simulated Task Manager disconnect');
+    }
     if (this.sessionListCalls === 1 && this.pauseFirstSessionList) {
       this.firstSessionListStarted.resolve();
       await this.pauseFirstSessionList.promise;

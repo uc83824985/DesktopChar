@@ -94,14 +94,21 @@ test('a missing external window remains registered as unavailable until the user
   });
   registry.syncExternalSessions([externalSession('session-a', '会话 A')]);
   const bound = registry.bindExternalSession({ sourceSessionId: 'session-a' });
-  registry.syncExternalSessions([]);
+  registry.syncExternalSessions([], {
+    unavailableReason: 'Task Manager connection was interrupted',
+  });
   const session = registry.snapshot().sessions[0];
   assert.equal(session.sessionId, bound.sessionId);
   assert.equal(session.status, 'unavailable');
+  assert.equal(session.lastError, 'Task Manager connection was interrupted');
   await assert.rejects(
     registry.submitCommand(command(bound.sessionId, '不应发送')),
     /unavailable/,
   );
+  registry.syncExternalSessions([externalSession('session-a', '会话 A')]);
+  const recovered = registry.snapshot().sessions[0];
+  assert.equal(recovered.status, 'waiting-input');
+  assert.equal(recovered.lastError, null);
   await registry.closeSession(bound.sessionId);
   await registry.close();
 });

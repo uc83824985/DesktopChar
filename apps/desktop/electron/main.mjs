@@ -263,8 +263,11 @@ const taskManager = createTaskManagerController(desktopConfig.taskManager, {
     });
   },
   onStateChanged(state) {
-    conversationSessions?.syncExternalSessions(state.enabled ? state.sessions : []);
     avatarWindow?.webContents.send(channels.taskManagerState, state);
+    const usable = state.enabled && (state.phase === 'ready' || state.phase === 'degraded');
+    conversationSessions?.syncExternalSessions(usable ? state.sessions : [], {
+      unavailableReason: taskManagerExternalUnavailableReason(state),
+    });
   },
 });
 conversationSessions = createConversationSessionRegistry({
@@ -279,6 +282,16 @@ conversationSessions = createConversationSessionRegistry({
     avatarWindow.webContents.send(channels.conversationSessionsEvent, event);
   },
 });
+
+function taskManagerExternalUnavailableReason(state) {
+  if (state.phase === 'ready' || state.phase === 'degraded') {
+    return 'External conversation is no longer discoverable';
+  }
+  if (!state.enabled || state.phase === 'disabled') return 'Task Manager is disabled';
+  if (state.phase === 'reconnecting') return 'Task Manager connection was interrupted';
+  if (state.phase === 'closed') return 'Task Manager is closed';
+  return 'Task Manager is not ready';
+}
 
 const hasSingleInstanceLock = app.requestSingleInstanceLock();
 if (!hasSingleInstanceLock) app.quit();

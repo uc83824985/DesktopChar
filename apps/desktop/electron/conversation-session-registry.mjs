@@ -25,8 +25,9 @@ export function createConversationSessionRegistry(options = {}) {
     close,
   };
 
-  function syncExternalSessions(values = []) {
+  function syncExternalSessions(values = [], options = {}) {
     if (phase === 'closed') return snapshot();
+    const unavailableReason = normalizeExternalSyncOptions(options).unavailableReason;
     const previousSignature = externalSyncSignature();
     const nextCandidates = new Map();
     for (const value of values) {
@@ -42,13 +43,15 @@ export function createConversationSessionRegistry(options = {}) {
       const candidate = externalCandidates.get(session.sourceSessionId);
       if (!candidate) {
         session.status = 'unavailable';
-        session.lastError = 'External conversation is no longer discoverable';
+        session.lastError = unavailableReason;
         continue;
       }
       session.title = candidate.title;
       session.workDir = candidate.workDir;
       session.status = candidate.status;
-      session.lastError = null;
+      session.lastError = candidate.status === 'unavailable'
+        ? 'External conversation is unavailable'
+        : null;
     }
     if (externalSyncSignature() !== previousSignature) publish();
     return snapshot();
@@ -111,7 +114,9 @@ export function createConversationSessionRegistry(options = {}) {
       createdAtMs: timestamp,
       lastActivityAtMs: timestamp,
       lastResponse: null,
-      lastError: null,
+      lastError: candidate.status === 'unavailable'
+        ? 'External conversation is unavailable'
+        : null,
       activeOperation: null,
     };
     sessions.set(session.sessionId, session);
@@ -327,6 +332,18 @@ function normalizeExternalCandidate(value) {
     title: optionalBoundedText(value.title, 300, 'External conversation title') ?? sourceSessionId,
     workDir: optionalBoundedText(value.workDir, 1_000, 'External conversation workDir') ?? null,
     status: externalRouteStatus(value),
+  };
+}
+
+function normalizeExternalSyncOptions(value) {
+  if (!record(value)) throw new TypeError('External conversation sync options must be an object');
+  exactKeys(value, ['unavailableReason'], 'External conversation sync options');
+  return {
+    unavailableReason: optionalBoundedText(
+      value.unavailableReason,
+      1_000,
+      'External conversation unavailable reason',
+    ) ?? 'External conversation is no longer discoverable',
   };
 }
 

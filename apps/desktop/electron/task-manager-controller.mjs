@@ -299,11 +299,14 @@ export function createTaskManagerController(initialConfig, options = {}) {
       }
       lastPollAtMs = Date.now();
       lastError = degradedError;
+      reconnectAttempt = 0;
       phase = degradedError ? 'degraded' : 'ready';
       publish();
       return snapshot();
     }
     catch (error) {
+      sessions = [];
+      reconnectAttempt++;
       phase = starting ? 'connecting' : 'reconnecting';
       lastError = errorMessage(error);
       publish();
