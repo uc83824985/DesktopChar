@@ -143,8 +143,10 @@ type ConversationSession =
   `thread/archive` 并移除注册；归档而非永久删除，避免不可恢复的数据破坏。
 - External 会话仍由外部应用/CLI 拥有。用户关闭时只移除 DesktopChar 注册，不向 Session
   Monitor 发送关闭窗口或结束进程的命令；原对话窗口保持运行，并重新出现在可绑定列表中。
-- 会话消失时保留 External 注册但标记为 `unavailable`，不自动切换或投递；用户可以等待其
-  恢复或主动断开。
+- 每轮 Task Manager 发现都会动态校验 External 绑定。源会话消失、关闭或 Task Manager
+  连接中断时保留注册但立即标记为 `unavailable`，撤销旧快照的可发送资格，不自动切换或
+  投递。当前 sticky 目标会明确显示连接中断，消息输入保持不变；轮询重新发现同一
+  `sourceSessionId` 后恢复原绑定并提示后续消息继续发送。用户也可主动断开。
 - 新建、绑定和关闭成功后由用户动作决定 sticky 目标：新建/绑定自动选择该 Session，关闭/
   断开后切换到 Auto。Router 只能看到注册表中的会话，不能自动选择未绑定窗口。
 - 关闭/断开使用面板内的第二次点击确认，不调用原生阻塞式确认框；操作完成后重新发布当前
@@ -686,3 +688,6 @@ Char Agent 的建议只是用户可见内容，不自动转化为 TaskCommand。
    验证绑定、sticky 路由、Managed 新建/归档及 External 断开不关闭源窗口。
 9. （已完成）为 Task Manager 增加 managed/external 生命周期、默认 managed 自启动和右键
    动态开关；真实 Session Monitor 前台 smoke 验证 owned 子进程及候选列表随开关退出、恢复。
+10.（已完成）轮询失败会立即清除 Task Manager 的旧 Session 可用快照，External 注册表将
+   当前绑定标为连接中断但保持 sticky 选择；前台提示重连、拒绝中断期间的发送并保留输入，
+   重新发现同一 Session 后自动恢复。隔离前台 smoke 已覆盖中断、拒绝发送和恢复闭环。

@@ -20,11 +20,13 @@ const instanceId = randomUUID();
 const sessionId = 'session-routing-smoke';
 const registeredSessionId = `external:${sessionId}`;
 const commands = [];
+let taskManagerAvailable = true;
 const runtime = {
   getSnapshot() {
     return { phase: 'ready', lastPollAtMs: Date.now(), lastError: null };
   },
   listSessions() {
+    if (!taskManagerAvailable) throw new Error('simulated Task Manager connection interruption');
     return [{
       sessionId,
       state: 'running',
@@ -183,6 +185,39 @@ try {
     throw new Error(`Sticky session routing failed: ${JSON.stringify(commands)}`);
   }
 
+  taskManagerAvailable = false;
+  await page.locator('body[data-task-manager-phase="reconnecting"]').waitFor({ timeout: 5_000 });
+  await page.waitForFunction(async registeredId => {
+    const state = await window.desktopChar?.getConversationSessionsState();
+    const status = document.querySelector('.conversation-panel__route-status')?.textContent ?? '';
+    const session = state?.sessions.find(item => item.sessionId === registeredId);
+    return document.body.dataset.routingSelection === `session:${registeredId}`
+      && session?.status === 'unavailable'
+      && session.lastError === 'Task Manager connection was interrupted'
+      && status.includes('连接中断')
+      && status.includes('绑定已保留');
+  }, registeredSessionId, { timeout: 5_000 });
+  const interruptedText = '连接中断期间不应发送';
+  await input.fill(interruptedText);
+  await input.press('Control+Enter');
+  await page.locator('body[data-routing-phase="error"]').waitFor({ timeout: 5_000 });
+  if (commands.length !== 2 || await input.inputValue() !== interruptedText) {
+    throw new Error('Interrupted external binding accepted a command or cleared its input');
+  }
+
+  taskManagerAvailable = true;
+  await page.locator('body[data-task-manager-phase="ready"]').waitFor({ timeout: 5_000 });
+  await page.waitForFunction(async registeredId => {
+    const state = await window.desktopChar?.getConversationSessionsState();
+    const status = document.querySelector('.conversation-panel__route-status')?.textContent ?? '';
+    const session = state?.sessions.find(item => item.sessionId === registeredId);
+    return document.body.dataset.routingSelection === `session:${registeredId}`
+      && session?.status === 'waiting-input'
+      && session.lastError === null
+      && status.includes('已恢复')
+      && status.includes('继续发送');
+  }, registeredSessionId, { timeout: 5_000 });
+
   await selector.selectOption('auto');
   const autoText = '这条 Auto 消息不能静默回退';
   await input.fill(autoText);
@@ -296,12 +331,17 @@ try {
   if (browserWindowCount !== 1) {
     throw new Error(`Managed conversation created an unexpected Electron window: ${browserWindowCount}`);
   }
+  if (!await input.isVisible().catch(() => false)) {
+    const currentShellState = await page.evaluate(() => window.desktopChar?.getWindowState());
+    if (!currentShellState) throw new Error('Desktop shell state was lost before Managed routing');
+    await openConversationPanel(page, currentShellState, nativePointer);
+  }
   const managedText = `Managed 回复通知链路测试 ${Date.now()}：请只回复“收到”。`;
   await input.fill(managedText);
   await input.press('Control+Enter');
   await page.waitForFunction(managedSessionId => {
     return document.body.dataset.routingPhase === 'sent'
-      && document.body.dataset.routingLastTarget === managedSessionId;
+      && document.body.dataset.routingLastTarget === `task-session:${managedSessionId}`;
   }, managedSession.sessionId, { timeout: 10_000 });
   await page.waitForFunction(() => {
     return document.body.dataset.taskNotificationEvent?.startsWith('managed:managed-event-')
@@ -459,6 +499,7 @@ function smokeConfig(taskManagerMarkerPath, routerOverride) {
     },
     taskManager: {
       enabled: true,
+      lifecycle: 'external',
       markerPath: taskManagerMarkerPath,
       pollIntervalMs: 250,
       requestTimeoutMs: 2_000,

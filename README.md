@@ -57,14 +57,17 @@ thread；绑定只注册 Task Manager 已发现的外部窗口；关闭 Managed 
 External 只断开注册而不关闭源窗口。关闭采用面板内二次点击确认，不打开会抢占透明窗口交互
 状态的系统确认框。普通消息记录只展示真实用户输入及角色可见回复，并在每条输入上标出
 `Auto → 目标` 或直接目标；Task Manager 注入、worker 和准备队列仅保留在折叠的技术日志中。
+External 绑定会随 Task Manager 轮询动态校验；服务断线或源 Session 消失时保留 sticky
+选择但标记“连接中断”，拒绝发送并保留输入，重新发现同一 Session 后自动提示恢复。
 对话面板打开时会在同一透明窗口的角色视口侧边扩展：配置默认偏好右侧，但右下角等空间
 不足的位置会自动翻到左侧；两侧空间均过小时才退回覆盖显示。透明侧栏区域在角色首次显现
 前完成分配，开关面板不再 resize 原生窗口。Auto 路由对明确会话 ID、
 唯一标题加任务动作及简短角色社交句使用保守的高置信度路径，歧义表达仍交给 Router
 Provider。
 `npm run test:routing-foreground` 会用隔离 Session 验证
-绑定、两次 sticky 直接提交、Router 严格失败边界，再热切换到 managed Codex 完成真实 Auto
-路由和 Char 回复，最后验证 Managed 新建/归档与 External 安全断开。
+绑定、两次 sticky 直接提交、Task Manager 断线时拒绝发送并恢复、Router 严格失败边界，
+再热切换到 managed Codex 完成真实 Auto 路由和 Char 回复，最后验证 Managed 新建/归档与
+External 安全断开。
 
 表情和已有 Live2D 动作的语义选择暂由本地表现推理端口完成，Qwen3.5-2B non-thinking 只是首个验证 Profile，不进入外部 Agent 关键路径；同协议模型只需替换 Profile，不同协议通过新 Adapter 接入。首个模型使用 OpenAI-compatible HTTP，不新增 MCP；`external` 只连接现有 endpoint，`managed` 由 Electron Supervisor 启停入口进程，两者复用同一 Adapter。边界与生命周期见 [本地表现模型接入设计](docs/performance-model-integration.md)，实现新 Provider 时遵循 [表现模型 Provider 接入指南](docs/performance-model-provider-integration.md)，官方模型配置阅读结论见 [Qwen3.5-2B 阅读记录](docs/references/qwen3.5-2b.md)。
 

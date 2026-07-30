@@ -2014,13 +2014,60 @@ function applyTaskManagerState(state: TaskManagerState): void {
 }
 
 function applyConversationSessionState(state: ConversationSessionRegistryState): void {
+  const previous = conversationSessionState;
   conversationSessionState = state;
   document.body.dataset.conversationSessionsPhase = state.phase;
   document.body.dataset.conversationSessions = state.sessions.length.toString();
   document.body.dataset.conversationExternalCandidates =
     state.availableExternalSessions.length.toString();
+  applySelectedExternalAvailabilityTransition(previous, state);
   updateRoutingCandidates();
   interactionPanelHost.refresh();
+}
+
+function applySelectedExternalAvailabilityTransition(
+  previous: ConversationSessionRegistryState | undefined,
+  current: ConversationSessionRegistryState,
+): void {
+  if (!previous || !routeCoordinator) return;
+  const selection = routeCoordinator.getSelection();
+  if (selection.mode !== 'direct' || selection.target.kind !== 'task-session') return;
+  const sessionId = selection.target.sessionId;
+  const before = previous.sessions.find(session => session.sessionId === sessionId);
+  const after = current.sessions.find(session => session.sessionId === sessionId);
+  if (!before || !after || after.ownership !== 'external') return;
+  if (before.status !== 'unavailable' && after.status === 'unavailable') {
+    routingUiState = {
+      phase: 'error',
+      text: externalSessionUnavailableText(after),
+    };
+    publishRoutingPhase();
+    return;
+  }
+  if (before.status === 'unavailable' && after.status !== 'unavailable') {
+    routingUiState = {
+      phase: 'idle',
+      text: `已恢复与 ${after.title} 的连接；后续消息继续发送到该 Session。`,
+    };
+    publishRoutingPhase();
+  }
+}
+
+function externalSessionUnavailableText(session: ConversationSessionState): string {
+  if (session.lastError === 'Task Manager connection was interrupted') {
+    return `Task Manager 连接中断，正在重连；与 ${session.title} 的绑定已保留，恢复前消息不会发送。`;
+  }
+  if (session.lastError === 'Task Manager is disabled') {
+    return `Task Manager 已关闭；与 ${session.title} 的绑定已保留，重新开启前消息不会发送。`;
+  }
+  if (session.lastError === 'Task Manager is closed') {
+    return `Task Manager 已关闭；与 ${session.title} 的连接已中断。`;
+  }
+  if (session.lastError === 'Task Manager is not ready') {
+    return `Task Manager 尚未连接；与 ${session.title} 的绑定已保留，连接就绪前消息不会发送。`;
+  }
+  return `与 ${session.title} 的连接已中断；Session Monitor 当前无法发现该会话。`
+    + '绑定已保留，可等待恢复或主动断开。';
 }
 
 function applyConversationSessionEvent(event: ConversationSessionEventState): void {
@@ -2505,10 +2552,26 @@ function mountConversationPanel(container: HTMLElement): DomInteractionPanelView
     if (selection.mode === 'direct' && selection.target.kind === 'task-session') {
       routingContext?.touchSession(selection.target.sessionId);
     }
-    routingUiState = {
-      phase: 'idle',
-      text: `后续消息将发送到 ${targetSelectionLabel(selection)}，直到你主动切换。`,
-    };
+    const selectedTaskSessionId = selection.mode === 'direct'
+      && selection.target.kind === 'task-session'
+      ? selection.target.sessionId
+      : undefined;
+    const selectedSession = selectedTaskSessionId
+      ? conversationSessionState?.sessions.find(
+          session => session.sessionId === selectedTaskSessionId,
+        )
+      : undefined;
+    routingUiState = selectedSession?.status === 'unavailable'
+      ? {
+          phase: 'error',
+          text: selectedSession.ownership === 'external'
+            ? externalSessionUnavailableText(selectedSession)
+            : `${selectedSession.title} 当前不可用；请选择其他目标。`,
+        }
+      : {
+          phase: 'idle',
+          text: `后续消息将发送到 ${targetSelectionLabel(selection)}，直到你主动切换。`,
+        };
     publishRoutingSelection(selection);
     refreshConversationPanel(
       summary,
@@ -2650,7 +2713,7 @@ function renderRoutingControls(
     const ownership = session.ownership === 'managed' ? 'Managed' : 'External';
     options.push({
       value: `session:${session.sessionId}`,
-      label: `${session.title} · ${ownership} · ${session.status}`,
+      label: `${session.title} · ${ownership} · ${conversationSessionStatusLabel(session.status)}`,
     });
   }
   if (!options.some(option => option.value === selectedValue)) {
@@ -2712,7 +2775,8 @@ function renderSessionManagement(elements: ConversationSessionManagementElements
   elements.bindSelect.replaceChildren(...candidates.map(candidate => {
     const option = document.createElement('option');
     option.value = candidate.sourceSessionId;
-    option.textContent = `${candidate.title} · ${candidate.status}`;
+    option.textContent =
+      `${candidate.title} · ${conversationSessionStatusLabel(candidate.status)}`;
     return option;
   }));
   if (candidates.some(candidate => candidate.sourceSessionId === previous)) {
@@ -2721,6 +2785,18 @@ function renderSessionManagement(elements: ConversationSessionManagementElements
   elements.bindSelect.disabled = unavailable || candidates.length === 0;
   elements.bindConfirm.disabled = unavailable || candidates.length === 0;
   if (candidates.length === 0) elements.bindControls.hidden = true;
+}
+
+function conversationSessionStatusLabel(
+  status: ConversationSessionState['status'],
+): string {
+  const labels: Record<ConversationSessionState['status'], string> = {
+    'waiting-input': '等待输入',
+    active: '处理中',
+    'idle-unknown': '状态未知',
+    unavailable: '连接中断',
+  };
+  return labels[status];
 }
 
 function selectedConversationSession(): ConversationSessionState | undefined {
