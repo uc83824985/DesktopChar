@@ -623,6 +623,13 @@ interface RoutedTranscriptTarget {
   sessionId?: string;
 }
 
+interface ConversationTranscriptEntry {
+  key: string;
+  author: string;
+  text: string;
+  role: 'user' | 'assistant' | 'pending' | 'error';
+}
+
 interface CharTaskNotificationEvent {
   identity: string;
   sessionId: string;
@@ -3158,7 +3165,7 @@ function renderConversationAgentAudit(summary: HTMLElement, content: HTMLElement
 function renderConversationTranscript(transcript: HTMLOListElement, snapshot: ConversationSnapshot): void {
   const previousScrollTop = transcript.scrollTop;
   const wasPinnedToBottom = transcript.scrollHeight - transcript.scrollTop - transcript.clientHeight <= 12;
-  transcript.replaceChildren();
+  const entries: ConversationTranscriptEntry[] = [];
   const routingSnapshot = routeCoordinator?.getSnapshot();
   const responseByTurnId = new Map(snapshot.responses.map(response => [response.turnId, response]));
   const notificationTurnsByMessageId = new Map<string, TaskNotificationTurn[]>();
@@ -3169,54 +3176,56 @@ function renderConversationTranscript(transcript: HTMLOListElement, snapshot: Co
     notificationTurnsByMessageId.set(work.relatedMessageId, related);
   }
   const renderedResponseIds = new Set<string>();
-  let renderedItems = 0;
 
   if (routingSnapshot) {
     for (const message of routingSnapshot.messages) {
       const target = routedTranscriptTarget(message, routingSnapshot);
       if (!target) continue;
-      transcript.append(conversationMessageElement(
-        `你 ${target.userRouteLabel}`,
-        message.text,
-        'user',
-      ));
-      renderedItems += 1;
+      entries.push({
+        key: `route:${message.messageId}:user`,
+        author: `你 ${target.userRouteLabel}`,
+        text: message.text,
+        role: 'user',
+      });
 
       if (target.kind === 'character') {
         const turnId = routedConversationTurnIds.get(message.messageId);
         const response = turnId ? responseByTurnId.get(turnId) : undefined;
         if (response) {
-          appendConversationResponse(transcript, snapshot, response, charDisplayName);
+          appendConversationResponse(entries, snapshot, response, charDisplayName);
           renderedResponseIds.add(response.responseId);
         }
         else {
-          transcript.append(conversationMessageElement(charDisplayName, '等待角色回复…', 'pending'));
+          entries.push({
+            key: `route:${message.messageId}:pending`,
+            author: charDisplayName,
+            text: '等待角色回复…',
+            role: 'pending',
+          });
         }
-        renderedItems += 1;
         continue;
       }
 
       const notifications = notificationTurnsByMessageId.get(message.messageId) ?? [];
       if (notifications.length === 0) {
-        transcript.append(conversationMessageElement(
-          target.destinationLabel,
-          '已发送，等待目标回复…',
-          'pending',
-        ));
-        renderedItems += 1;
+        entries.push({
+          key: `route:${message.messageId}:pending`,
+          author: target.destinationLabel,
+          text: '已发送，等待目标回复…',
+          role: 'pending',
+        });
         continue;
       }
       for (const work of notifications) {
         const response = responseByTurnId.get(work.turnId);
         if (!response) continue;
         appendConversationResponse(
-          transcript,
+          entries,
           snapshot,
           response,
           `${charDisplayName} · ${target.destinationLabel}`,
         );
         renderedResponseIds.add(response.responseId);
-        renderedItems += 1;
       }
     }
   }
@@ -3226,31 +3235,28 @@ function renderConversationTranscript(transcript: HTMLOListElement, snapshot: Co
     const taskNotification = taskNotificationTurns.get(response.turnId);
     if (taskNotification) {
       appendConversationResponse(
-        transcript,
+        entries,
         snapshot,
         response,
         `${charDisplayName} · ${taskSessionLabel(taskNotification.event.sessionId)}`,
       );
-      renderedItems += 1;
       continue;
     }
     const user = snapshot.messages.find(
       message => message.turnId === response.turnId && message.role === 'user',
     );
     if (user) {
-      transcript.append(conversationMessageElement('你 · Char', user.text, 'user'));
-      renderedItems += 1;
+      entries.push({
+        key: `response:${response.responseId}:user`,
+        author: '你 · Char',
+        text: user.text,
+        role: 'user',
+      });
     }
-    appendConversationResponse(transcript, snapshot, response, charDisplayName);
-    renderedItems += 1;
+    appendConversationResponse(entries, snapshot, response, charDisplayName);
   }
 
-  if (renderedItems === 0) {
-    const empty = document.createElement('li');
-    empty.className = 'conversation-panel__empty';
-    empty.textContent = '尚无消息。每条发送记录都会标明实际路由目标。';
-    transcript.append(empty);
-  }
+  reconcileConversationTranscript(transcript, entries);
   transcript.scrollTop = wasPinnedToBottom ? transcript.scrollHeight : previousScrollTop;
 }
 
@@ -3293,7 +3299,7 @@ function routedTranscriptTarget(
 }
 
 function appendConversationResponse(
-  transcript: HTMLOListElement,
+  entries: ConversationTranscriptEntry[],
   snapshot: ConversationSnapshot,
   response: ConversationSnapshot['responses'][number],
   author: string,
@@ -3309,26 +3315,81 @@ function appendConversationResponse(
       true,
     );
   }
-  transcript.append(conversationMessageElement(
+  entries.push({
+    key: `response:${response.responseId}`,
     author,
-    assistant?.text ?? (response.error ? `失败：${response.error}` : replyProgressLabel(response.reply)),
-    assistant ? 'assistant' : response.error ? 'error' : 'pending',
-  ));
+    text: assistant?.text ?? (response.error ? `失败：${response.error}` : replyProgressLabel(response.reply)),
+    role: assistant ? 'assistant' : response.error ? 'error' : 'pending',
+  });
 }
 
-function conversationMessageElement(
-  author: string,
-  text: string,
-  role: 'user' | 'assistant' | 'pending' | 'error',
-): HTMLLIElement {
+function reconcileConversationTranscript(
+  transcript: HTMLOListElement,
+  entries: ConversationTranscriptEntry[],
+): void {
+  if (entries.length === 0) {
+    let empty = [...transcript.children].find(
+      child => child instanceof HTMLLIElement && child.dataset.entryKey === 'empty',
+    ) as HTMLLIElement | undefined;
+    if (!empty) {
+      empty = document.createElement('li');
+      empty.dataset.entryKey = 'empty';
+      empty.className = 'conversation-panel__empty';
+      empty.textContent = '尚无消息。每条发送记录都会标明实际路由目标。';
+    }
+    reconcileConversationTranscriptNodes(transcript, [empty]);
+    return;
+  }
+
+  const existingByKey = new Map<string, HTMLLIElement>();
+  for (const child of transcript.children) {
+    if (child instanceof HTMLLIElement && child.dataset.entryKey) {
+      existingByKey.set(child.dataset.entryKey, child);
+    }
+  }
+  const nodes = entries.map(entry => {
+    const existing = existingByKey.get(entry.key);
+    if (!existing) return conversationMessageElement(entry);
+    updateConversationMessageElement(existing, entry);
+    return existing;
+  });
+  reconcileConversationTranscriptNodes(transcript, nodes);
+}
+
+function reconcileConversationTranscriptNodes(
+  transcript: HTMLOListElement,
+  nodes: HTMLLIElement[],
+): void {
+  const desired = new Set(nodes);
+  for (const child of [...transcript.children]) {
+    if (!desired.has(child as HTMLLIElement)) child.remove();
+  }
+  for (let index = 0; index < nodes.length; index += 1) {
+    const node = nodes[index]!;
+    const current = transcript.children.item(index);
+    if (current !== node) transcript.insertBefore(node, current);
+  }
+}
+
+function conversationMessageElement(entry: ConversationTranscriptEntry): HTMLLIElement {
   const item = document.createElement('li');
-  item.dataset.role = role;
   const label = document.createElement('b');
-  label.textContent = author;
   const body = document.createElement('span');
-  body.textContent = text;
   item.append(label, body);
+  updateConversationMessageElement(item, entry);
   return item;
+}
+
+function updateConversationMessageElement(
+  item: HTMLLIElement,
+  entry: ConversationTranscriptEntry,
+): void {
+  item.dataset.entryKey = entry.key;
+  item.dataset.role = entry.role;
+  const label = item.firstElementChild as HTMLElement | null;
+  const body = item.lastElementChild as HTMLElement | null;
+  if (label && label.textContent !== entry.author) label.textContent = entry.author;
+  if (body && body.textContent !== entry.text) body.textContent = entry.text;
 }
 
 function renderConversationQueue(queue: HTMLElement, snapshot: ConversationSnapshot): void {

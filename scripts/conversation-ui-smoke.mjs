@@ -121,6 +121,38 @@ try {
     throw new Error(`Conversation UI did not finish in order: ${JSON.stringify(conversation)}`);
   }
 
+  const selectionRetention = await page.evaluate(() => {
+    const body = document.querySelector(
+      '.conversation-panel__transcript [data-role="user"] span',
+    );
+    const target = document.querySelector('.conversation-panel__route-controls select');
+    if (!(body instanceof HTMLElement) || !(target instanceof HTMLSelectElement)) {
+      return { selectedText: '', sameNode: false };
+    }
+    const range = document.createRange();
+    range.selectNodeContents(body);
+    const selection = window.getSelection();
+    selection?.removeAllRanges();
+    selection?.addRange(range);
+    target.value = 'character';
+    target.dispatchEvent(new Event('change', { bubbles: true }));
+    return {
+      selectedText: selection?.toString() ?? '',
+      sameNode: body.isConnected
+        && body === document.querySelector(
+          '.conversation-panel__transcript [data-role="user"] span',
+        ),
+    };
+  });
+  if (
+    selectionRetention.selectedText.replace(/\s+/gu, ' ').trim() !== '第一条前台并行测试 第二行'
+    || !selectionRetention.sameNode
+  ) {
+    throw new Error(
+      `Conversation refresh replaced the selected transcript node: ${JSON.stringify(selectionRetention)}`,
+    );
+  }
+
   await page.getByRole('button', { name: '资源调试', exact: true }).click();
   await page.locator('.scene-interaction-panel[data-view="resources"]').waitFor({ timeout: 2_000 });
   const resources = await page.evaluate(() => ({
