@@ -91,7 +91,7 @@ h1 { margin: 10px 0; font-size: clamp(40px, 6vw, 72px); line-height: .95; }
 .actions { display: flex; flex-wrap: wrap; gap: 10px; margin: 28px 0; }
 button { padding: 11px 17px; border: 0; border-radius: 999px; color: #111426; background: #f1efff; cursor: pointer; font-weight: 700; }
 button:hover:not(:disabled) { transform: translateY(-1px); background: #c9c4ff; }
-button:disabled { opacity: .38; cursor: wait; }
+button:disabled { opacity: .38; cursor: not-allowed; }
 .tone-debug { margin: -12px 0 20px; padding: 13px 14px; border: 1px solid #9e9ae833; border-radius: 14px; background: #080a15a8; font-variant-numeric: tabular-nums; }
 .tone-debug-title { margin: 0 0 8px; color: #9e9ae8; font-size: 9px; letter-spacing: .14em; }
 .tone-debug dl { display: grid; gap: 4px; margin: 0; }
