@@ -4223,8 +4223,7 @@ function applyConversationSidebarLayout(state: ConversationSidebarLayoutState): 
 
 function currentAvatarViewport(): { x: number; width: number } {
   if (
-    !conversationSidebarLayout.visible
-    || conversationSidebarLayout.mode !== 'sidecar'
+    conversationSidebarLayout.mode !== 'sidecar'
     || conversationSidebarLayout.extentDip <= 0
   ) {
     return { x: 0, width: innerWidth };

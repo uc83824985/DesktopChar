@@ -118,17 +118,14 @@ try {
 
   const shellState = await page.evaluate(() => window.desktopChar?.getWindowState());
   if (!shellState) throw new Error('Desktop shell state is unavailable');
-  const sidebarState = await openConversationPanel(page, shellState.bounds, nativePointer);
+  const sidebarState = await openConversationPanel(page, shellState, nativePointer);
   if (
     sidebarState.conversationSidebar.mode === 'sidecar'
     && (
-      sidebarState.bounds.width
-        !== shellState.bounds.width + sidebarState.conversationSidebar.extentDip
-      || sidebarState.conversationSidebar.avatarViewport.width !== shellState.bounds.width
-      || (
-        sidebarState.conversationSidebar.side === 'left'
-        && sidebarState.bounds.x + sidebarState.conversationSidebar.extentDip !== shellState.bounds.x
-      )
+      sidebarState.bounds.x !== shellState.bounds.x
+      || sidebarState.bounds.width !== shellState.bounds.width
+      || sidebarState.conversationSidebar.avatarViewport.width
+        !== shellState.conversationSidebar.avatarViewport.width
     )
   ) {
     throw new Error(`Conversation sidebar geometry drifted: ${JSON.stringify(sidebarState)}`);
@@ -384,13 +381,18 @@ finally {
   await rm(temporaryDirectory, { recursive: true, force: true });
 }
 
-async function openConversationPanel(page, bounds, pointer) {
+async function openConversationPanel(page, shellState, pointer) {
+  const bounds = shellState.bounds;
+  const avatarViewport = shellState.conversationSidebar.avatarViewport;
   for (const local of [
     { x: 230, y: 350 },
     { x: 230, y: 270 },
     { x: 230, y: 450 },
   ]) {
-    const absolute = { x: bounds.x + local.x, y: bounds.y + local.y };
+    const absolute = {
+      x: bounds.x + avatarViewport.x + local.x,
+      y: bounds.y + local.y,
+    };
     pointer.move(absolute);
     await page.waitForTimeout(250);
     if (await page.locator('body').getAttribute('data-pixel-selection') !== 'covered') continue;

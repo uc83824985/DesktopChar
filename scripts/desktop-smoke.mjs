@@ -60,7 +60,7 @@ try {
 
   const initial = await page.evaluate(() => window.desktopChar?.getWindowState());
   if (!initial || !initial.alwaysOnTop || !initial.visible || !initial.tray?.available
-    || initial.bounds.width > 500 || initial.bounds.height > 740) {
+    || initial.conversationSidebar.avatarViewport.width > 500 || initial.bounds.height > 740) {
     throw new Error(`Unexpected floating window state: ${JSON.stringify(initial)}`);
   }
   if (process.platform === 'win32'
@@ -429,7 +429,12 @@ try {
     const api = window.desktopChar;
     if (!api) throw new Error('Desktop preload bridge is missing');
     const state = await api.getWindowState();
-    const start = { x: state.bounds.x + state.bounds.width / 2, y: state.bounds.y + state.bounds.height / 2 };
+    const start = {
+      x: state.bounds.x
+        + state.conversationSidebar.avatarViewport.x
+        + state.conversationSidebar.avatarViewport.width / 2,
+      y: state.bounds.y + state.bounds.height / 2,
+    };
     await api.beginDrag(start);
     api.setPointerPresentation({ passthrough: false, cursor: 'move' });
     api.dragTo({ x: start.x - 36, y: start.y - 28 });
@@ -509,7 +514,10 @@ async function verifyNativeInteractionPanel(application, page) {
     { x: 230, y: 270 },
     { x: 230, y: 450 },
   ]) {
-    const absolute = { x: state.bounds.x + local.x, y: state.bounds.y + local.y };
+    const absolute = {
+      x: state.bounds.x + state.conversationSidebar.avatarViewport.x + local.x,
+      y: state.bounds.y + local.y,
+    };
     await setNativePointer(application, absolute);
     await page.waitForTimeout(250);
     if (await page.locator('body').getAttribute('data-pixel-selection') === 'covered') {

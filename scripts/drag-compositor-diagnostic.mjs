@@ -28,7 +28,11 @@ try {
     // The diagnostic Node process is DPI-unaware, so Win32 virtualizes these
     // SetCursorPos coordinates in the same DIP space returned by Electron.
     const point = {
-      x: Math.round(state.bounds.x + state.bounds.width * 0.5),
+      x: Math.round(
+        state.bounds.x
+          + state.conversationSidebar.avatarViewport.x
+          + state.conversationSidebar.avatarViewport.width * 0.5,
+      ),
       y: Math.round(state.bounds.y + state.bounds.height * yRatio),
     };
     physicalMouse.move(point);

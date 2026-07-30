@@ -36,14 +36,16 @@ setIgnoreMouseEvents(true, forward)    可点击 / 可拖动角色
 
 因此默认位于右下角的角色会向左展开；空间足够时仍遵循用户偏好。侧边展开只改变同一
 BrowserWindow 的 bounds。Renderer 根据 main 下发的 `avatarViewport` 保持模型缩放、模型
-中心、视线归一化和聊天气泡都位于原角色 lane 内；面板关闭后恢复原角色 bounds。展开状态下
-拖动完成或配置热重载时会基于新的角色位置重新选择方向。
+中心、视线归一化和聊天气泡都位于原角色 lane 内。应用在首次显现前就按默认角色位置分配
+透明侧栏区域；面板关闭后保留这块完全透明、可穿透的 allocation，开关面板不再修改原生
+窗口 bounds。拖动完成、恢复默认位置或配置热重载时，才会基于新的角色位置重新选择方向并
+重建 allocation。
 
 侧栏自身相对角色 lane 垂直居中，不再贴住窗口底边。开关面板时，Renderer 先把侧栏置为
-无动画的隐藏状态，等待 BrowserWindow 达到 main 下发的目标宽度并再经过一个渲染帧，之后
-才从最终位置执行短淡入；关闭则先完成原有淡出再缩回窗口。窗口 resize 依靠 Chromium
-正常的重绘提交，不额外调用 `webContents.invalidate()`，避免透明窗口扩缩与整页强制重绘
-叠加造成闪烁。
+无动画的隐藏状态，确认既有 allocation 宽度并再经过一个渲染帧，之后才从最终位置执行短
+淡入；关闭只完成原有淡出，不缩回窗口。窗口 allocation 发生变化时依靠 Chromium 正常的
+重绘提交，不额外调用 `webContents.invalidate()`。这样开关对话框时 DWM 不会先把旧角色
+surface 随新窗口原点移到侧边，再等待 Renderer 把模型移回角色 lane。
 
 ## 后台托盘与显隐生命周期
 

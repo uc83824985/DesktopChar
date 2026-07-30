@@ -55,7 +55,7 @@ try {
     { x: 230, y: 450 },
   ]) {
     const absolute = {
-      x: shellState.bounds.x + local.x,
+      x: shellState.bounds.x + shellState.conversationSidebar.avatarViewport.x + local.x,
       y: shellState.bounds.y + local.y,
     };
     nativePointer.move(absolute);
@@ -93,7 +93,8 @@ try {
     !sidebarState?.conversationSidebar.visible
     || (
       sidebarState.conversationSidebar.mode === 'sidecar'
-      && sidebarState.conversationSidebar.avatarViewport.width !== shellState.bounds.width
+      && sidebarState.conversationSidebar.avatarViewport.width
+        !== shellState.conversationSidebar.avatarViewport.width
     )
   ) {
     throw new Error(`Unexpected conversation sidebar state: ${JSON.stringify(sidebarState)}`);
