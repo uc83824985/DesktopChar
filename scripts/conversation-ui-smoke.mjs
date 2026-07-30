@@ -51,6 +51,16 @@ try {
   if (await panel.getAttribute('data-view') !== 'conversation') {
     throw new Error('Conversation view must be selected by default');
   }
+  const technicalLog = page.locator('.conversation-panel__agent-audit');
+  const technicalLogSummary = technicalLog.locator('summary');
+  await technicalLogSummary.click({ position: { x: 7, y: 12 } });
+  if (await technicalLog.getAttribute('open') === null) {
+    throw new Error('Technical log disclosure arrow did not expand the log');
+  }
+  await technicalLogSummary.click({ position: { x: 110, y: 12 } });
+  if (await technicalLog.getAttribute('open') !== null) {
+    throw new Error('Technical log disclosure body did not collapse the log');
+  }
 
   const input = page.locator('.conversation-panel__form textarea');
   await input.fill('第一条前台并行测试');

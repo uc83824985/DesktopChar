@@ -57,7 +57,11 @@ button.scene-interaction-panel__item:disabled { opacity: .42; cursor: default; }
 .conversation-panel__route-confirmation button { min-height: 24px; padding: 4px 8px; border-radius: 7px; color: #fff; background: #6653a7; font-size: 9px; }
 .conversation-panel__route-confirmation button[data-action="cancel"] { color: #594f6b; background: #e8e3f0; }
 .conversation-panel__agent-audit { margin: 0 2px 8px; border: 1px solid #77669e2b; border-radius: 9px; background: #f7f4fc; font-size: 9px; }
-.conversation-panel__agent-audit summary { padding: 6px 8px; color: #5f5475; cursor: pointer; user-select: none; }
+.conversation-panel__agent-audit summary { display: flex; align-items: center; gap: 5px; width: 100%; min-height: 30px; padding: 6px 8px; border-radius: 8px; color: #5f5475; cursor: pointer; list-style: none; user-select: none; }
+.conversation-panel__agent-audit summary::-webkit-details-marker { display: none; }
+.conversation-panel__agent-audit summary::before { content: "▶"; flex: 0 0 auto; pointer-events: none; font-size: 8px; }
+.conversation-panel__agent-audit[open] summary::before { content: "▼"; }
+.conversation-panel__agent-audit summary:hover { color: #44375f; background: #ebe6f6; }
 .conversation-panel__agent-audit-content { display: grid; gap: 5px; max-height: 128px; padding: 0 8px 8px; overflow: auto; user-select: text; }
 .conversation-panel__agent-empty { color: #8a8297; }
 .conversation-panel__agent-activity { display: grid; gap: 2px; padding: 5px 6px; border-radius: 7px; color: #675d78; background: #eeebf5; overflow-wrap: anywhere; }
