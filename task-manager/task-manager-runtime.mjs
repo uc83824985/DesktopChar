@@ -189,6 +189,7 @@ export function createTaskManagerRuntime(options) {
       observedChange: false,
       stableWaitingCount: 0,
       lastWaitingFingerprint: undefined,
+      lastWaitingObservedAtUtc: undefined,
     });
     sessionFacts.set(command.sessionId, sessionFingerprint(detail));
     return cloneCommand(record);
@@ -276,6 +277,7 @@ export function createTaskManagerRuntime(options) {
     if (!observation.observedActive && !fastCompletionVisible) {
       observation.stableWaitingCount = 0;
       observation.lastWaitingFingerprint = undefined;
+      observation.lastWaitingObservedAtUtc = undefined;
       if (now() - command.submittedAtMs >= activationTimeoutMs) {
         command.status = 'failed';
         command.completedAtMs = now();
@@ -289,6 +291,7 @@ export function createTaskManagerRuntime(options) {
     if (!observation.observedChange || session.agentState !== 'waiting_input') {
       observation.stableWaitingCount = 0;
       observation.lastWaitingFingerprint = undefined;
+      observation.lastWaitingObservedAtUtc = undefined;
       return;
     }
     const waitingFingerprint = [
@@ -296,6 +299,14 @@ export function createTaskManagerRuntime(options) {
       session.lastScreenChangedAtUtc ?? '',
       session.agentState,
     ].join('|');
+    if (
+      session.lastObservedAtUtc
+      && observation.lastWaitingObservedAtUtc
+      && compareUtc(session.lastObservedAtUtc, observation.lastWaitingObservedAtUtc) <= 0
+    ) {
+      return;
+    }
+    observation.lastWaitingObservedAtUtc = session.lastObservedAtUtc;
     if (observation.lastWaitingFingerprint === waitingFingerprint) {
       observation.stableWaitingCount++;
     }

@@ -37,6 +37,24 @@ test('latest submission generation completes only after changed and stable waiti
   await runtime.pollOnce();
   assert.equal(runtime.eventsAfter().events.length, 0);
   await runtime.pollOnce();
+  assert.equal(runtime.eventsAfter().events.length, 0);
+  monitor.current = session({
+    agentState: 'waiting_input',
+    hash: 'C',
+    changed: 3,
+    observed: 2,
+    text: '已完成最后请求\n> ',
+  });
+  await runtime.pollOnce();
+  assert.equal(runtime.eventsAfter().events.length, 0);
+  monitor.current = session({
+    agentState: 'waiting_input',
+    hash: 'C',
+    changed: 3,
+    observed: 4,
+    text: '已完成最后请求\n> ',
+  });
+  await runtime.pollOnce();
   const completed = runtime.eventsAfter().events;
   assert.equal(completed.length, 1);
   assert.equal(completed[0].type, 'task-completed');
@@ -115,10 +133,60 @@ test('a fast Codex reply can complete when polling misses the active state', asy
   await runtime.pollOnce();
   assert.equal(runtime.eventsAfter().events.length, 0);
   await runtime.pollOnce();
+  assert.equal(runtime.eventsAfter().events.length, 0);
+  monitor.current = session({
+    agentState: 'waiting_input',
+    hash: 'B',
+    changed: 2,
+    observed: 3,
+    text: `› ${request}\n\n• 快速完成\n\n› `,
+  });
+  await runtime.pollOnce();
   const [completed] = runtime.eventsAfter().events;
   assert.equal(completed.type, 'task-completed');
   assert.equal(completed.status, 'completed');
   assert.equal(runtime.getSnapshot().commands[0].status, 'completed');
+});
+
+test('completion captures a reply that arrives after a duplicated waiting snapshot', async () => {
+  const monitor = new FakeMonitor(
+    session({ agentState: 'active', hash: 'A', changed: 1, text: '处理中' }),
+  );
+  const runtime = createTaskManagerRuntime({ monitor });
+  await runtime.pollOnce();
+  await runtime.submitCommand(command('delayed-reply-command', '只回复：最终回复'));
+
+  monitor.current = session({
+    agentState: 'waiting_input',
+    hash: 'B',
+    changed: 2,
+    observed: 2,
+    text: '› 只回复：最终回复\n\n◦ Working (3s)\n\n› ',
+  });
+  await runtime.pollOnce();
+  await runtime.pollOnce();
+  assert.equal(runtime.eventsAfter().events.length, 0);
+
+  monitor.current = session({
+    agentState: 'waiting_input',
+    hash: 'C',
+    changed: 3,
+    observed: 3,
+    text: '› 只回复：最终回复\n\n• 最终回复\n\n› ',
+  });
+  await runtime.pollOnce();
+  assert.equal(runtime.eventsAfter().events.length, 0);
+  monitor.current = session({
+    agentState: 'waiting_input',
+    hash: 'C',
+    changed: 3,
+    observed: 4,
+    text: '› 只回复：最终回复\n\n• 最终回复\n\n› ',
+  });
+  await runtime.pollOnce();
+  const [completed] = runtime.eventsAfter().events;
+  assert.equal(completed.type, 'task-completed');
+  assert.equal(completed.visibleTextTail, '› 只回复：最终回复\n\n• 最终回复\n\n› ');
 });
 
 test('out-of-order submit acknowledgements cannot replace the latest generation observer', async () => {
@@ -147,6 +215,13 @@ test('out-of-order submit acknowledgements cannot replace the latest generation 
     text: '第二条完成\n> ',
   });
   await runtime.pollOnce();
+  monitor.current = session({
+    agentState: 'waiting_input',
+    hash: 'B',
+    changed: 2,
+    observed: 3,
+    text: '第二条完成\n> ',
+  });
   await runtime.pollOnce();
   assert.equal(runtime.eventsAfter().events[0].submissionGeneration, 2);
 });
@@ -215,6 +290,13 @@ test('declared result artifact is validated before submit and again at completio
       text: '文档已生成\n> ',
     });
     await runtime.pollOnce();
+    monitor.current = session({
+      agentState: 'waiting_input',
+      hash: 'B',
+      changed: 2,
+      observed: 3,
+      text: '文档已生成\n> ',
+    });
     await runtime.pollOnce();
     const event = runtime.eventsAfter().events[0];
     assert.equal(event.status, 'completed');
@@ -310,6 +392,7 @@ function session({
   agentState,
   hash,
   changed,
+  observed = changed,
   text = '处理中',
 }) {
   return {
@@ -324,7 +407,7 @@ function session({
     lastVisibleNonEmptyLine: text.trim().split('\n').at(-1),
     lastVisibleTextHash: hash,
     lastScreenChangedAtUtc: `2026-07-29T10:00:0${changed}Z`,
-    lastObservedAtUtc: `2026-07-29T10:00:1${changed}Z`,
+    lastObservedAtUtc: `2026-07-29T10:00:1${observed}Z`,
   };
 }
 
