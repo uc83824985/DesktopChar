@@ -1016,7 +1016,6 @@ function applyAvatarWindowBounds(bounds) {
     || current.height !== bounds.height
   ) {
     avatarWindow.setBounds(bounds, false);
-    avatarWindow.webContents.invalidate();
   }
   publishBounds();
 }

@@ -89,6 +89,44 @@ try {
       `Model left its avatar lane: expected x=${expectedModelX}, got ${opened.body.modelPositionX}`,
     );
   }
+  const panelCss = await page.evaluate(() => {
+    const panel = document.createElement('section');
+    panel.className = 'scene-interaction-panel';
+    const content = document.createElement('div');
+    content.style.height = '300px';
+    panel.append(content);
+    document.body.append(panel);
+    const visibleAnimationName = getComputedStyle(panel).animationName;
+    document.body.dataset.conversationSidebarPending = 'true';
+    const pendingStyle = getComputedStyle(panel);
+    const pending = {
+      visibility: pendingStyle.visibility,
+      opacity: pendingStyle.opacity,
+      animationName: pendingStyle.animationName,
+      transitionDuration: pendingStyle.transitionDuration,
+    };
+    document.body.dataset.conversationSidebarPending = 'false';
+    panel.style.animation = 'none';
+    const bounds = panel.getBoundingClientRect();
+    const result = {
+      visibleAnimationName,
+      pending,
+      centerY: bounds.top + bounds.height / 2,
+      viewportCenterY: innerHeight / 2,
+    };
+    panel.remove();
+    return result;
+  });
+  if (
+    panelCss.visibleAnimationName !== 'scene-interaction-panel-sidecar-in'
+    || panelCss.pending.visibility !== 'hidden'
+    || panelCss.pending.opacity !== '0'
+    || panelCss.pending.animationName !== 'none'
+    || panelCss.pending.transitionDuration !== '0s'
+    || Math.abs(panelCss.centerY - panelCss.viewportCenterY) > 1
+  ) {
+    throw new Error(`Sidebar panel CSS is not stable and centered: ${JSON.stringify(panelCss)}`);
+  }
 
   const closed = await page.evaluate(async () => {
     const layout = await window.desktopChar?.setConversationSidebarVisible(false);

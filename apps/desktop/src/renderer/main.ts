@@ -4178,7 +4178,10 @@ function requestConversationSidebarVisibility(visible: boolean): void {
   if (!desktopShell) return;
   const revision = ++conversationSidebarRequestRevision;
   document.body.dataset.conversationSidebarPending = 'true';
-  void desktopShell.setConversationSidebarVisible(visible).then(state => {
+  void desktopShell.setConversationSidebarVisible(visible).then(async state => {
+    if (revision !== conversationSidebarRequestRevision) return;
+    applyConversationSidebarLayout(state);
+    await waitForConversationSidebarWindow(state);
     if (revision !== conversationSidebarRequestRevision) return;
     document.body.dataset.conversationSidebarPending = 'false';
     applyConversationSidebarLayout(state);
@@ -4188,6 +4191,20 @@ function requestConversationSidebarVisibility(visible: boolean): void {
     document.body.dataset.conversationSidebarPending = 'false';
     console.error('Conversation sidebar layout update failed', error);
   });
+}
+
+async function waitForConversationSidebarWindow(
+  state: ConversationSidebarLayoutState,
+): Promise<void> {
+  const expectedWidth = state.avatarViewport.width
+    + (state.mode === 'sidecar' ? state.extentDip : 0);
+  for (let frame = 0; frame < 8; frame++) {
+    await new Promise<void>(resolve => requestAnimationFrame(() => resolve()));
+    if (Math.abs(innerWidth - expectedWidth) <= 1) {
+      await new Promise<void>(resolve => requestAnimationFrame(() => resolve()));
+      return;
+    }
+  }
 }
 
 function applyConversationSidebarLayout(state: ConversationSidebarLayoutState): void {
