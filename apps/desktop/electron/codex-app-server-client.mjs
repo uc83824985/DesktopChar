@@ -17,49 +17,85 @@ export function createCodexAppServerClient(options = {}) {
 
   return {
     execute,
+    createThread,
+    executeThread,
+    steerThread,
+    archiveThread,
     close,
   };
 
   async function execute(request, signal) {
+    const thread = await createThread({ ephemeral: true }, signal);
+    try {
+      return await executeThread(thread.threadId, request, signal);
+    }
+    finally {
+      void requestRpc('thread/unsubscribe', { threadId: thread.threadId }).catch(() => {});
+    }
+  }
+
+  async function createThread(options = {}, signal) {
     await ensureStarted();
-    if (signal.aborted) throw abortReason(signal);
+    if (signal?.aborted) throw abortReason(signal);
     const threadResponse = await requestRpc('thread/start', {
       cwd,
       approvalPolicy: 'never',
       sandbox: 'read-only',
-      ephemeral: true,
+      ephemeral: options.ephemeral === true,
       serviceName: 'desktop_char',
     });
-    const threadId = requiredText(threadResponse?.thread?.id, 'Codex app-server thread id');
+    return {
+      threadId: requiredText(threadResponse?.thread?.id, 'Codex app-server thread id'),
+    };
+  }
+
+  async function executeThread(threadId, request, signal, hooks = {}) {
+    await ensureStarted();
+    const normalizedThreadId = requiredText(threadId, 'Codex app-server thread id');
+    if (signal.aborted) throw abortReason(signal);
+    if (activeTurns.has(normalizedThreadId)) {
+      throw new Error(`Codex app-server thread already has an active turn: ${normalizedThreadId}`);
+    }
     const completion = Promise.withResolvers();
     void completion.promise.catch(() => {});
+    const turnReady = Promise.withResolvers();
+    void turnReady.promise.catch(() => {});
     const active = {
-      threadId,
+      threadId: normalizedThreadId,
       turnId: null,
       finalText: '',
       settled: false,
       resolve: completion.resolve,
       reject: completion.reject,
+      turnReady,
       removeAbortListener: () => {},
     };
-    activeTurns.set(threadId, active);
+    activeTurns.set(normalizedThreadId, active);
     try {
       const turnResponse = await requestRpc('turn/start', {
-        threadId,
+        threadId: normalizedThreadId,
         input: [{ type: 'text', text: request.prompt }],
         cwd,
         approvalPolicy: 'never',
         sandboxPolicy: { type: 'readOnly' },
-        outputSchema: request.outputSchema,
+        ...(request.outputSchema ? { outputSchema: request.outputSchema } : {}),
       });
       active.turnId = requiredText(turnResponse?.turn?.id, 'Codex app-server turn id');
+      active.turnReady.resolve(active.turnId);
+      hooks.onTurnStarted?.(active.turnId);
       if (signal.aborted) {
-        void requestRpc('turn/interrupt', { threadId, turnId: active.turnId }).catch(() => {});
+        void requestRpc('turn/interrupt', {
+          threadId: normalizedThreadId,
+          turnId: active.turnId,
+        }).catch(() => {});
         finishTurn(active, undefined, abortReason(signal));
       }
       else {
         const onAbort = () => {
-          void requestRpc('turn/interrupt', { threadId, turnId: active.turnId }).catch(() => {});
+          void requestRpc('turn/interrupt', {
+            threadId: normalizedThreadId,
+            turnId: active.turnId,
+          }).catch(() => {});
           finishTurn(active, undefined, abortReason(signal));
         };
         signal.addEventListener('abort', onAbort, { once: true });
@@ -68,13 +104,58 @@ export function createCodexAppServerClient(options = {}) {
       return await completion.promise;
     }
     catch (error) {
+      if (!active.turnId) active.turnReady.reject(error);
       finishTurn(active, undefined, error);
       throw error;
     }
     finally {
       active.removeAbortListener();
-      activeTurns.delete(threadId);
-      void requestRpc('thread/unsubscribe', { threadId }).catch(() => {});
+      if (activeTurns.get(normalizedThreadId) === active) {
+        activeTurns.delete(normalizedThreadId);
+      }
+    }
+  }
+
+  async function steerThread(threadId, text, signal) {
+    await ensureStarted();
+    const normalizedThreadId = requiredText(threadId, 'Codex app-server thread id');
+    const input = requiredText(text, 'Codex app-server steer text');
+    if (signal?.aborted) throw abortReason(signal);
+    const active = activeTurns.get(normalizedThreadId);
+    if (!active) {
+      throw new Error(`Codex app-server thread has no active turn: ${normalizedThreadId}`);
+    }
+    const turnId = await active.turnReady.promise;
+    if (signal?.aborted) throw abortReason(signal);
+    const response = await requestRpc('turn/steer', {
+      threadId: normalizedThreadId,
+      input: [{ type: 'text', text: input }],
+      expectedTurnId: turnId,
+    });
+    return {
+      turnId: requiredText(response?.turnId, 'Codex app-server steered turn id'),
+    };
+  }
+
+  async function archiveThread(threadId) {
+    await ensureStarted();
+    const normalizedThreadId = requiredText(threadId, 'Codex app-server thread id');
+    const active = activeTurns.get(normalizedThreadId);
+    const activeTurnId = active
+      ? await active.turnReady.promise.catch(() => undefined)
+      : undefined;
+    if (active && activeTurnId) {
+      await requestRpc('turn/interrupt', {
+        threadId: normalizedThreadId,
+        turnId: activeTurnId,
+      });
+      finishTurn(active, undefined, new DOMException('Managed conversation closed', 'AbortError'));
+    }
+    try {
+      await requestRpc('thread/archive', { threadId: normalizedThreadId });
+    }
+    finally {
+      void requestRpc('thread/unsubscribe', { threadId: normalizedThreadId }).catch(() => {});
     }
   }
 
@@ -191,6 +272,7 @@ export function createCodexAppServerClient(options = {}) {
   function finishTurn(active, text, error) {
     if (active.settled) return;
     active.settled = true;
+    if (!active.turnId) active.turnReady.reject(error ?? new Error('Codex turn ended before starting'));
     if (error === undefined) active.resolve(text);
     else active.reject(error);
   }

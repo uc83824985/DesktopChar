@@ -71,6 +71,71 @@ test('one hidden app-server process serves concurrent logical reply threads', as
   await client.close();
 });
 
+test('managed conversation keeps one persisted thread, steers active work, and archives on close', async () => {
+  const messages = [];
+  const turnCompletion = Promise.withResolvers();
+  const client = createCodexAppServerClient({
+    cwd: process.cwd(),
+    invocation: { command: 'codex-test', args: [] },
+    spawnProcess() {
+      return fakeAppServer(message => {
+        messages.push(message);
+        if (message.method === 'initialize') {
+          return [{ id: message.id, result: { userAgent: 'test' } }];
+        }
+        if (message.method === 'thread/start') {
+          return [{ id: message.id, result: { thread: { id: 'managed-thread' } } }];
+        }
+        if (message.method === 'turn/start') {
+          return [{
+            id: message.id,
+            result: { turn: { id: 'managed-turn', status: 'inProgress', items: [] } },
+          }];
+        }
+        if (message.method === 'turn/steer') {
+          return [{ id: message.id, result: { turnId: 'managed-turn' } }];
+        }
+        if (message.method === 'turn/interrupt') {
+          turnCompletion.resolve();
+          return [{ id: message.id, result: {} }];
+        }
+        if (message.method === 'thread/archive' || message.method === 'thread/unsubscribe') {
+          return [{ id: message.id, result: {} }];
+        }
+        return [];
+      });
+    },
+  });
+
+  const thread = await client.createThread();
+  const turnStarted = Promise.withResolvers();
+  const turn = client.executeThread(
+    thread.threadId,
+    { prompt: 'start managed work' },
+    new AbortController().signal,
+    { onTurnStarted: turnStarted.resolve },
+  );
+  await turnStarted.promise;
+  await client.steerThread(thread.threadId, 'use this correction');
+  await client.archiveThread(thread.threadId);
+  await assert.rejects(turn, error => error?.name === 'AbortError');
+  await turnCompletion.promise;
+
+  const start = messages.find(message => message.method === 'thread/start');
+  assert.equal(start.params.ephemeral, false);
+  assert.deepEqual(
+    messages.find(message => message.method === 'turn/steer')?.params,
+    {
+      threadId: 'managed-thread',
+      input: [{ type: 'text', text: 'use this correction' }],
+      expectedTurnId: 'managed-turn',
+    },
+  );
+  assert.equal(messages.some(message => message.method === 'turn/interrupt'), true);
+  assert.equal(messages.some(message => message.method === 'thread/archive'), true);
+  await client.close();
+});
+
 function fakeAppServer(handle) {
   const child = new EventEmitter();
   child.stdout = new PassThrough();
