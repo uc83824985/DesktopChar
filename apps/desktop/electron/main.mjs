@@ -13,6 +13,7 @@ import { createAgentHttpServer } from './agent-http-server.mjs';
 import { createCodexAppServerClient } from './codex-app-server-client.mjs';
 import { createCodexCharReplyExecutor, resolveCodexInvocation } from './codex-conversation-agent.mjs';
 import { createConversationReplyGateway } from './conversation-reply-gateway.mjs';
+import { createConversationSessionRegistry } from './conversation-session-registry.mjs';
 import { createNativeCursorRefresh } from './cursor-refresh.mjs';
 import { createNativeWindowPosition } from './native-window-position.mjs';
 import { createNativeWindowTopmost } from './native-window-topmost.mjs';
@@ -67,6 +68,12 @@ const channels = {
   taskManagerGet: 'task-manager:get-state',
   taskManagerSubmit: 'task-manager:submit-command',
   taskManagerState: 'task-manager:state',
+  conversationSessionsGet: 'conversation-sessions:get-state',
+  conversationSessionsCreate: 'conversation-sessions:create-managed',
+  conversationSessionsBind: 'conversation-sessions:bind-external',
+  conversationSessionsClose: 'conversation-sessions:close',
+  conversationSessionsSubmit: 'conversation-sessions:submit-command',
+  conversationSessionsState: 'conversation-sessions:state',
   mcpListTools: 'tts-mcp:list-tools',
   mcpCallTool: 'tts-mcp:call-tool',
   mcpServicesGet: 'mcp-services:get-state',
@@ -211,9 +218,18 @@ const mcpServices = createMcpServicesController({
     });
   },
 });
+let conversationSessions;
 const taskManager = createTaskManagerController(desktopConfig.taskManager, {
   onStateChanged(state) {
+    conversationSessions?.syncExternalSessions(state.enabled ? state.sessions : []);
     avatarWindow?.webContents.send(channels.taskManagerState, state);
+  },
+});
+conversationSessions = createConversationSessionRegistry({
+  managedClient: sharedCodexAppServerClient,
+  externalController: taskManager,
+  onStateChanged(state) {
+    avatarWindow?.webContents.send(channels.conversationSessionsState, state);
   },
 });
 
@@ -290,6 +306,7 @@ const shutdown = createShutdownCoordinator({
       conversationReplyGateway.close().catch(() => {}),
       routerAgentGateway.close().catch(() => {}),
       mcpServices.close().catch(() => {}),
+      conversationSessions.close().catch(() => {}),
       taskManager.close().catch(() => {}),
       performanceModel.close().catch(() => {}),
     ]);
@@ -801,6 +818,26 @@ function registerIpc() {
     requireAvatarSender(event);
     return taskManager.submitCommand(command);
   });
+  ipcMain.handle(channels.conversationSessionsGet, event => {
+    requireAvatarSender(event);
+    return conversationSessions.snapshot();
+  });
+  ipcMain.handle(channels.conversationSessionsCreate, async (event, request) => {
+    requireAvatarSender(event);
+    return conversationSessions.createManagedSession(request);
+  });
+  ipcMain.handle(channels.conversationSessionsBind, (event, request) => {
+    requireAvatarSender(event);
+    return conversationSessions.bindExternalSession(request);
+  });
+  ipcMain.handle(channels.conversationSessionsClose, async (event, sessionId) => {
+    requireAvatarSender(event);
+    return conversationSessions.closeSession(sessionId);
+  });
+  ipcMain.handle(channels.conversationSessionsSubmit, async (event, command) => {
+    requireAvatarSender(event);
+    return conversationSessions.submitCommand(command);
+  });
   ipcMain.handle(channels.mcpListTools, async event => {
     requireAvatarSender(event);
     const tools = await mcpServices.listTtsTools({ timeoutMs: 10_000 });
@@ -948,6 +985,7 @@ function windowState() {
     tts: mcpServices.currentTtsConfig(),
     mcpServices: mcpServices.snapshot(),
     taskManager: taskManager.snapshot(),
+    conversationSessions: conversationSessions.snapshot(),
     routerAgent: routerAgentGateway.snapshot(),
   };
 }

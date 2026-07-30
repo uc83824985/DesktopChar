@@ -117,6 +117,8 @@ import { JsonConsoleTtsLogger, McpTtsAdapter, TtsRuntimeEffectHandler } from '..
 import './style.css';
 import type {
   ConversationAgentState,
+  ConversationSessionRegistryState,
+  ConversationSessionState,
   DesktopAgentRolesConfig,
   DesktopTtsConfig,
   DesktopPerformanceInferenceConfig,
@@ -593,6 +595,16 @@ interface RoutingUiState {
   targetLabel?: string;
 }
 
+interface ConversationSessionManagementElements {
+  container: HTMLElement;
+  createButton: HTMLButtonElement;
+  bindButton: HTMLButtonElement;
+  closeButton: HTMLButtonElement;
+  bindControls: HTMLElement;
+  bindSelect: HTMLSelectElement;
+  bindConfirm: HTMLButtonElement;
+}
+
 interface TaskNotificationTurn {
   event: TaskManagerEventState;
   displayText: string;
@@ -621,6 +633,9 @@ let routingInFlight = false;
 let routingUiState: RoutingUiState = { phase: 'idle', text: '选择目标后发送消息。' };
 let taskManagerState: TaskManagerState | undefined;
 let taskManagerStateUnsubscribe: (() => void) | undefined;
+let conversationSessionState: ConversationSessionRegistryState | undefined;
+let conversationSessionStateUnsubscribe: (() => void) | undefined;
+let conversationSessionOperationInFlight = false;
 let activeTaskNotification: TaskNotificationTurn | undefined;
 const seenTaskManagerEventIds = new Set<string>();
 const pendingTaskNotifications: TaskManagerEventState[] = [];
@@ -1011,6 +1026,12 @@ try {
       document.body.dataset.conversationProvider = 'managed';
       interactionPanelHost.refresh();
     }).catch(error => console.error('[conversation] failed to read Agent state', error));
+    conversationSessionStateUnsubscribe =
+      desktopShell.onConversationSessionsState(applyConversationSessionState);
+    if (shellState) applyConversationSessionState(shellState.conversationSessions);
+    void desktopShell.getConversationSessionsState()
+      .then(applyConversationSessionState)
+      .catch(error => console.error('[conversation-sessions] failed to read state', error));
     taskManagerStateUnsubscribe = desktopShell.onTaskManagerState(applyTaskManagerState);
     if (shellState) applyTaskManagerState(shellState.taskManager);
     void desktopShell.getTaskManagerState()
@@ -1049,6 +1070,8 @@ try {
     conversationAgentStateUnsubscribe = undefined;
     taskManagerStateUnsubscribe?.();
     taskManagerStateUnsubscribe = undefined;
+    conversationSessionStateUnsubscribe?.();
+    conversationSessionStateUnsubscribe = undefined;
     cubismUpdatePipeline?.restore();
     cubismUpdatePipeline = undefined;
     contextMenuHost.dispose();
@@ -1859,7 +1882,7 @@ function initializeConversationTestRuntime(
       isAvailable: taskSessionIsAvailable,
       async submit(sessionId, message, visibleContextRevision) {
         if (!desktopShell) throw new Error('Desktop shell is unavailable');
-        const command = await desktopShell.submitTaskManagerCommand({
+        const command = await desktopShell.submitConversationSessionCommand({
           commandId: `task-command:${message.messageId}`,
           sessionId,
           text: message.text,
@@ -1879,7 +1902,7 @@ function initializeConversationTestRuntime(
       maxCandidates: routerRole?.maxCandidates ?? 6,
     },
   });
-  if (taskManagerState) updateRoutingCandidates(taskManagerState);
+  if (conversationSessionState) updateRoutingCandidates();
   conversationRuntime.subscribe(snapshot => {
     const pending = snapshot.responses.filter(response => !terminalConversationPresentation(response.presentation)).length;
     document.body.dataset.conversationPending = pending.toString();
@@ -1919,9 +1942,9 @@ function applyTaskManagerState(state: TaskManagerState): void {
   document.body.dataset.taskManagerPhase = state.phase;
   document.body.dataset.taskManagerSessions = state.sessions.length.toString();
   document.body.dataset.taskManagerEvents = state.events.length.toString();
-  updateRoutingCandidates(state);
   for (const event of state.events) {
     if (!isTaskNotificationEvent(event)) continue;
+    if (!registeredExternalSession(event.sessionId)) continue;
     const identity = taskManagerEventIdentity(event);
     if (seenTaskManagerEventIds.has(identity)) continue;
     seenTaskManagerEventIds.add(identity);
@@ -1931,17 +1954,30 @@ function applyTaskManagerState(state: TaskManagerState): void {
   void pumpTaskNotifications();
 }
 
-function updateRoutingCandidates(state: TaskManagerState): void {
-  const candidates: TaskSessionRouteCandidate[] = state.sessions.map(session => {
-    const lastVisibleEvent = taskSessionVisibleEvents.get(session.sessionId);
-    return {
-      sessionId: session.sessionId,
-      ...(session.title ? { title: session.title } : {}),
-      ...(session.workDir ? { summary: session.workDir } : {}),
-      status: taskSessionRouteStatus(session),
-      ...(lastVisibleEvent !== undefined ? { lastVisibleEvent } : {}),
-    };
-  });
+function applyConversationSessionState(state: ConversationSessionRegistryState): void {
+  conversationSessionState = state;
+  document.body.dataset.conversationSessionsPhase = state.phase;
+  document.body.dataset.conversationSessions = state.sessions.length.toString();
+  document.body.dataset.conversationExternalCandidates =
+    state.availableExternalSessions.length.toString();
+  updateRoutingCandidates();
+  interactionPanelHost.refresh();
+}
+
+function updateRoutingCandidates(): void {
+  const candidates: TaskSessionRouteCandidate[] = (conversationSessionState?.sessions ?? [])
+    .map(session => {
+      const lastVisibleEvent = session.ownership === 'external' && session.sourceSessionId
+        ? taskSessionVisibleEvents.get(session.sourceSessionId)
+        : session.lastResponse ?? undefined;
+      return {
+        sessionId: session.sessionId,
+        title: session.title,
+        ...(session.workDir ? { summary: session.workDir } : {}),
+        status: session.status,
+        ...(lastVisibleEvent !== undefined ? { lastVisibleEvent } : {}),
+      };
+    });
   routingContext?.replaceCandidates(candidates);
   const frozen = routingContext?.freeze();
   if (frozen) {
@@ -1951,26 +1987,18 @@ function updateRoutingCandidates(state: TaskManagerState): void {
   }
 }
 
-function taskSessionRouteStatus(
-  session: TaskManagerState['sessions'][number],
-): TaskSessionRouteCandidate['status'] {
-  if (
-    session.state !== 'running'
-    || session.monitorState === 'closed'
-    || session.agentState === 'closed'
-  ) {
-    return 'unavailable';
-  }
-  if (session.agentState === 'waiting_input') return 'waiting-input';
-  if (session.agentState === 'active') return 'active';
-  return 'idle-unknown';
+function taskSessionIsAvailable(sessionId: string): boolean {
+  const state = conversationSessionState;
+  if (!state || state.phase !== 'ready') return false;
+  const session = state.sessions.find(item => item.sessionId === sessionId);
+  return Boolean(session && session.status !== 'unavailable');
 }
 
-function taskSessionIsAvailable(sessionId: string): boolean {
-  const state = taskManagerState;
-  if (!state?.enabled || state.phase === 'disabled' || state.phase === 'closed') return false;
-  const session = state.sessions.find(item => item.sessionId === sessionId);
-  return Boolean(session && taskSessionRouteStatus(session) !== 'unavailable');
+function registeredExternalSession(sourceSessionId: string): ConversationSessionState | undefined {
+  return conversationSessionState?.sessions.find(
+    session => session.ownership === 'external'
+      && session.sourceSessionId === sourceSessionId,
+  );
 }
 
 function isTaskNotificationEvent(event: TaskManagerEventState): boolean {
@@ -2169,7 +2197,7 @@ function publishAvatarPresentationExposure(
     && visibleText === segments.map(segment => segment.text).join('');
   if (exposure.relatedSessionId && complete) {
     taskSessionVisibleEvents.set(exposure.relatedSessionId, visibleText);
-    if (taskManagerState) updateRoutingCandidates(taskManagerState);
+    updateRoutingCandidates();
   }
   recordVisibleExposure(
     exposure.messageId,
@@ -2297,7 +2325,46 @@ function mountConversationPanel(container: HTMLElement): DomInteractionPanelView
   const confirmation = document.createElement('div');
   confirmation.className = 'conversation-panel__route-confirmation';
   confirmation.setAttribute('aria-live', 'polite');
-  routeControls.append(targetLabel, routeStatus, confirmation);
+  const sessionManagement = document.createElement('div');
+  sessionManagement.className = 'conversation-panel__session-management';
+  const createSession = document.createElement('button');
+  createSession.type = 'button';
+  createSession.dataset.action = 'create-managed';
+  createSession.textContent = '新建';
+  createSession.title = '新建由 DesktopChar 托管的 Codex 对话';
+  const bindSession = document.createElement('button');
+  bindSession.type = 'button';
+  bindSession.dataset.action = 'bind-external';
+  bindSession.textContent = '绑定';
+  bindSession.title = '绑定 Session Monitor 已发现的对话窗口';
+  const closeSession = document.createElement('button');
+  closeSession.type = 'button';
+  closeSession.dataset.action = 'close-session';
+  closeSession.textContent = '关闭';
+  const bindControls = document.createElement('div');
+  bindControls.className = 'conversation-panel__bind-controls';
+  bindControls.hidden = true;
+  const bindSelect = document.createElement('select');
+  bindSelect.setAttribute('aria-label', '可绑定的外部对话窗口');
+  const bindConfirm = document.createElement('button');
+  bindConfirm.type = 'button';
+  bindConfirm.textContent = '注册';
+  const bindCancel = document.createElement('button');
+  bindCancel.type = 'button';
+  bindCancel.dataset.action = 'cancel';
+  bindCancel.textContent = '取消';
+  bindControls.append(bindSelect, bindConfirm, bindCancel);
+  sessionManagement.append(createSession, bindSession, closeSession);
+  const sessionManagementElements: ConversationSessionManagementElements = {
+    container: sessionManagement,
+    createButton: createSession,
+    bindButton: bindSession,
+    closeButton: closeSession,
+    bindControls,
+    bindSelect,
+    bindConfirm,
+  };
+  routeControls.append(targetLabel, sessionManagement, bindControls, routeStatus, confirmation);
 
   const agentAudit = document.createElement('details');
   agentAudit.className = 'conversation-panel__agent-audit';
@@ -2338,6 +2405,7 @@ function mountConversationPanel(container: HTMLElement): DomInteractionPanelView
         agentAuditSummary,
         agentAuditContent,
         target,
+        sessionManagementElements,
         routeStatus,
         confirmation,
         transcript,
@@ -2366,12 +2434,37 @@ function mountConversationPanel(container: HTMLElement): DomInteractionPanelView
       agentAuditSummary,
       agentAuditContent,
       target,
+      sessionManagementElements,
       routeStatus,
       confirmation,
       transcript,
       queue,
       submit,
     );
+  }, { signal: abort.signal });
+  createSession.addEventListener('click', () => {
+    void createManagedConversationSession();
+  }, { signal: abort.signal });
+  bindSession.addEventListener('click', () => {
+    bindControls.hidden = !bindControls.hidden;
+    renderSessionManagement(sessionManagementElements);
+  }, { signal: abort.signal });
+  bindConfirm.addEventListener('click', () => {
+    const sourceSessionId = bindSelect.value;
+    if (!sourceSessionId) return;
+    void bindExternalConversationSession(sourceSessionId).then(success => {
+      if (success) bindControls.hidden = true;
+    });
+  }, { signal: abort.signal });
+  bindCancel.addEventListener('click', () => {
+    bindControls.hidden = true;
+  }, { signal: abort.signal });
+  closeSession.addEventListener('click', () => {
+    const selected = selectedConversationSession();
+    if (!selected) return;
+    const verb = selected.ownership === 'managed' ? '归档并关闭' : '断开';
+    if (!window.confirm(`确认${verb}“${selected.title}”？`)) return;
+    void closeRegisteredConversationSession(selected);
   }, { signal: abort.signal });
   input.addEventListener('keydown', event => {
     if (event.key !== 'Enter' || !event.ctrlKey || event.isComposing) return;
@@ -2384,6 +2477,7 @@ function mountConversationPanel(container: HTMLElement): DomInteractionPanelView
     agentAuditSummary,
     agentAuditContent,
     target,
+    sessionManagementElements,
     routeStatus,
     confirmation,
     transcript,
@@ -2397,6 +2491,7 @@ function mountConversationPanel(container: HTMLElement): DomInteractionPanelView
       agentAuditSummary,
       agentAuditContent,
       target,
+      sessionManagementElements,
       routeStatus,
       confirmation,
       transcript,
@@ -2412,6 +2507,7 @@ function refreshConversationPanel(
   agentAuditSummary: HTMLElement,
   agentAuditContent: HTMLElement,
   target: HTMLSelectElement,
+  sessionManagement: ConversationSessionManagementElements,
   routeStatus: HTMLElement,
   confirmation: HTMLElement,
   transcript: HTMLOListElement,
@@ -2427,9 +2523,12 @@ function refreshConversationPanel(
   const pending = snapshot.responses.filter(response => !terminalConversationPresentation(response.presentation)).length;
   const assistantCount = conversationConnections?.getSnapshot().length ?? charMaxConcurrency;
   const providerLabel = desktopShell ? 'Codex App Server' : '浏览器回显';
-  summary.textContent = `${providerLabel} · ${assistantCount} 个 Char worker · ${pending} 个处理中`;
-  submit.disabled = routingInFlight || pending >= 6;
+  const registeredSessions = conversationSessionState?.sessions.length ?? 0;
+  summary.textContent =
+    `${providerLabel} · ${assistantCount} 个 Char worker · ${registeredSessions} 个 Session · ${pending} 个处理中`;
+  submit.disabled = routingInFlight || conversationSessionOperationInFlight || pending >= 6;
   renderRoutingControls(target, routeStatus, confirmation);
+  renderSessionManagement(sessionManagement);
   renderConversationAgentAudit(agentAuditSummary, agentAuditContent);
   renderConversationTranscript(transcript, snapshot);
   renderConversationQueue(queue, snapshot);
@@ -2453,10 +2552,11 @@ function renderRoutingControls(
     { value: 'auto', label: 'Auto（自动判断）' },
     { value: 'character', label: 'Char（桌面角色）' },
   ];
-  for (const session of taskManagerState?.sessions ?? []) {
+  for (const session of conversationSessionState?.sessions ?? []) {
+    const ownership = session.ownership === 'managed' ? 'Managed' : 'External';
     options.push({
       value: `session:${session.sessionId}`,
-      label: `${session.title?.trim() || session.sessionId} · ${taskSessionRouteStatus(session)}`,
+      label: `${session.title} · ${ownership} · ${session.status}`,
     });
   }
   if (!options.some(option => option.value === selectedValue)) {
@@ -2477,11 +2577,160 @@ function renderRoutingControls(
     return option;
   }));
   target.value = selectedValue;
-  target.disabled = routingInFlight;
+  target.disabled = routingInFlight || conversationSessionOperationInFlight;
   routeStatus.dataset.phase = routingUiState.phase;
   routeStatus.textContent = routingUiState.text;
   publishRoutingSelection(selection);
   renderPendingRouteConfirmation(confirmation);
+}
+
+function renderSessionManagement(elements: ConversationSessionManagementElements): void {
+  const candidates = conversationSessionState?.availableExternalSessions ?? [];
+  const selected = selectedConversationSession();
+  const unavailable = !desktopShell
+    || conversationSessionState?.phase !== 'ready'
+    || conversationSessionOperationInFlight;
+  elements.container.dataset.phase = conversationSessionOperationInFlight ? 'busy' : 'ready';
+  elements.createButton.disabled = unavailable;
+  elements.bindButton.disabled = unavailable || candidates.length === 0;
+  elements.bindButton.textContent = elements.bindControls.hidden ? '绑定' : '收起';
+  elements.closeButton.disabled = unavailable || !selected;
+  elements.closeButton.textContent = selected?.ownership === 'external' ? '断开' : '关闭';
+  elements.closeButton.title = selected?.ownership === 'external'
+    ? '仅断开 DesktopChar 注册，不关闭外部窗口'
+    : selected
+      ? '中断活动 Turn 并归档 DesktopChar 托管的 Codex 对话'
+      : '请先选择一个 Session';
+
+  const previous = elements.bindSelect.value;
+  elements.bindSelect.replaceChildren(...candidates.map(candidate => {
+    const option = document.createElement('option');
+    option.value = candidate.sourceSessionId;
+    option.textContent = `${candidate.title} · ${candidate.status}`;
+    return option;
+  }));
+  if (candidates.some(candidate => candidate.sourceSessionId === previous)) {
+    elements.bindSelect.value = previous;
+  }
+  elements.bindSelect.disabled = unavailable || candidates.length === 0;
+  elements.bindConfirm.disabled = unavailable || candidates.length === 0;
+  if (candidates.length === 0) elements.bindControls.hidden = true;
+}
+
+function selectedConversationSession(): ConversationSessionState | undefined {
+  const selection = routeCoordinator?.getSelection();
+  if (
+    selection?.mode !== 'direct'
+    || selection.target.kind !== 'task-session'
+  ) {
+    return undefined;
+  }
+  const sessionId = selection.target.sessionId;
+  return conversationSessionState?.sessions.find(
+    session => session.sessionId === sessionId,
+  );
+}
+
+async function createManagedConversationSession(): Promise<void> {
+  if (!desktopShell || conversationSessionOperationInFlight) return;
+  conversationSessionOperationInFlight = true;
+  routingUiState = { phase: 'routing', text: '正在新建 Managed 对话…' };
+  interactionPanelHost.refresh();
+  try {
+    const session = await desktopShell.createManagedConversationSession({});
+    applyConversationSessionState(await desktopShell.getConversationSessionsState());
+    selectRegisteredConversationSession(session);
+    routingUiState = {
+      phase: 'idle',
+      text: `已新建并切换到 ${session.title}；后续消息将保持发送到该 Managed 对话。`,
+    };
+  }
+  catch (error) {
+    routingUiState = {
+      phase: 'error',
+      text: `新建 Managed 对话失败：${error instanceof Error ? error.message : String(error)}`,
+    };
+  }
+  finally {
+    conversationSessionOperationInFlight = false;
+    interactionPanelHost.refresh();
+  }
+}
+
+async function bindExternalConversationSession(sourceSessionId: string): Promise<boolean> {
+  if (!desktopShell || conversationSessionOperationInFlight) return false;
+  conversationSessionOperationInFlight = true;
+  routingUiState = { phase: 'routing', text: '正在注册外部对话窗口…' };
+  interactionPanelHost.refresh();
+  try {
+    const session = await desktopShell.bindExternalConversationSession({ sourceSessionId });
+    applyConversationSessionState(await desktopShell.getConversationSessionsState());
+    selectRegisteredConversationSession(session);
+    routingUiState = {
+      phase: 'idle',
+      text: `已绑定并切换到 ${session.title}；关闭时只会断开 DesktopChar 注册。`,
+    };
+    return true;
+  }
+  catch (error) {
+    routingUiState = {
+      phase: 'error',
+      text: `绑定外部对话失败：${error instanceof Error ? error.message : String(error)}`,
+    };
+    return false;
+  }
+  finally {
+    conversationSessionOperationInFlight = false;
+    interactionPanelHost.refresh();
+  }
+}
+
+async function closeRegisteredConversationSession(
+  session: ConversationSessionState,
+): Promise<void> {
+  if (!desktopShell || conversationSessionOperationInFlight) return;
+  conversationSessionOperationInFlight = true;
+  routingUiState = {
+    phase: 'routing',
+    text: session.ownership === 'managed'
+      ? `正在关闭并归档 ${session.title}…`
+      : `正在断开 ${session.title}…`,
+  };
+  interactionPanelHost.refresh();
+  try {
+    const result = await desktopShell.closeConversationSession(session.sessionId);
+    applyConversationSessionState(await desktopShell.getConversationSessionsState());
+    routeCoordinator?.setSelection({ mode: 'auto' });
+    routingUiState = {
+      phase: 'idle',
+      text: result.action === 'archived'
+        ? `已关闭并归档 ${session.title}，目标已切换为 Auto。`
+        : `已断开 ${session.title}，外部对话窗口仍保持运行；目标已切换为 Auto。`,
+    };
+    publishRoutingSelection({ mode: 'auto' });
+  }
+  catch (error) {
+    routingUiState = {
+      phase: 'error',
+      text: `关闭 Session 失败：${error instanceof Error ? error.message : String(error)}`,
+    };
+  }
+  finally {
+    conversationSessionOperationInFlight = false;
+    interactionPanelHost.refresh();
+  }
+}
+
+function selectRegisteredConversationSession(session: ConversationSessionState): void {
+  const selection: TargetSelection = {
+    mode: 'direct',
+    target: { kind: 'task-session', sessionId: session.sessionId },
+  };
+  routeCoordinator?.setSelection(selection);
+  const pending = routeCoordinator?.getSnapshot().pendingConfirmation;
+  if (pending) routeCoordinator?.cancelPendingConfirmation(pending.messageId);
+  routingContext?.touchSession(session.sessionId);
+  publishRoutingSelection(selection);
 }
 
 function renderPendingRouteConfirmation(container: HTMLElement): void {
@@ -2497,7 +2746,7 @@ function renderPendingRouteConfirmation(container: HTMLElement): void {
   prompt.textContent = '候选接近，请确认目标：';
   container.append(prompt);
   for (const sessionId of pending.candidateSessionIds) {
-    const session = taskManagerState?.sessions.find(item => item.sessionId === sessionId);
+    const session = conversationSessionState?.sessions.find(item => item.sessionId === sessionId);
     const button = document.createElement('button');
     button.type = 'button';
     button.dataset.sessionId = sessionId;
@@ -2645,8 +2894,8 @@ function targetSelectionLabel(selection: TargetSelection): string {
 }
 
 function taskSessionLabel(sessionId: string): string {
-  const session = taskManagerState?.sessions.find(item => item.sessionId === sessionId);
-  return session?.title?.trim() || sessionId;
+  const session = conversationSessionState?.sessions.find(item => item.sessionId === sessionId);
+  return session?.title.trim() || sessionId;
 }
 
 function routeErrorText(code: string, error: unknown): string {

@@ -18,6 +18,7 @@ const userDataPath = path.join(temporaryDirectory, 'electron-user-data');
 const token = randomBytes(32).toString('base64url');
 const instanceId = randomUUID();
 const sessionId = 'session-routing-smoke';
+const registeredSessionId = `external:${sessionId}`;
 const commands = [];
 const runtime = {
   getSnapshot() {
@@ -111,15 +112,23 @@ try {
   page.on('pageerror', error => rendererErrors.push(error.stack ?? error.message));
   await page.locator(
     'body[data-ready="true"][data-desktop-shell="ready"]'
-      + '[data-task-manager-phase="ready"][data-routing-candidates="1"]',
+      + '[data-task-manager-phase="ready"][data-conversation-external-candidates="1"]'
+      + '[data-routing-candidates="0"]',
   ).waitFor({ timeout: 20_000 });
 
   const shellState = await page.evaluate(() => window.desktopChar?.getWindowState());
   if (!shellState) throw new Error('Desktop shell state is unavailable');
   await openConversationPanel(page, shellState.bounds, nativePointer);
-  const selector = page.locator('.conversation-panel__route-controls select');
-  await selector.selectOption(`session:${sessionId}`);
-  await page.locator(`body[data-routing-selection="session:${sessionId}"]`).waitFor();
+  await page.locator('button[data-action="bind-external"]').click();
+  await page.locator('.conversation-panel__bind-controls select').selectOption(sessionId);
+  await page.locator('.conversation-panel__bind-controls button:not([data-action])').click();
+  await page.locator(
+    `body[data-routing-selection="session:${registeredSessionId}"]`
+      + '[data-routing-candidates="1"][data-conversation-sessions="1"]',
+  ).waitFor({ timeout: 5_000 });
+  const selector = page.getByLabel('消息目标');
+  await selector.selectOption(`session:${registeredSessionId}`);
+  await page.locator(`body[data-routing-selection="session:${registeredSessionId}"]`).waitFor();
   const input = page.locator('.conversation-panel__form textarea');
   const firstText = '第一条直接提交';
   const secondText = '第二条继续提交';
@@ -174,7 +183,7 @@ try {
       && state?.routerAgent.adapter === 'codex-app-server';
   }, undefined, { timeout: 10_000 });
   const managedAutoText =
-    '请把这条补充说明立即发给候选列表中唯一的任务会话“路由隔离会话”（sessionId=session-routing-smoke），不要发给角色。';
+    `请把这条补充说明立即发给候选列表中唯一的任务会话“路由隔离会话”（sessionId=${registeredSessionId}），不要发给角色。`;
   await input.fill(managedAutoText);
   await input.press('Control+Enter');
   await page.waitForFunction(() => {
@@ -242,11 +251,58 @@ try {
   if (commands.length !== 3) {
     throw new Error(`Char routing unexpectedly submitted a Task Manager command: ${commands.length}`);
   }
+
+  await page.locator('button[data-action="create-managed"]').click();
+  await page.locator('body[data-conversation-sessions="2"]').waitFor({ timeout: 20_000 });
+  await page.waitForFunction(() =>
+    document.body.dataset.routingSelection?.startsWith('session:managed:'),
+  );
+  const managedSnapshot = await page.evaluate(async () => {
+    const state = await window.desktopChar?.getConversationSessionsState();
+    return {
+      state,
+      selection: document.body.dataset.routingSelection,
+      routeStatus: document.querySelector('.conversation-panel__route-status')?.textContent,
+    };
+  });
+  const managedSession = managedSnapshot.state?.sessions.find(
+    session => session.ownership === 'managed',
+  );
+  if (!managedSession?.threadId || managedSession.status !== 'waiting-input') {
+    throw new Error(`Managed conversation was not created: ${JSON.stringify(managedSnapshot)}`);
+  }
+  const browserWindowCount = await application.evaluate(({ BrowserWindow }) =>
+    BrowserWindow.getAllWindows().length);
+  if (browserWindowCount !== 1) {
+    throw new Error(`Managed conversation created an unexpected Electron window: ${browserWindowCount}`);
+  }
+  page.once('dialog', dialog => dialog.accept());
+  await page.locator('button[data-action="close-session"]').click();
+  await page.waitForFunction(async managedSessionId => {
+    const state = await window.desktopChar?.getConversationSessionsState();
+    return document.body.dataset.routingSelection === 'auto'
+      && !state?.sessions.some(session => session.sessionId === managedSessionId);
+  }, managedSession.sessionId, { timeout: 20_000 });
+
+  await selector.selectOption(`session:${registeredSessionId}`);
+  page.once('dialog', dialog => dialog.accept());
+  await page.locator('button[data-action="close-session"]').click();
+  await page.waitForFunction(async sourceSessionId => {
+    const registry = await window.desktopChar?.getConversationSessionsState();
+    const manager = await window.desktopChar?.getTaskManagerState();
+    return document.body.dataset.routingSelection === 'auto'
+      && registry?.sessions.length === 0
+      && registry.availableExternalSessions.some(
+        candidate => candidate.sourceSessionId === sourceSessionId,
+      )
+      && manager?.sessions.some(session => session.sessionId === sourceSessionId);
+  }, sessionId, { timeout: 10_000 });
+
   if (rendererErrors.length) {
     throw new Error(`Foreground routing renderer errors:\n${rendererErrors.join('\n')}`);
   }
   console.log(
-    `Foreground routing smoke passed: sticky ${sessionId}, strict failure, managed Router + Char Codex`,
+    `Foreground routing smoke passed: bound ${registeredSessionId}, sticky routing, strict failure, managed Router + Char Codex`,
   );
 }
 finally {

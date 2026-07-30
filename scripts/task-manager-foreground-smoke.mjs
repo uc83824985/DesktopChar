@@ -120,8 +120,13 @@ try {
   page.on('pageerror', error => rendererErrors.push(error.stack ?? error.message));
 
   await page.locator(
-    'body[data-ready="true"][data-desktop-shell="ready"][data-task-manager-phase="ready"]',
+    'body[data-ready="true"][data-desktop-shell="ready"][data-task-manager-phase="ready"]'
+      + '[data-conversation-external-candidates="1"]',
   ).waitFor({ timeout: 20_000 });
+  await page.evaluate(async sourceSessionId => {
+    await window.desktopChar?.bindExternalConversationSession({ sourceSessionId });
+  }, event.sessionId);
+  await page.locator('body[data-conversation-sessions="1"]').waitFor({ timeout: 5_000 });
   await page.waitForFunction(() => {
     const state = document.body.dataset.taskNotification;
     return state === 'presenting' || state === 'completed';

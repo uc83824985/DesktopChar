@@ -46,6 +46,7 @@ export interface DesktopWindowState {
   tts: DesktopTtsConfig;
   mcpServices: McpServicesState;
   taskManager: TaskManagerState;
+  conversationSessions: ConversationSessionRegistryState;
   routerAgent: RouterAgentState;
 }
 
@@ -131,6 +132,15 @@ export interface DesktopCharApi {
   getRouterAgentState(): Promise<RouterAgentState>;
   getTaskManagerState(): Promise<TaskManagerState>;
   submitTaskManagerCommand(command: TaskManagerCommand): Promise<TaskManagerCommandState>;
+  getConversationSessionsState(): Promise<ConversationSessionRegistryState>;
+  createManagedConversationSession(request: { title?: string }): Promise<ConversationSessionState>;
+  bindExternalConversationSession(
+    request: { sourceSessionId: string },
+  ): Promise<ConversationSessionState>;
+  closeConversationSession(sessionId: string): Promise<ConversationSessionCloseResult>;
+  submitConversationSessionCommand(
+    command: TaskManagerCommand,
+  ): Promise<ConversationSessionCommandState>;
   listTtsMcpTools(): Promise<McpToolDescriptor[]>;
   callTtsMcpTool(name: string, args: Record<string, unknown>, options?: { timeoutMs?: number }): Promise<McpCallToolResult>;
   getMcpServicesState(): Promise<McpServicesState>;
@@ -144,6 +154,9 @@ export interface DesktopCharApi {
   onConversationAgentState(callback: (state: ConversationAgentState) => void): () => void;
   onRouterAgentState(callback: (state: RouterAgentState) => void): () => void;
   onTaskManagerState(callback: (state: TaskManagerState) => void): () => void;
+  onConversationSessionsState(
+    callback: (state: ConversationSessionRegistryState) => void,
+  ): () => void;
   onAgentCommand(callback: (command: AgentCommand) => void): () => void;
   onBoundsChanged(callback: (bounds: DesktopRectangle) => void): () => void;
   onCursorPoint(callback: (point: DesktopPoint) => void): () => void;
@@ -258,6 +271,60 @@ export interface TaskManagerCommandState extends TaskManagerCommand {
   submittedAtMs?: number;
   completedAtMs?: number;
   error?: string;
+}
+
+export type ConversationSessionOwnership = 'managed' | 'external';
+export type ConversationSessionRouteStatus =
+  | 'waiting-input'
+  | 'active'
+  | 'idle-unknown'
+  | 'unavailable';
+
+export interface ConversationSessionState {
+  sessionId: string;
+  ownership: ConversationSessionOwnership;
+  title: string;
+  status: ConversationSessionRouteStatus;
+  workDir: string | null;
+  createdAtMs: number;
+  lastActivityAtMs: number;
+  lastResponse: string | null;
+  lastError: string | null;
+  threadId?: string;
+  sourceSessionId?: string;
+}
+
+export interface ExternalConversationCandidateState {
+  sourceSessionId: string;
+  title: string;
+  workDir: string | null;
+  status: ConversationSessionRouteStatus;
+}
+
+export interface ConversationSessionRegistryState {
+  phase: 'ready' | 'closing' | 'closed';
+  revision: number;
+  persistence: 'memory-only';
+  sessions: ConversationSessionState[];
+  availableExternalSessions: ExternalConversationCandidateState[];
+}
+
+export interface ConversationSessionCommandState extends TaskManagerCommand {
+  ownership: ConversationSessionOwnership;
+  status: TaskManagerCommandState['status'] | 'active';
+  sourceSessionId?: string;
+  delivery?: 'turn-started' | 'steered';
+  turnId?: string;
+  submissionGeneration?: number;
+  createdAtMs?: number;
+  submittedAtMs?: number;
+  completedAtMs?: number;
+  error?: string;
+}
+
+export interface ConversationSessionCloseResult {
+  sessionId: string;
+  action: 'archived' | 'disconnected';
 }
 
 export type AgentCommand =

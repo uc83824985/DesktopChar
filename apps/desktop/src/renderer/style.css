@@ -38,6 +38,15 @@ button.scene-interaction-panel__item:disabled { opacity: .42; cursor: default; }
 .conversation-panel__route-controls { display: grid; gap: 6px; margin: 0 2px 8px; padding: 7px 8px; border: 1px solid #77669e2b; border-radius: 9px; color: #655b78; background: #f7f4fc; font-size: 9px; }
 .conversation-panel__route-controls label { display: grid; grid-template-columns: auto minmax(0, 1fr); align-items: center; gap: 7px; font-weight: 700; }
 .conversation-panel__route-controls select { min-width: 0; padding: 5px 7px; border: 1px solid #77669e3d; border-radius: 7px; color: #3f3553; background: #fff; font: inherit; }
+.conversation-panel__session-management { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 5px; }
+.conversation-panel__session-management button,
+.conversation-panel__bind-controls button { min-height: 25px; padding: 4px 8px; border-radius: 7px; color: #51466a; background: #e9e4f3; font-size: 9px; }
+.conversation-panel__session-management button:hover:not(:disabled),
+.conversation-panel__bind-controls button:hover:not(:disabled) { transform: none; color: #fff; background: #6653a7; }
+.conversation-panel__session-management button[data-action="close-session"]:not(:disabled) { color: #923b51; background: #f8e6eb; }
+.conversation-panel__bind-controls { display: grid; grid-template-columns: minmax(0, 1fr) auto auto; gap: 5px; }
+.conversation-panel__bind-controls[hidden] { display: none; }
+.conversation-panel__bind-controls button:not([data-action="cancel"]) { color: #fff; background: #6653a7; }
 .conversation-panel__route-status { padding: 5px 6px; border-radius: 7px; line-height: 1.4; overflow-wrap: anywhere; background: #eeebf5; }
 .conversation-panel__route-status[data-phase="sent"] { color: #35664a; background: #e4f5e9; }
 .conversation-panel__route-status[data-phase="confirm"],

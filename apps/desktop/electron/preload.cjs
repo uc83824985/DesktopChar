@@ -23,6 +23,12 @@ const channels = {
   taskManagerGet: 'task-manager:get-state',
   taskManagerSubmit: 'task-manager:submit-command',
   taskManagerState: 'task-manager:state',
+  conversationSessionsGet: 'conversation-sessions:get-state',
+  conversationSessionsCreate: 'conversation-sessions:create-managed',
+  conversationSessionsBind: 'conversation-sessions:bind-external',
+  conversationSessionsClose: 'conversation-sessions:close',
+  conversationSessionsSubmit: 'conversation-sessions:submit-command',
+  conversationSessionsState: 'conversation-sessions:state',
   mcpListTools: 'tts-mcp:list-tools',
   mcpCallTool: 'tts-mcp:call-tool',
   mcpServicesGet: 'mcp-services:get-state',
@@ -55,6 +61,15 @@ contextBridge.exposeInMainWorld('desktopChar', {
   getRouterAgentState: () => ipcRenderer.invoke(channels.routerGet),
   getTaskManagerState: () => ipcRenderer.invoke(channels.taskManagerGet),
   submitTaskManagerCommand: command => ipcRenderer.invoke(channels.taskManagerSubmit, command),
+  getConversationSessionsState: () => ipcRenderer.invoke(channels.conversationSessionsGet),
+  createManagedConversationSession: request =>
+    ipcRenderer.invoke(channels.conversationSessionsCreate, request),
+  bindExternalConversationSession: request =>
+    ipcRenderer.invoke(channels.conversationSessionsBind, request),
+  closeConversationSession: sessionId =>
+    ipcRenderer.invoke(channels.conversationSessionsClose, sessionId),
+  submitConversationSessionCommand: command =>
+    ipcRenderer.invoke(channels.conversationSessionsSubmit, command),
   listTtsMcpTools: () => ipcRenderer.invoke(channels.mcpListTools),
   callTtsMcpTool: (name, args, options) => ipcRenderer.invoke(channels.mcpCallTool, name, args, options),
   getMcpServicesState: () => ipcRenderer.invoke(channels.mcpServicesGet),
@@ -87,6 +102,11 @@ contextBridge.exposeInMainWorld('desktopChar', {
     const listener = (_event, state) => callback(state);
     ipcRenderer.on(channels.taskManagerState, listener);
     return () => ipcRenderer.removeListener(channels.taskManagerState, listener);
+  },
+  onConversationSessionsState(callback) {
+    const listener = (_event, state) => callback(state);
+    ipcRenderer.on(channels.conversationSessionsState, listener);
+    return () => ipcRenderer.removeListener(channels.conversationSessionsState, listener);
   },
   onAgentCommand(callback) {
     const listener = (_event, command) => callback(command);
