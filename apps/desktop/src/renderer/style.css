@@ -20,6 +20,12 @@ button.scene-context-menu__item[data-danger="true"] { color: #a42d47; }
 .scene-context-menu__marker { color: #7155d9; font-weight: 900; }
 @keyframes scene-context-menu-in { from { opacity: 0; transform: translateY(-2px) scale(.985); } }
 .scene-interaction-panel { position: fixed; z-index: 900; right: 14px; bottom: 16px; width: min(440px, calc(100vw - 28px)); max-height: min(520px, calc(100vh - 32px)); padding: 12px; overflow: auto; color: #28243a; background: #fbfafff2; border: 1px solid #ffffff; border-radius: 18px; box-shadow: 0 18px 48px #15112652; backdrop-filter: blur(18px); user-select: none; transform-origin: 90% 100%; transition: opacity 120ms ease-out, transform 120ms ease-out; animation: scene-interaction-panel-in 120ms ease-out; }
+body[data-shell="floating"][data-conversation-sidebar-pending="true"] .scene-interaction-panel { visibility: hidden; }
+body[data-shell="floating"][data-conversation-sidebar-mode="sidecar"] .scene-interaction-panel { width: min(440px, calc(var(--conversation-sidebar-extent) - 28px)); }
+body[data-shell="floating"][data-conversation-sidebar-mode="sidecar"][data-conversation-sidebar-side="left"] .scene-interaction-panel { right: auto; left: 14px; transform-origin: 10% 100%; }
+body[data-shell="floating"][data-conversation-sidebar-mode="sidecar"][data-conversation-sidebar-side="right"] .scene-interaction-panel { right: 14px; left: auto; }
+body[data-shell="floating"][data-conversation-sidebar-mode="sidecar"][data-conversation-sidebar-side="left"] .speech-bubble { right: 23px; }
+body[data-shell="floating"][data-conversation-sidebar-mode="sidecar"][data-conversation-sidebar-side="right"] .speech-bubble { right: calc(var(--conversation-sidebar-extent) + 23px); }
 .scene-interaction-panel[data-phase="closing"] { opacity: 0; transform: translateY(4px) scale(.985); }
 .scene-interaction-panel__tabs { display: grid; grid-template-columns: repeat(2, 1fr); gap: 5px; margin-bottom: 11px; padding: 4px; border-radius: 13px; background: #e8e3f6; }
 button.scene-interaction-panel__tab { min-width: 0; padding: 8px 10px; border-radius: 10px; color: #69617e; background: transparent; font-size: 12px; }

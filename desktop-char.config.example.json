@@ -4,6 +4,9 @@
   "interaction": {
     "drag": {
       "holdDelayMs": 180
+    },
+    "conversationSidebar": {
+      "preferredSide": "right"
     }
   },
   "window": {

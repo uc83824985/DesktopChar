@@ -17,6 +17,13 @@
           "properties": {
             "holdDelayMs": { "type": "integer", "minimum": 0, "maximum": 999 }
           }
+        },
+        "conversationSidebar": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "preferredSide": { "enum": ["left", "right"] }
+          }
         }
       }
     },

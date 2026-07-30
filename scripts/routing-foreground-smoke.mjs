@@ -89,8 +89,8 @@ try {
 
   application = await electron.launch({
     args: [
-      path.join(root, 'apps/desktop/electron/main.mjs'),
       `--user-data-dir=${userDataPath}`,
+      path.join(root, 'apps/desktop/electron/main.mjs'),
     ],
     cwd: root,
     env: {
@@ -118,7 +118,21 @@ try {
 
   const shellState = await page.evaluate(() => window.desktopChar?.getWindowState());
   if (!shellState) throw new Error('Desktop shell state is unavailable');
-  await openConversationPanel(page, shellState.bounds, nativePointer);
+  const sidebarState = await openConversationPanel(page, shellState.bounds, nativePointer);
+  if (
+    sidebarState.conversationSidebar.mode === 'sidecar'
+    && (
+      sidebarState.bounds.width
+        !== shellState.bounds.width + sidebarState.conversationSidebar.extentDip
+      || sidebarState.conversationSidebar.avatarViewport.width !== shellState.bounds.width
+      || (
+        sidebarState.conversationSidebar.side === 'left'
+        && sidebarState.bounds.x + sidebarState.conversationSidebar.extentDip !== shellState.bounds.x
+      )
+    )
+  ) {
+    throw new Error(`Conversation sidebar geometry drifted: ${JSON.stringify(sidebarState)}`);
+  }
   await page.locator('button[data-action="bind-external"]').click();
   await page.locator('.conversation-panel__bind-controls select').selectOption(sessionId);
   await page.locator('.conversation-panel__bind-controls button:not([data-action])').click();
@@ -382,14 +396,18 @@ async function openConversationPanel(page, bounds, pointer) {
     try {
       const panel = page.locator('.scene-interaction-panel');
       await panel.waitFor({ state: 'visible', timeout: 3_000 });
+      const sidebarState = await page.evaluate(() => window.desktopChar?.getWindowState());
+      if (!sidebarState?.conversationSidebar.visible) {
+        throw new Error('Conversation sidebar did not publish a visible layout');
+      }
       const panelBounds = await panel.boundingBox();
       if (panelBounds) {
         pointer.move({
-          x: bounds.x + panelBounds.x + panelBounds.width / 2,
-          y: bounds.y + panelBounds.y + Math.min(24, panelBounds.height / 2),
+          x: sidebarState.bounds.x + panelBounds.x + panelBounds.width / 2,
+          y: sidebarState.bounds.y + panelBounds.y + Math.min(24, panelBounds.height / 2),
         });
       }
-      return;
+      return sidebarState;
     }
     catch {
       // Try another covered point because the animated model can move between sampling and click.

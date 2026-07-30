@@ -1,6 +1,8 @@
 export const DEFAULT_AVATAR_WINDOW_SIZE = Object.freeze({ width: 460, height: 700 });
 export const DEFAULT_AVATAR_WINDOW_MARGIN = 24;
 export const DEFAULT_DRAG_HOLD_DELAY_MS = 180;
+export const DEFAULT_CONVERSATION_SIDEBAR_EXTENT_DIP = 468;
+export const MIN_CONVERSATION_SIDEBAR_EXTENT_DIP = 320;
 
 export function initialAvatarBounds(workArea, size = DEFAULT_AVATAR_WINDOW_SIZE, margin = DEFAULT_AVATAR_WINDOW_MARGIN) {
   const fitted = fitSizeToWorkArea(size, workArea, margin);
@@ -20,6 +22,79 @@ export function dragAvatarBounds(startBounds, startPointer, currentPointer, work
     x: Math.round(startBounds.x + currentPointer.x - startPointer.x),
     y: Math.round(startBounds.y + currentPointer.y - startPointer.y),
   }, workArea);
+}
+
+export function conversationSidebarLayout(
+  avatarBounds,
+  workArea,
+  preferredSide = 'right',
+  requestedExtentDip = DEFAULT_CONVERSATION_SIDEBAR_EXTENT_DIP,
+) {
+  assertRectangle(avatarBounds, 'avatarBounds');
+  assertRectangle(workArea, 'workArea');
+  if (preferredSide !== 'left' && preferredSide !== 'right') {
+    throw new TypeError('preferredSide must be left or right');
+  }
+  if (!Number.isFinite(requestedExtentDip) || requestedExtentDip <= 0) {
+    throw new TypeError('requestedExtentDip must be positive and finite');
+  }
+  const available = {
+    left: Math.max(0, Math.round(avatarBounds.x - workArea.x)),
+    right: Math.max(
+      0,
+      Math.round(workArea.x + workArea.width - avatarBounds.x - avatarBounds.width),
+    ),
+  };
+  const oppositeSide = preferredSide === 'right' ? 'left' : 'right';
+  const requestedExtent = Math.round(requestedExtentDip);
+  const side = available[preferredSide] >= requestedExtent
+    ? preferredSide
+    : available[oppositeSide] >= requestedExtent
+      ? oppositeSide
+      : available[oppositeSide] > available[preferredSide]
+        ? oppositeSide
+        : preferredSide;
+  const extentDip = Math.min(requestedExtent, available[side]);
+  if (extentDip < MIN_CONVERSATION_SIDEBAR_EXTENT_DIP) {
+    return {
+      mode: 'overlay',
+      preferredSide,
+      side,
+      extentDip: 0,
+      windowBounds: { ...avatarBounds },
+      avatarViewport: { x: 0, width: avatarBounds.width },
+    };
+  }
+  return {
+    mode: 'sidecar',
+    preferredSide,
+    side,
+    extentDip,
+    windowBounds: {
+      x: side === 'left' ? avatarBounds.x - extentDip : avatarBounds.x,
+      y: avatarBounds.y,
+      width: avatarBounds.width + extentDip,
+      height: avatarBounds.height,
+    },
+    avatarViewport: {
+      x: side === 'left' ? extentDip : 0,
+      width: avatarBounds.width,
+    },
+  };
+}
+
+export function avatarBoundsFromConversationSidebar(windowBounds, side, extentDip) {
+  assertRectangle(windowBounds, 'windowBounds');
+  if (side !== 'left' && side !== 'right') throw new TypeError('side must be left or right');
+  if (!Number.isFinite(extentDip) || extentDip < 0 || extentDip >= windowBounds.width) {
+    throw new TypeError('extentDip must fit inside windowBounds');
+  }
+  return {
+    x: side === 'left' ? windowBounds.x + extentDip : windowBounds.x,
+    y: windowBounds.y,
+    width: windowBounds.width - extentDip,
+    height: windowBounds.height,
+  };
 }
 
 /** Moves a fixed-size transparent window through its stable bounds path. */

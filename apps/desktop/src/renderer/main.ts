@@ -118,6 +118,7 @@ import type {
 import { JsonConsoleTtsLogger, McpTtsAdapter, TtsRuntimeEffectHandler } from '../../../../packages/tts-mcp-adapter/src/index.ts';
 import './style.css';
 import type {
+  ConversationSidebarLayoutState,
   ConversationAgentState,
   ConversationSessionEventState,
   ConversationSessionRegistryState,
@@ -696,6 +697,16 @@ const reloadableExpressionCatalogInference = new ReloadableExpressionCatalogInfe
 let performanceInferenceConfig: DesktopPerformanceInferenceConfig | undefined;
 let currentLipSyncProfile: LipSyncProfile = { ...DEFAULT_LIP_SYNC_PROFILE };
 let desktopBounds: { x: number; y: number; width: number; height: number } | undefined;
+let conversationSidebarLayout: ConversationSidebarLayoutState = {
+  visible: false,
+  mode: 'overlay',
+  preferredSide: 'right',
+  side: 'right',
+  extentDip: 0,
+  avatarViewport: { x: 0, width: innerWidth },
+};
+let conversationSidebarStateUnsubscribe: (() => void) | undefined;
+let conversationSidebarRequestRevision = 0;
 let desktopCursorLocalPoint: { x: number; y: number } | undefined;
 let avatarPointerClientPoint: { x: number; y: number } | undefined;
 let pointerPresentation: PointerPresentation | undefined;
@@ -802,7 +813,10 @@ const interactionPanelHost = new DomInteractionPanelHost(interactionUi, {
   },
   onVisibilityChanged(visible) {
     if (!visible) document.body.dataset.interactionPanel = 'hidden';
-    if (desktopShell) updatePointerPresentation(currentSurfacePresentation());
+    if (desktopShell) {
+      requestConversationSidebarVisibility(visible);
+      updatePointerPresentation(currentSurfacePresentation());
+    }
   },
 });
 document.body.dataset.contextMenu = 'closed';
@@ -1102,6 +1116,8 @@ try {
     conversationSessionStateUnsubscribe = undefined;
     conversationSessionEventUnsubscribe?.();
     conversationSessionEventUnsubscribe = undefined;
+    conversationSidebarStateUnsubscribe?.();
+    conversationSidebarStateUnsubscribe = undefined;
     cubismUpdatePipeline?.restore();
     cubismUpdatePipeline = undefined;
     contextMenuHost.dispose();
@@ -3311,8 +3327,9 @@ function openAvatarInteractionPanel(
   hitArea: string,
   point: { x: number; y: number } | undefined,
 ): void {
+  const avatarViewport = currentAvatarViewport();
   const clientPoint = point ?? desktopCursorLocalPoint ?? {
-    x: Math.round(innerWidth / 2),
+    x: Math.round(avatarViewport.x + avatarViewport.width / 2),
     y: Math.round(innerHeight / 2),
   };
   if (!interactionPanelHost.open({
@@ -4083,6 +4100,8 @@ function initializeDesktopInteraction(initialState: Awaited<ReturnType<NonNullab
   app.renderer.on('postrender', advancePixelPicking);
   desktopShell.onBoundsChanged(updateDesktopBounds);
   desktopShell.onCursorPoint(handleDesktopCursor);
+  conversationSidebarStateUnsubscribe =
+    desktopShell.onConversationSidebarState(applyConversationSidebarLayout);
   canvas.addEventListener('pointerdown', beginAvatarDrag);
   canvas.addEventListener('pointermove', moveAvatarDrag);
   canvas.addEventListener('pointerup', endAvatarDrag);
@@ -4123,6 +4142,7 @@ function initializeDesktopInteraction(initialState: Awaited<ReturnType<NonNullab
     dragGesture.setHoldDelayMs(state.interaction.dragHoldDelayMs);
     document.body.dataset.dragHoldDelayMs = state.interaction.dragHoldDelayMs.toString();
     document.body.dataset.dragWindowApi = state.interaction.dragWindowApi;
+    applyConversationSidebarLayout(state.conversationSidebar);
     updateDesktopBounds(state.bounds);
     updatePointerPresentation(state.pointerPresentation ?? {
       passthrough: state.mousePassthrough,
@@ -4136,6 +4156,9 @@ function initializeDesktopInteraction(initialState: Awaited<ReturnType<NonNullab
     document.body.dataset.desktopShell = 'failed';
     console.error('Desktop shell initialization failed', error);
   });
+  if (initialState?.conversationSidebar.visible && !interactionPanelHost.isOpen) {
+    requestConversationSidebarVisibility(false);
+  }
 }
 
 function applyPerformanceInferenceConfig(config: DesktopPerformanceInferenceConfig): void {
@@ -4151,14 +4174,66 @@ function applyPerformanceInferenceConfig(config: DesktopPerformanceInferenceConf
   contextMenuHost.refresh();
 }
 
+function requestConversationSidebarVisibility(visible: boolean): void {
+  if (!desktopShell) return;
+  const revision = ++conversationSidebarRequestRevision;
+  document.body.dataset.conversationSidebarPending = 'true';
+  void desktopShell.setConversationSidebarVisible(visible).then(state => {
+    if (revision !== conversationSidebarRequestRevision) return;
+    document.body.dataset.conversationSidebarPending = 'false';
+    applyConversationSidebarLayout(state);
+    refreshInteractionPanelPointerPresentation();
+  }).catch(error => {
+    if (revision !== conversationSidebarRequestRevision) return;
+    document.body.dataset.conversationSidebarPending = 'false';
+    console.error('Conversation sidebar layout update failed', error);
+  });
+}
+
+function applyConversationSidebarLayout(state: ConversationSidebarLayoutState): void {
+  conversationSidebarLayout = structuredClone(state);
+  document.body.dataset.conversationSidebarVisible = state.visible ? 'true' : 'false';
+  document.body.dataset.conversationSidebarMode = state.mode;
+  document.body.dataset.conversationSidebarSide = state.side;
+  document.body.dataset.conversationSidebarPreferredSide = state.preferredSide;
+  document.documentElement.style.setProperty(
+    '--conversation-sidebar-extent',
+    `${state.extentDip}px`,
+  );
+  fitModel();
+  refreshInteractionPanelPointerPresentation();
+}
+
+function currentAvatarViewport(): { x: number; width: number } {
+  if (
+    !conversationSidebarLayout.visible
+    || conversationSidebarLayout.mode !== 'sidecar'
+    || conversationSidebarLayout.extentDip <= 0
+  ) {
+    return { x: 0, width: innerWidth };
+  }
+  const x = Math.min(
+    Math.max(0, conversationSidebarLayout.avatarViewport.x),
+    Math.max(0, innerWidth - 1),
+  );
+  return {
+    x,
+    width: Math.max(
+      1,
+      Math.min(conversationSidebarLayout.avatarViewport.width, innerWidth - x),
+    ),
+  };
+}
+
 function handleDesktopCursor(point: { x: number; y: number }): void {
   if (!desktopShell || !desktopBounds || !model || !runtime) return;
   const localX = point.x - desktopBounds.x;
   const localY = point.y - desktopBounds.y;
+  const avatarViewport = currentAvatarViewport();
   desktopCursorLocalPoint = { x: localX, y: localY };
   runtime.dispatch({
     type: 'user.look-target-changed',
-    x: (point.x - (desktopBounds.x + desktopBounds.width / 2)) / (desktopBounds.width / 2),
+    x: (localX - (avatarViewport.x + avatarViewport.width / 2)) / (avatarViewport.width / 2),
     y: -(point.y - (desktopBounds.y + desktopBounds.height / 2)) / (desktopBounds.height / 2),
   });
   if (dragGesture.hasGesture) return;
@@ -4355,14 +4430,26 @@ function sampleAmplitude(samples: Array<{ atMs: number; value: number }> | undef
 function coreModel(target: Live2DModel): CubismCoreModel { return target.internalModel.coreModel as CubismCoreModel; }
 function fitModel(): void {
   if (!model) return;
+  if (
+    desktopShell
+    && document.body.dataset.conversationSidebarPending === 'true'
+  ) return;
   const layoutWidth = model.internalModel.width;
   const layoutHeight = model.internalModel.height;
   const compactPresentation = Boolean(desktopShell) || motionAuditRequested;
+  const avatarViewport = currentAvatarViewport();
   const scale = compactPresentation
-    ? Math.min(innerWidth / layoutWidth * 0.92, innerHeight / layoutHeight * 0.94)
+    ? Math.min(avatarViewport.width / layoutWidth * 0.92, innerHeight / layoutHeight * 0.94)
     : Math.min(innerWidth / layoutWidth * 0.7, innerHeight / layoutHeight * 0.82);
   model.scale.set(scale);
   model.anchor.set(0.5, 0.5);
-  model.position.set(innerWidth * (compactPresentation ? 0.5 : 0.68), innerHeight * 0.5);
+  model.position.set(
+    compactPresentation
+      ? avatarViewport.x + avatarViewport.width * 0.5
+      : innerWidth * 0.68,
+    innerHeight * 0.5,
+  );
   document.body.dataset.modelScale = scale.toFixed(6);
+  document.body.dataset.avatarViewport = `${avatarViewport.x},${avatarViewport.width}`;
+  document.body.dataset.modelPositionX = model.position.x.toFixed(3);
 }

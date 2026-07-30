@@ -149,6 +149,9 @@ Windows 通常对应 `%APPDATA%/DesktopChar/config.json`。程序只通过 Elect
   "interaction": {
     "drag": {
       "holdDelayMs": 180
+    },
+    "conversationSidebar": {
+      "preferredSide": "right"
     }
   },
   "window": {
@@ -224,6 +227,8 @@ App Server 时，以 Char 绑定 Provider 的 `launcherScript` 为共享进程�
 以下当前可调项已经进入应用 JSON：
 
 - 拖动长按延迟；
+- 对话栏优先从角色左侧或右侧展开，`interaction.conversationSidebar.preferredSide` 接受
+  `left/right`，默认 `right`；实际方向仍会根据角色所在显示器的可用工作区自动翻转；
 - Char worker 并发上限 `agentRoles.char.maxConcurrency`，允许 `1–8`，默认 `2`；
 - managed Char/Router Provider 请求超时；两种角色共享 DesktopChar 托管的单个 Codex
   App Server，并为每次请求建立独立 ephemeral thread；
@@ -339,7 +344,8 @@ Settings UI --patch intent--> preload whitelist --> main validate
 
 热重载按副作用分级：
 
-- **立即应用**：拖动长按延迟和置顶策略。
+- **立即应用**：拖动长按延迟、对话栏侧边偏好和置顶策略；已打开的侧栏会基于角色当前
+  位置立即重新选择可用方向。
 - **Runtime 空闲边界应用**：语音 Provider 切换。
 - **Conversation 空闲边界应用**：逻辑助手并发上限；不会中断正在生成或播放的 Turn。
 - **Provider 新请求边界应用**：Reply 请求超时；已经分派的请求继续使用原超时。

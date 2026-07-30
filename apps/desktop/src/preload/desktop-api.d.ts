@@ -40,6 +40,7 @@ export interface DesktopWindowState {
   };
   tray: { available: boolean; iconScaleFactors: number[] };
   interaction: DesktopInteractionConfig;
+  conversationSidebar: ConversationSidebarLayoutState;
   agentRoles: DesktopAgentRolesConfig;
   character: DesktopCharacterConfig;
   performanceInference: DesktopPerformanceInferenceConfig;
@@ -57,6 +58,21 @@ export interface DesktopCharacterConfig {
 export interface DesktopInteractionConfig {
   dragHoldDelayMs: number;
   dragWindowApi: 'native-set-window-pos' | 'setBounds';
+  conversationSidebar: {
+    preferredSide: 'left' | 'right';
+  };
+}
+
+export interface ConversationSidebarLayoutState {
+  visible: boolean;
+  mode: 'sidecar' | 'overlay';
+  preferredSide: 'left' | 'right';
+  side: 'left' | 'right';
+  extentDip: number;
+  avatarViewport: {
+    x: number;
+    width: number;
+  };
 }
 
 export interface DesktopAgentRolesConfig {
@@ -141,6 +157,7 @@ export interface DesktopCharApi {
   submitConversationSessionCommand(
     command: TaskManagerCommand,
   ): Promise<ConversationSessionCommandState>;
+  setConversationSidebarVisible(visible: boolean): Promise<ConversationSidebarLayoutState>;
   listTtsMcpTools(): Promise<McpToolDescriptor[]>;
   callTtsMcpTool(name: string, args: Record<string, unknown>, options?: { timeoutMs?: number }): Promise<McpCallToolResult>;
   getMcpServicesState(): Promise<McpServicesState>;
@@ -159,6 +176,9 @@ export interface DesktopCharApi {
   ): () => void;
   onConversationSessionEvent(
     callback: (event: ConversationSessionEventState) => void,
+  ): () => void;
+  onConversationSidebarState(
+    callback: (state: ConversationSidebarLayoutState) => void,
   ): () => void;
   onAgentCommand(callback: (command: AgentCommand) => void): () => void;
   onBoundsChanged(callback: (bounds: DesktopRectangle) => void): () => void;

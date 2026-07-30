@@ -15,8 +15,8 @@ const isolatedUserDataPath = path.join(
 );
 const application = await electron.launch({
   args: [
-    path.join(root, 'apps/desktop/electron/main.mjs'),
     `--user-data-dir=${isolatedUserDataPath}`,
+    path.join(root, 'apps/desktop/electron/main.mjs'),
   ],
   cwd: root,
   env: {
@@ -87,6 +87,16 @@ try {
     throw new Error(`Native avatar click did not open the panel: ${JSON.stringify(diagnostics)}`, {
       cause: error,
     });
+  }
+  const sidebarState = await page.evaluate(() => window.desktopChar?.getWindowState());
+  if (
+    !sidebarState?.conversationSidebar.visible
+    || (
+      sidebarState.conversationSidebar.mode === 'sidecar'
+      && sidebarState.conversationSidebar.avatarViewport.width !== shellState.bounds.width
+    )
+  ) {
+    throw new Error(`Unexpected conversation sidebar state: ${JSON.stringify(sidebarState)}`);
   }
 
   const prompt = `前台 Codex 连通测试 ${Date.now()}：请用一句简短中文确认收到。`;

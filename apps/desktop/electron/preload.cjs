@@ -30,6 +30,8 @@ const channels = {
   conversationSessionsSubmit: 'conversation-sessions:submit-command',
   conversationSessionsState: 'conversation-sessions:state',
   conversationSessionsEvent: 'conversation-sessions:event',
+  conversationSidebarSetVisible: 'conversation-sidebar:set-visible',
+  conversationSidebarState: 'conversation-sidebar:state',
   mcpListTools: 'tts-mcp:list-tools',
   mcpCallTool: 'tts-mcp:call-tool',
   mcpServicesGet: 'mcp-services:get-state',
@@ -71,6 +73,8 @@ contextBridge.exposeInMainWorld('desktopChar', {
     ipcRenderer.invoke(channels.conversationSessionsClose, sessionId),
   submitConversationSessionCommand: command =>
     ipcRenderer.invoke(channels.conversationSessionsSubmit, command),
+  setConversationSidebarVisible: visible =>
+    ipcRenderer.invoke(channels.conversationSidebarSetVisible, visible),
   listTtsMcpTools: () => ipcRenderer.invoke(channels.mcpListTools),
   callTtsMcpTool: (name, args, options) => ipcRenderer.invoke(channels.mcpCallTool, name, args, options),
   getMcpServicesState: () => ipcRenderer.invoke(channels.mcpServicesGet),
@@ -113,6 +117,11 @@ contextBridge.exposeInMainWorld('desktopChar', {
     const listener = (_event, state) => callback(state);
     ipcRenderer.on(channels.conversationSessionsEvent, listener);
     return () => ipcRenderer.removeListener(channels.conversationSessionsEvent, listener);
+  },
+  onConversationSidebarState(callback) {
+    const listener = (_event, state) => callback(state);
+    ipcRenderer.on(channels.conversationSidebarState, listener);
+    return () => ipcRenderer.removeListener(channels.conversationSidebarState, listener);
   },
   onAgentCommand(callback) {
     const listener = (_event, command) => callback(command);

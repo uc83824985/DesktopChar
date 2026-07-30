@@ -3,6 +3,8 @@ import path from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 import {
   applyDragAvatarBounds,
+  avatarBoundsFromConversationSidebar,
+  conversationSidebarLayout,
   describePointerPresentationChange,
   dragAvatarBounds,
   initialAvatarBounds,
@@ -75,6 +77,8 @@ const channels = {
   conversationSessionsSubmit: 'conversation-sessions:submit-command',
   conversationSessionsState: 'conversation-sessions:state',
   conversationSessionsEvent: 'conversation-sessions:event',
+  conversationSidebarSetVisible: 'conversation-sidebar:set-visible',
+  conversationSidebarState: 'conversation-sidebar:state',
   mcpListTools: 'tts-mcp:list-tools',
   mcpCallTool: 'tts-mcp:call-tool',
   mcpServicesGet: 'mcp-services:get-state',
@@ -121,6 +125,12 @@ let avatarPresentationTimer;
 let avatarFrameSubscriptionActive = false;
 let avatarVisibilityRecoveryTimer;
 let avatarBounds = null;
+let conversationSidebar = {
+  visible: false,
+  mode: 'overlay',
+  side: desktopConfig.interaction.conversationSidebar.preferredSide,
+  extentDip: 0,
+};
 let cursorTimer;
 let cursorRefreshTimer;
 let avatarTopmostEventMonitor;
@@ -348,6 +358,7 @@ function createAvatarWindow() {
     desktopConfig.window.defaultMarginDip,
   );
   avatarBounds = { ...bounds };
+  conversationSidebar.side = desktopConfig.interaction.conversationSidebar.preferredSide;
   avatarWindow = new BrowserWindow({
     ...bounds,
     title: 'DesktopChar',
@@ -685,6 +696,13 @@ function registerIpc() {
     requireAvatarSender(event);
     return windowState();
   });
+  ipcMain.handle(channels.conversationSidebarSetVisible, (event, visible) => {
+    requireAvatarSender(event);
+    if (typeof visible !== 'boolean') {
+      throw new TypeError('Conversation sidebar visibility must be a boolean');
+    }
+    return setConversationSidebarVisible(visible);
+  });
   ipcMain.handle(channels.beginDrag, (event, point) => {
     requireAvatarSender(event);
     if (!isScreenPoint(point)) throw new TypeError('Invalid drag start point');
@@ -736,6 +754,9 @@ function registerIpc() {
   ipcMain.handle(channels.endDrag, event => {
     requireAvatarSender(event);
     dragState = null;
+    if (conversationSidebar.visible) {
+      applyConversationSidebarForAvatarBounds(avatarLaneBounds(), true);
+    }
     return windowState();
   });
   ipcMain.on(channels.setPointerPresentation, (event, presentation) => {
@@ -942,14 +963,104 @@ function isPointerPresentation(value) {
 function restoreDefaultPosition() {
   if (!avatarWindow) return;
   const display = screen.getDisplayNearestPoint(screen.getCursorScreenPoint());
-  const { width, height } = avatarBounds;
-  avatarBounds = initialAvatarBounds(
+  const currentAvatarBounds = avatarLaneBounds();
+  const defaultAvatarBounds = initialAvatarBounds(
     display.workArea,
-    { width, height },
+    { width: currentAvatarBounds.width, height: currentAvatarBounds.height },
     desktopConfig.window.defaultMarginDip,
   );
-  avatarWindow.setBounds(avatarBounds);
+  applyConversationSidebarForAvatarBounds(defaultAvatarBounds, conversationSidebar.visible);
+}
+
+function setConversationSidebarVisible(visible) {
+  if (!avatarWindow || avatarWindow.isDestroyed()) {
+    throw new Error('Avatar window is not available');
+  }
+  applyConversationSidebarForAvatarBounds(avatarLaneBounds(), visible === true);
+  return conversationSidebarSnapshot();
+}
+
+function applyConversationSidebarForAvatarBounds(baseBounds, visible) {
+  if (!avatarWindow || avatarWindow.isDestroyed()) return;
+  const preferredSide = desktopConfig.interaction.conversationSidebar.preferredSide;
+  if (!visible) {
+    conversationSidebar = {
+      visible: false,
+      mode: 'overlay',
+      side: preferredSide,
+      extentDip: 0,
+    };
+    applyAvatarWindowBounds(baseBounds);
+    publishConversationSidebarState();
+    return;
+  }
+  const display = screen.getDisplayMatching(baseBounds);
+  const layout = conversationSidebarLayout(baseBounds, display.workArea, preferredSide);
+  conversationSidebar = {
+    visible: true,
+    mode: layout.mode,
+    side: layout.side,
+    extentDip: layout.extentDip,
+  };
+  applyAvatarWindowBounds(layout.windowBounds);
+  publishConversationSidebarState();
+}
+
+function applyAvatarWindowBounds(bounds) {
+  const current = avatarWindow.getBounds();
+  avatarBounds = { ...bounds };
+  if (
+    current.x !== bounds.x
+    || current.y !== bounds.y
+    || current.width !== bounds.width
+    || current.height !== bounds.height
+  ) {
+    avatarWindow.setBounds(bounds, false);
+    avatarWindow.webContents.invalidate();
+  }
   publishBounds();
+}
+
+function avatarLaneBounds() {
+  if (!avatarBounds) throw new Error('Avatar bounds are not available');
+  if (
+    conversationSidebar.visible
+    && conversationSidebar.mode === 'sidecar'
+    && conversationSidebar.extentDip > 0
+  ) {
+    return avatarBoundsFromConversationSidebar(
+      avatarBounds,
+      conversationSidebar.side,
+      conversationSidebar.extentDip,
+    );
+  }
+  return { ...avatarBounds };
+}
+
+function conversationSidebarSnapshot() {
+  const preferredSide = desktopConfig.interaction.conversationSidebar.preferredSide;
+  const viewportWidth = Math.max(1, avatarBounds.width - conversationSidebar.extentDip);
+  return {
+    visible: conversationSidebar.visible,
+    mode: conversationSidebar.mode,
+    preferredSide,
+    side: conversationSidebar.side,
+    extentDip: conversationSidebar.extentDip,
+    avatarViewport: {
+      x: conversationSidebar.mode === 'sidecar' && conversationSidebar.side === 'left'
+        ? conversationSidebar.extentDip
+        : 0,
+      width: viewportWidth,
+    },
+  };
+}
+
+function publishConversationSidebarState() {
+  if (!avatarWindow || avatarWindow.isDestroyed()) return;
+  avatarWindow.webContents.send(
+    channels.conversationSidebarState,
+    conversationSidebarSnapshot(),
+  );
 }
 
 function publishBounds() {
@@ -977,7 +1088,11 @@ function windowState() {
     interaction: {
       dragHoldDelayMs: desktopConfig.interaction.drag.holdDelayMs,
       dragWindowApi,
+      conversationSidebar: {
+        preferredSide: desktopConfig.interaction.conversationSidebar.preferredSide,
+      },
     },
+    conversationSidebar: conversationSidebarSnapshot(),
     agentRoles: {
       char: {
         ...desktopConfig.agentRoles.char,
@@ -1009,6 +1124,13 @@ function applyDesktopConfig(config, metadata = {}) {
   if (avatarWindow && !avatarWindow.isDestroyed()) {
     if (avatarWindow.isAlwaysOnTop() !== config.window.alwaysOnTop) {
       avatarWindow.setAlwaysOnTop(config.window.alwaysOnTop);
+    }
+    if (conversationSidebar.visible) {
+      applyConversationSidebarForAvatarBounds(avatarLaneBounds(), true);
+    }
+    else {
+      conversationSidebar.side = config.interaction.conversationSidebar.preferredSide;
+      publishConversationSidebarState();
     }
     reconcileAvatarTopmost('config-apply');
     publishDesktopConfigState();

@@ -2,7 +2,9 @@ import assert from 'node:assert/strict';
 import test from 'node:test';
 import {
   applyDragAvatarBounds,
+  avatarBoundsFromConversationSidebar,
   clampBoundsToWorkArea,
+  conversationSidebarLayout,
   dragAvatarBounds,
   describePointerPresentationChange,
   initialAvatarBounds,
@@ -26,6 +28,83 @@ test('dragging preserves size and clamps the complete avatar bounds to the selec
   });
   assert.deepEqual(clampBoundsToWorkArea({ x: 2_000, y: 2_000, width: 460, height: 700 }, workArea), {
     x: 840, y: 150, width: 460, height: 700,
+  });
+});
+
+test('conversation sidebar honors its preference only when that side has enough work-area space', () => {
+  assert.deepEqual(conversationSidebarLayout(
+    { x: 816, y: 126, width: 460, height: 700 },
+    workArea,
+    'right',
+  ), {
+    mode: 'sidecar',
+    preferredSide: 'right',
+    side: 'left',
+    extentDip: 468,
+    windowBounds: { x: 348, y: 126, width: 928, height: 700 },
+    avatarViewport: { x: 468, width: 460 },
+  });
+  assert.deepEqual(conversationSidebarLayout(
+    { x: 200, y: 126, width: 460, height: 700 },
+    workArea,
+    'right',
+  ), {
+    mode: 'sidecar',
+    preferredSide: 'right',
+    side: 'right',
+    extentDip: 468,
+    windowBounds: { x: 200, y: 126, width: 928, height: 700 },
+    avatarViewport: { x: 0, width: 460 },
+  });
+});
+
+test('conversation sidebar uses the larger partial side and falls back to overlay when neither side is usable', () => {
+  assert.deepEqual(conversationSidebarLayout(
+    { x: 430, y: 126, width: 460, height: 700 },
+    { x: 100, y: 50, width: 1_000, height: 800 },
+    'right',
+  ), {
+    mode: 'sidecar',
+    preferredSide: 'right',
+    side: 'left',
+    extentDip: 330,
+    windowBounds: { x: 100, y: 126, width: 790, height: 700 },
+    avatarViewport: { x: 330, width: 460 },
+  });
+  assert.deepEqual(conversationSidebarLayout(
+    { x: 270, y: 126, width: 460, height: 700 },
+    { x: 100, y: 50, width: 800, height: 800 },
+    'right',
+  ), {
+    mode: 'overlay',
+    preferredSide: 'right',
+    side: 'right',
+    extentDip: 0,
+    windowBounds: { x: 270, y: 126, width: 460, height: 700 },
+    avatarViewport: { x: 0, width: 460 },
+  });
+});
+
+test('conversation sidebar derives the stable avatar lane after the expanded window moves', () => {
+  assert.deepEqual(avatarBoundsFromConversationSidebar(
+    { x: 300, y: 80, width: 928, height: 700 },
+    'left',
+    468,
+  ), {
+    x: 768,
+    y: 80,
+    width: 460,
+    height: 700,
+  });
+  assert.deepEqual(avatarBoundsFromConversationSidebar(
+    { x: 300, y: 80, width: 928, height: 700 },
+    'right',
+    468,
+  ), {
+    x: 300,
+    y: 80,
+    width: 460,
+    height: 700,
   });
 });
 

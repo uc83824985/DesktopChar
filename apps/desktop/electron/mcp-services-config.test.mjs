@@ -79,7 +79,10 @@ test('TTS config exposes the selected profile name from the resolved profile fil
 test('desktop config owns interaction, window, char agent and character profile settings', () => {
   const config = normalizeDesktopConfig({
     version: 1,
-    interaction: { drag: { holdDelayMs: 120 } },
+    interaction: {
+      drag: { holdDelayMs: 120 },
+      conversationSidebar: { preferredSide: 'left' },
+    },
     window: { defaultSize: { width: 512, height: 768 }, defaultMarginDip: 16, alwaysOnTop: false },
     agentProviders: {
       'codex-managed': {
@@ -126,6 +129,7 @@ test('desktop config owns interaction, window, char agent and character profile 
     DESKTOP_CHAR_ROUTER_API_KEY: 'must-not-enter-config',
   });
   assert.equal(config.interaction.drag.holdDelayMs, 120);
+  assert.equal(config.interaction.conversationSidebar.preferredSide, 'left');
   assert.deepEqual(config.window.defaultSize, { width: 512, height: 768 });
   assert.equal(config.window.alwaysOnTop, false);
   assert.equal(config.agentRoles.char.maxConcurrency, 4);
@@ -184,6 +188,9 @@ test('desktop config path prefers the new bootstrap variable and validates appli
     agentProviders: { 'codex-managed': { lifecycle: 'external' } },
   }), /must be managed/);
   assert.throws(() => normalizeDesktopConfig({ interaction: { drag: { holdDelyMs: 100 } } }), /unknown field/);
+  assert.throws(() => normalizeDesktopConfig({
+    interaction: { conversationSidebar: { preferredSide: 'top' } },
+  }), /must be left or right/);
   assert.throws(() => normalizeDesktopConfig({ agentHttp: { host: '0.0.0.0' } }), /loopback/);
   assert.throws(() => normalizeDesktopConfig({ taskManager: { enabled: true } }), /requires markerPath/);
   assert.throws(() => normalizeDesktopConfig({
@@ -309,7 +316,10 @@ test('desktop config loader falls back from a missing user config to example the
   await writeProfile(profileDirectory, 'local', {});
   await writeFile(exampleFilePath, JSON.stringify({
     version: 1,
-    interaction: { drag: { holdDelayMs: 321 } },
+    interaction: {
+      drag: { holdDelayMs: 321 },
+      conversationSidebar: { preferredSide: 'left' },
+    },
     window: { defaultSize: { width: 512, height: 768 } },
     ttsMcp: { profile: 'local' },
   }), 'utf8');
@@ -319,6 +329,7 @@ test('desktop config loader falls back from a missing user config to example the
   assert.equal(fromExample.source, 'example');
   assert.equal(fromExample.sourcePath, exampleFilePath);
   assert.equal(fromExample.config.interaction.drag.holdDelayMs, 321);
+  assert.equal(fromExample.config.interaction.conversationSidebar.preferredSide, 'left');
   assert.deepEqual(fromExample.config.window.defaultSize, { width: 512, height: 768 });
 
   await writeFile(filePath, JSON.stringify({
@@ -354,6 +365,7 @@ test('desktop config loader falls back from a missing user config to example the
   assert.equal(fromBuiltIn.source, 'built-in');
   assert.equal(fromBuiltIn.sourcePath, null);
   assert.equal(fromBuiltIn.config.interaction.drag.holdDelayMs, 180);
+  assert.equal(fromBuiltIn.config.interaction.conversationSidebar.preferredSide, 'right');
   assert.deepEqual(fromBuiltIn.config.window.defaultSize, { width: 460, height: 700 });
 });
 
