@@ -126,6 +126,13 @@ try {
     `body[data-routing-selection="session:${registeredSessionId}"]`
       + '[data-routing-candidates="1"][data-conversation-sessions="1"]',
   ).waitFor({ timeout: 5_000 });
+  const sessionActionCursors = await page.evaluate(() => ({
+    bind: getComputedStyle(document.querySelector('button[data-action="bind-external"]')).cursor,
+    close: getComputedStyle(document.querySelector('button[data-action="close-session"]')).cursor,
+  }));
+  if (sessionActionCursors.bind !== 'default' || sessionActionCursors.close !== 'pointer') {
+    throw new Error(`Unexpected session action cursors: ${JSON.stringify(sessionActionCursors)}`);
+  }
   const selector = page.getByLabel('消息目标');
   await selector.selectOption(`session:${registeredSessionId}`);
   await page.locator(`body[data-routing-selection="session:${registeredSessionId}"]`).waitFor();
@@ -301,17 +308,41 @@ try {
       }`,
     );
   }
-  page.once('dialog', dialog => dialog.accept());
-  await page.locator('button[data-action="close-session"]').click();
+  const managedTranscript = await page.evaluate(expectedText => ({
+    users: [...document.querySelectorAll('.conversation-panel__transcript [data-role="user"]')]
+      .map(node => node.textContent ?? ''),
+    assistants: [...document.querySelectorAll('.conversation-panel__transcript [data-role="assistant"]')]
+      .map(node => node.textContent ?? ''),
+    visibleTaskManager: [...document.querySelectorAll('.conversation-panel__transcript')]
+      .some(node => node.textContent?.includes('Task Manager')),
+    routedMessageVisible: [...document.querySelectorAll('.conversation-panel__transcript [data-role="user"]')]
+      .some(node => node.textContent?.includes(expectedText) && node.textContent?.includes('Managed')),
+  }), managedText);
+  if (
+    managedTranscript.visibleTaskManager
+    || !managedTranscript.routedMessageVisible
+    || !managedTranscript.assistants.some(text => text.includes('Managed'))
+  ) {
+    throw new Error(`Managed transcript leaked internals or lost routing context: ${
+      JSON.stringify(managedTranscript)
+    }`);
+  }
+  const closeButton = page.locator('button[data-action="close-session"]');
+  await closeButton.click();
+  await page.locator('button[data-action="close-session"][data-confirming="true"]').waitFor();
+  await closeButton.click();
   await page.waitForFunction(async managedSessionId => {
     const state = await window.desktopChar?.getConversationSessionsState();
     return document.body.dataset.routingSelection === 'auto'
       && !state?.sessions.some(session => session.sessionId === managedSessionId);
   }, managedSession.sessionId, { timeout: 20_000 });
 
+  await selector.selectOption('character');
+  await page.locator('body[data-routing-selection="character"]').waitFor({ timeout: 5_000 });
   await selector.selectOption(`session:${registeredSessionId}`);
-  page.once('dialog', dialog => dialog.accept());
-  await page.locator('button[data-action="close-session"]').click();
+  await closeButton.click();
+  await page.locator('button[data-action="close-session"][data-confirming="true"]').waitFor();
+  await closeButton.click();
   await page.waitForFunction(async sourceSessionId => {
     const registry = await window.desktopChar?.getConversationSessionsState();
     const manager = await window.desktopChar?.getTaskManagerState();

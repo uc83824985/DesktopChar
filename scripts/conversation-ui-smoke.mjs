@@ -86,14 +86,25 @@ try {
   const conversation = await page.evaluate(() => ({
     users: [...document.querySelectorAll('.conversation-panel__transcript [data-role="user"] span')]
       .map(node => node.textContent),
+    userRoutes: [...document.querySelectorAll('.conversation-panel__transcript [data-role="user"] b')]
+      .map(node => node.textContent),
     assistants: [...document.querySelectorAll('.conversation-panel__transcript [data-role="assistant"] span')]
       .map(node => node.textContent),
     tasks: [...document.querySelectorAll('.conversation-panel__task')].map(node => node.textContent),
+    taskQueueIsInClosedLog: (() => {
+      const queue = document.querySelector('.conversation-panel__queue');
+      const log = queue?.closest('details');
+      return Boolean(queue && log && !log.open);
+    })(),
   }));
   if (JSON.stringify(conversation.users) !== JSON.stringify([
     '第一条前台并行测试\n第二行',
     '第二条前台并行测试',
+  ]) || JSON.stringify(conversation.userRoutes) !== JSON.stringify([
+    '你 · Auto → Char',
+    '你 · Auto → Char',
   ]) || conversation.assistants.length !== 2
+    || !conversation.taskQueueIsInClosedLog
     || !conversation.tasks[0]?.includes('#1 char-worker-1')
     || !conversation.tasks[1]?.includes('#2 char-worker-2')
     || conversation.tasks.some(task => !task.includes('play:completed'))) {
