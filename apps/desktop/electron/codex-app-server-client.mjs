@@ -3,7 +3,7 @@ import { createInterface } from 'node:readline';
 
 export function createCodexAppServerClient(options = {}) {
   const cwd = options.cwd;
-  const invocation = options.invocation;
+  const invocationSource = options.invocation;
   const spawnProcess = options.spawnProcess ?? spawnAppServerProcess;
   const startupTimeoutMs = positive(options.startupTimeoutMs ?? 15_000, 'Codex app-server startupTimeoutMs');
   let child;
@@ -163,6 +163,17 @@ export function createCodexAppServerClient(options = {}) {
     if (closed) throw new Error('Codex app-server client is closed');
     if (startPromise) return startPromise;
     startPromise = withTimeout((async () => {
+      const invocation = typeof invocationSource === 'function'
+        ? invocationSource()
+        : invocationSource;
+      if (
+        !invocation
+        || typeof invocation.command !== 'string'
+        || !invocation.command.trim()
+        || !Array.isArray(invocation.args)
+      ) {
+        throw new TypeError('Codex app-server invocation is invalid');
+      }
       child = spawnProcess(invocation.command, [
         ...invocation.args,
         '--ask-for-approval', 'never',
@@ -307,7 +318,7 @@ export function createCodexAppServerClient(options = {}) {
 export function spawnAppServerProcess(command, args, options) {
   return spawn(command, args, {
     cwd: options.cwd,
-    windowsHide: true,
+    windowsHide: false,
     stdio: ['pipe', 'pipe', 'pipe'],
     env: {
       ...process.env,

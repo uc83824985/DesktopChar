@@ -42,10 +42,14 @@ test('external conversation binding registers a discovered window and disconnect
 test('managed conversation owns one persistent thread, steers active work, and archives on close', async () => {
   let clock = 1_000;
   const managed = new FakeManagedClient();
+  const managedEvents = [];
   const registry = createConversationSessionRegistry({
     managedClient: managed,
     externalController: { submitCommand: async () => assert.fail('external submit is unexpected') },
     now: () => ++clock,
+    onManagedEvent(event) {
+      managedEvents.push(structuredClone(event));
+    },
   });
   const created = await registry.createManagedSession({ title: '主应用托管对话' });
   assert.equal(created.sessionId, 'managed:thread-1');
@@ -65,6 +69,16 @@ test('managed conversation owns one persistent thread, steers active work, and a
   await new Promise(resolve => setImmediate(resolve));
   assert.equal(registry.snapshot().sessions[0].status, 'waiting-input');
   assert.equal(registry.snapshot().sessions[0].lastResponse, '已完成最新要求');
+  assert.deepEqual(managedEvents, [{
+    eventId: 'managed-event-1',
+    sessionId: created.sessionId,
+    type: 'task-completed',
+    observedAtMs: 1_004,
+    status: 'completed',
+    title: '主应用托管对话',
+    lastVisibleLine: '已完成最新要求',
+    visibleTextTail: '已完成最新要求',
+  }]);
 
   const closed = await registry.closeSession(created.sessionId);
   assert.deepEqual(closed, { sessionId: created.sessionId, action: 'archived' });

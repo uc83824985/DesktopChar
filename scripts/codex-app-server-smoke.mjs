@@ -1,10 +1,16 @@
 import assert from 'node:assert/strict';
 import path from 'node:path';
-import { createCodexCharReplyExecutor } from '../apps/desktop/electron/codex-conversation-agent.mjs';
+import {
+  createCodexCharReplyExecutor,
+  resolveCodexInvocation,
+} from '../apps/desktop/electron/codex-conversation-agent.mjs';
 
 const executor = createCodexCharReplyExecutor({
   cwd: process.cwd(),
   schemaPath: path.resolve('packages/conversation-runtime/src/codex-reply.schema.json'),
+  invocation: resolveCodexInvocation(process.env, {
+    launcherScript: process.env.DESKTOP_CHAR_CODEX_LAUNCHER_SCRIPT,
+  }),
 });
 
 try {

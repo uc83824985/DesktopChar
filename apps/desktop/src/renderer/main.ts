@@ -117,6 +117,7 @@ import { JsonConsoleTtsLogger, McpTtsAdapter, TtsRuntimeEffectHandler } from '..
 import './style.css';
 import type {
   ConversationAgentState,
+  ConversationSessionEventState,
   ConversationSessionRegistryState,
   ConversationSessionState,
   DesktopAgentRolesConfig,
@@ -606,10 +607,20 @@ interface ConversationSessionManagementElements {
 }
 
 interface TaskNotificationTurn {
-  event: TaskManagerEventState;
+  event: CharTaskNotificationEvent;
   displayText: string;
   turnId: string;
   responseId: string;
+}
+
+interface CharTaskNotificationEvent {
+  identity: string;
+  sessionId: string;
+  type: TaskNotificationType;
+  observedAtMs: number;
+  status: string;
+  title?: string;
+  resultArtifactPath?: string;
 }
 
 let model: Live2DModel<Cubism4InternalModel> | undefined;
@@ -635,10 +646,11 @@ let taskManagerState: TaskManagerState | undefined;
 let taskManagerStateUnsubscribe: (() => void) | undefined;
 let conversationSessionState: ConversationSessionRegistryState | undefined;
 let conversationSessionStateUnsubscribe: (() => void) | undefined;
+let conversationSessionEventUnsubscribe: (() => void) | undefined;
 let conversationSessionOperationInFlight = false;
 let activeTaskNotification: TaskNotificationTurn | undefined;
-const seenTaskManagerEventIds = new Set<string>();
-const pendingTaskNotifications: TaskManagerEventState[] = [];
+const seenTaskNotificationIds = new Set<string>();
+const pendingTaskNotifications: CharTaskNotificationEvent[] = [];
 const taskNotificationTurns = new Map<string, TaskNotificationTurn>();
 const taskNotificationResponses = new Map<string, TaskNotificationTurn>();
 const taskSessionVisibleEvents = new Map<string, string>();
@@ -1028,6 +1040,8 @@ try {
     }).catch(error => console.error('[conversation] failed to read Agent state', error));
     conversationSessionStateUnsubscribe =
       desktopShell.onConversationSessionsState(applyConversationSessionState);
+    conversationSessionEventUnsubscribe =
+      desktopShell.onConversationSessionEvent(applyConversationSessionEvent);
     if (shellState) applyConversationSessionState(shellState.conversationSessions);
     void desktopShell.getConversationSessionsState()
       .then(applyConversationSessionState)
@@ -1072,6 +1086,8 @@ try {
     taskManagerStateUnsubscribe = undefined;
     conversationSessionStateUnsubscribe?.();
     conversationSessionStateUnsubscribe = undefined;
+    conversationSessionEventUnsubscribe?.();
+    conversationSessionEventUnsubscribe = undefined;
     cubismUpdatePipeline?.restore();
     cubismUpdatePipeline = undefined;
     contextMenuHost.dispose();
@@ -1945,10 +1961,15 @@ function applyTaskManagerState(state: TaskManagerState): void {
   for (const event of state.events) {
     if (!isTaskNotificationEvent(event)) continue;
     if (!registeredExternalSession(event.sessionId)) continue;
-    const identity = taskManagerEventIdentity(event);
-    if (seenTaskManagerEventIds.has(identity)) continue;
-    seenTaskManagerEventIds.add(identity);
-    pendingTaskNotifications.push(event);
+    enqueueTaskNotification({
+      identity: taskManagerEventIdentity(event),
+      sessionId: event.sessionId,
+      type: event.type,
+      observedAtMs: event.observedAtMs,
+      status: event.status,
+      ...(event.title ? { title: event.title } : {}),
+      ...(event.resultArtifactPath ? { resultArtifactPath: event.resultArtifactPath } : {}),
+    });
   }
   interactionPanelHost.refresh();
   void pumpTaskNotifications();
@@ -1962,6 +1983,24 @@ function applyConversationSessionState(state: ConversationSessionRegistryState):
     state.availableExternalSessions.length.toString();
   updateRoutingCandidates();
   interactionPanelHost.refresh();
+}
+
+function applyConversationSessionEvent(event: ConversationSessionEventState): void {
+  enqueueTaskNotification({
+    identity: `managed:${event.eventId}`,
+    sessionId: event.sessionId,
+    type: event.type,
+    observedAtMs: event.observedAtMs,
+    status: event.status,
+    title: event.title,
+  });
+  void pumpTaskNotifications();
+}
+
+function enqueueTaskNotification(event: CharTaskNotificationEvent): void {
+  if (seenTaskNotificationIds.has(event.identity)) return;
+  seenTaskNotificationIds.add(event.identity);
+  pendingTaskNotifications.push(event);
 }
 
 function updateRoutingCandidates(): void {
@@ -2001,7 +2040,9 @@ function registeredExternalSession(sourceSessionId: string): ConversationSession
   );
 }
 
-function isTaskNotificationEvent(event: TaskManagerEventState): boolean {
+function isTaskNotificationEvent(
+  event: TaskManagerEventState,
+): event is TaskManagerEventState & { type: TaskNotificationType } {
   return event.type === 'task-completed'
     || event.type === 'task-failed'
     || event.type === 'task-unavailable';
@@ -2015,7 +2056,6 @@ function pumpTaskNotifications(): void {
   if (activeTaskNotification || !conversationRuntime) return;
   const event = pendingTaskNotifications.shift();
   if (!event) return;
-  const identity = taskManagerEventIdentity(event);
   const compiled = compileTaskNotification({
     type: event.type as TaskNotificationType,
     subject: event.title?.trim() || event.sessionId,
@@ -2037,7 +2077,7 @@ function pumpTaskNotifications(): void {
   taskNotificationResponses.set(work.responseId, work);
   trimOldestMapEntries(taskNotificationTurns, 200);
   document.body.dataset.taskNotification = 'generating';
-  document.body.dataset.taskNotificationEvent = identity;
+  document.body.dataset.taskNotificationEvent = event.identity;
   document.body.dataset.taskNotificationText = compiled.fallbackText;
   document.body.dataset.taskNotificationSource = 'char-pending';
 }

@@ -276,6 +276,31 @@ try {
   if (browserWindowCount !== 1) {
     throw new Error(`Managed conversation created an unexpected Electron window: ${browserWindowCount}`);
   }
+  const managedText = `Managed 回复通知链路测试 ${Date.now()}：请只回复“收到”。`;
+  await input.fill(managedText);
+  await input.press('Control+Enter');
+  await page.waitForFunction(managedSessionId => {
+    return document.body.dataset.routingPhase === 'sent'
+      && document.body.dataset.routingLastTarget === managedSessionId;
+  }, managedSession.sessionId, { timeout: 10_000 });
+  await page.waitForFunction(() => {
+    return document.body.dataset.taskNotificationEvent?.startsWith('managed:managed-event-')
+      && document.body.dataset.taskNotification === 'completed';
+  }, undefined, { timeout: 180_000 });
+  const completedManaged = await page.evaluate(async managedSessionId => {
+    const state = await window.desktopChar?.getConversationSessionsState();
+    return state?.sessions.find(session => session.sessionId === managedSessionId);
+  }, managedSession.sessionId);
+  if (
+    completedManaged?.status !== 'waiting-input'
+    || !completedManaged.lastResponse?.trim()
+  ) {
+    throw new Error(
+      `Managed completion did not return through the Char presentation chain: ${
+        JSON.stringify(completedManaged)
+      }`,
+    );
+  }
   page.once('dialog', dialog => dialog.accept());
   await page.locator('button[data-action="close-session"]').click();
   await page.waitForFunction(async managedSessionId => {
@@ -343,17 +368,42 @@ async function openConversationPanel(page, bounds, pointer) {
 }
 
 function smokeConfig(taskManagerMarkerPath, routerOverride) {
+  const launcherScript = process.env.DESKTOP_CHAR_CODEX_LAUNCHER_SCRIPT;
+  const managedProviders = launcherScript ? {
+    'codex-managed': {
+      adapter: 'codex-app-server',
+      lifecycle: 'managed',
+      launcherScript,
+      requestTimeoutMs: 180_000,
+    },
+    'router-codex-managed': {
+      adapter: 'codex-app-server',
+      lifecycle: 'managed',
+      launcherScript,
+      requestTimeoutMs: 180_000,
+    },
+  } : {};
   return {
-    ...(routerOverride ? {
+    ...(routerOverride || launcherScript ? {
       agentProviders: {
-        [routerOverride.providerName]: routerOverride.provider,
+        ...managedProviders,
+        ...(routerOverride ? {
+          [routerOverride.providerName]: routerOverride.provider,
+        } : {}),
       },
+    } : {}),
+    ...(routerOverride ? {
       agentRoles: {
         router: {
           provider: routerOverride.providerName,
         },
       },
     } : {}),
+    agentHttp: {
+      enabled: false,
+      host: '127.0.0.1',
+      port: 0,
+    },
     taskManager: {
       enabled: true,
       markerPath: taskManagerMarkerPath,

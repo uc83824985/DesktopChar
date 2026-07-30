@@ -4,7 +4,7 @@ import { PassThrough, Writable } from 'node:stream';
 import test from 'node:test';
 import { createCodexAppServerClient } from './codex-app-server-client.mjs';
 
-test('one hidden app-server process serves concurrent logical reply threads', async () => {
+test('one app-server process serves concurrent logical reply threads', async () => {
   const messages = [];
   const launches = [];
   let threadSequence = 0;

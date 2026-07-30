@@ -1,7 +1,10 @@
 import { existsSync } from 'node:fs';
 import { readFileSync } from 'node:fs';
 import path from 'node:path';
+import { fileURLToPath } from 'node:url';
 import { createCodexAppServerClient } from './codex-app-server-client.mjs';
+
+const directory = path.dirname(fileURLToPath(import.meta.url));
 
 export function createCodexCharReplyExecutor(options = {}) {
   const cwd = path.resolve(options.cwd ?? process.cwd());
@@ -60,7 +63,27 @@ export function createCodexCharReplyExecutor(options = {}) {
   };
 }
 
-export function resolveCodexInvocation(env = process.env) {
+export function resolveCodexInvocation(env = process.env, options = {}) {
+  if (process.platform === 'win32' && options.launcherScript) {
+    const powershell = path.join(
+      env.SystemRoot ?? process.env.SystemRoot ?? 'C:\\Windows',
+      'System32',
+      'WindowsPowerShell',
+      'v1.0',
+      'powershell.exe',
+    );
+    return {
+      command: powershell,
+      args: [
+        '-NoLogo',
+        '-NoProfile',
+        '-NonInteractive',
+        '-ExecutionPolicy', 'Bypass',
+        '-File', path.resolve(directory, '../../../scripts/codex-app-server-launcher.ps1'),
+        path.resolve(options.launcherScript),
+      ],
+    };
+  }
   if (process.platform !== 'win32') return { command: 'codex', args: [] };
   if (env.APPDATA) {
     const cliPath = path.join(env.APPDATA, 'npm', 'node_modules', '@openai', 'codex', 'bin', 'codex.js');

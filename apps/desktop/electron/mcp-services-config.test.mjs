@@ -85,6 +85,7 @@ test('desktop config owns interaction, window, char agent and character profile 
       'codex-managed': {
         adapter: 'codex-app-server',
         lifecycle: 'managed',
+        launcherScript: 'C:\\WorkAssistant\\source\\scripts\\start_openai_codex\\start_openai_codex.bat',
         requestTimeoutMs: 90_000,
       },
       'router-test': {
@@ -130,6 +131,10 @@ test('desktop config owns interaction, window, char agent and character profile 
   assert.equal(config.agentRoles.char.maxConcurrency, 4);
   assert.equal(config.agentRoles.char.provider, 'codex-managed');
   assert.equal(config.agentProviders['codex-managed'].requestTimeoutMs, 90_000);
+  assert.equal(
+    config.agentProviders['codex-managed'].launcherScript,
+    'C:\\WorkAssistant\\source\\scripts\\start_openai_codex\\start_openai_codex.bat',
+  );
   assert.equal(config.agentRoles.char.persona.name, 'DesktopChar');
   assert.equal(config.agentRoles.router.provider, 'router-test');
   assert.equal(config.agentRoles.router.profile.name, 'session-routing');

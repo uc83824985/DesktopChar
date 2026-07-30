@@ -893,7 +893,7 @@ function normalizeAgentProvider(providerName, provider, role) {
   const label = `agentProviders.${providerName}`;
   const adapter = text(provider.adapter ?? 'codex-app-server', `${label}.adapter`);
   if (adapter === 'codex-app-server') {
-    assertKnownKeys(provider, ['adapter', 'lifecycle', 'requestTimeoutMs'], label);
+    assertKnownKeys(provider, ['adapter', 'lifecycle', 'launcherScript', 'requestTimeoutMs'], label);
     const lifecycle = text(provider.lifecycle ?? 'managed', `${label}.lifecycle`);
     if (lifecycle !== 'managed') {
       throw new TypeError(`${label}.lifecycle must be managed`);
@@ -901,6 +901,14 @@ function normalizeAgentProvider(providerName, provider, role) {
     return {
       adapter,
       lifecycle,
+      ...(provider.launcherScript
+        ? {
+            launcherScript: absoluteFilePath(
+              provider.launcherScript,
+              `${label}.launcherScript`,
+            ),
+          }
+        : {}),
       requestTimeoutMs: boundedInteger(
         provider.requestTimeoutMs,
         180_000,

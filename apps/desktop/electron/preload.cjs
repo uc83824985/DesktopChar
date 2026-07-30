@@ -29,6 +29,7 @@ const channels = {
   conversationSessionsClose: 'conversation-sessions:close',
   conversationSessionsSubmit: 'conversation-sessions:submit-command',
   conversationSessionsState: 'conversation-sessions:state',
+  conversationSessionsEvent: 'conversation-sessions:event',
   mcpListTools: 'tts-mcp:list-tools',
   mcpCallTool: 'tts-mcp:call-tool',
   mcpServicesGet: 'mcp-services:get-state',
@@ -107,6 +108,11 @@ contextBridge.exposeInMainWorld('desktopChar', {
     const listener = (_event, state) => callback(state);
     ipcRenderer.on(channels.conversationSessionsState, listener);
     return () => ipcRenderer.removeListener(channels.conversationSessionsState, listener);
+  },
+  onConversationSessionEvent(callback) {
+    const listener = (_event, state) => callback(state);
+    ipcRenderer.on(channels.conversationSessionsEvent, listener);
+    return () => ipcRenderer.removeListener(channels.conversationSessionsEvent, listener);
   },
   onAgentCommand(callback) {
     const listener = (_event, command) => callback(command);

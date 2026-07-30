@@ -1,6 +1,25 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
-import { createCodexCharReplyExecutor } from './codex-conversation-agent.mjs';
+import {
+  createCodexCharReplyExecutor,
+  resolveCodexInvocation,
+} from './codex-conversation-agent.mjs';
+
+test('Windows Codex invocation can use a WorkAssistant launcher profile', () => {
+  if (process.platform !== 'win32') return;
+  const launcherScript =
+    'C:\\WorkAssistant\\source\\scripts\\start_openai_codex\\start_openai_codex.bat';
+  const invocation = resolveCodexInvocation(
+    { SystemRoot: 'C:\\Windows' },
+    { launcherScript },
+  );
+  assert.equal(
+    invocation.command,
+    'C:\\Windows\\System32\\WindowsPowerShell\\v1.0\\powershell.exe',
+  );
+  assert.equal(invocation.args.at(-1), launcherScript);
+  assert.match(invocation.args.at(-2), /codex-app-server-launcher\.ps1$/);
+});
 
 test('Codex conversation executor uses one managed structured-reply client', async () => {
   const calls = [];

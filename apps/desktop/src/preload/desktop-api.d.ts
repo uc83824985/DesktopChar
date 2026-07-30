@@ -157,6 +157,9 @@ export interface DesktopCharApi {
   onConversationSessionsState(
     callback: (state: ConversationSessionRegistryState) => void,
   ): () => void;
+  onConversationSessionEvent(
+    callback: (event: ConversationSessionEventState) => void,
+  ): () => void;
   onAgentCommand(callback: (command: AgentCommand) => void): () => void;
   onBoundsChanged(callback: (bounds: DesktopRectangle) => void): () => void;
   onCursorPoint(callback: (point: DesktopPoint) => void): () => void;
@@ -307,6 +310,18 @@ export interface ConversationSessionRegistryState {
   persistence: 'memory-only';
   sessions: ConversationSessionState[];
   availableExternalSessions: ExternalConversationCandidateState[];
+}
+
+export interface ConversationSessionEventState {
+  eventId: string;
+  sessionId: string;
+  type: 'task-completed' | 'task-failed';
+  observedAtMs: number;
+  status: 'completed' | 'failed';
+  title: string;
+  lastVisibleLine?: string;
+  visibleTextTail?: string;
+  error?: string;
 }
 
 export interface ConversationSessionCommandState extends TaskManagerCommand {

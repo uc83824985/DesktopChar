@@ -74,6 +74,7 @@ const channels = {
   conversationSessionsClose: 'conversation-sessions:close',
   conversationSessionsSubmit: 'conversation-sessions:submit-command',
   conversationSessionsState: 'conversation-sessions:state',
+  conversationSessionsEvent: 'conversation-sessions:event',
   mcpListTools: 'tts-mcp:list-tools',
   mcpCallTool: 'tts-mcp:call-tool',
   mcpServicesGet: 'mcp-services:get-state',
@@ -133,7 +134,9 @@ const conversationReplyControllers = new Map();
 const routerDecisionControllers = new Map();
 const sharedCodexAppServerClient = createCodexAppServerClient({
   cwd: process.cwd(),
-  invocation: resolveCodexInvocation(process.env),
+  invocation: () => resolveCodexInvocation(process.env, {
+    launcherScript: resolvedCodexLauncherScript(desktopConfig),
+  }),
 });
 const conversationReplyGateway = createConversationReplyGateway({
   config: resolvedCharRole(desktopConfig),
@@ -229,7 +232,12 @@ conversationSessions = createConversationSessionRegistry({
   managedClient: sharedCodexAppServerClient,
   externalController: taskManager,
   onStateChanged(state) {
-    avatarWindow?.webContents.send(channels.conversationSessionsState, state);
+    if (!avatarWindow || avatarWindow.isDestroyed()) return;
+    avatarWindow.webContents.send(channels.conversationSessionsState, state);
+  },
+  onManagedEvent(event) {
+    if (!avatarWindow || avatarWindow.isDestroyed()) return;
+    avatarWindow.webContents.send(channels.conversationSessionsEvent, event);
   },
 });
 
@@ -1021,6 +1029,14 @@ function resolvedCharRole(config) {
     ...role,
     requestTimeoutMs: provider.requestTimeoutMs,
   };
+}
+
+function resolvedCodexLauncherScript(config) {
+  const role = config.agentRoles.char;
+  const provider = config.agentProviders[role.provider];
+  return provider?.adapter === 'codex-app-server'
+    ? provider.launcherScript
+    : undefined;
 }
 
 function resolvedRouterRole(config) {

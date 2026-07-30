@@ -2,6 +2,7 @@ export function createConversationSessionRegistry(options = {}) {
   const managedClient = options.managedClient;
   const externalController = options.externalController;
   const onStateChanged = options.onStateChanged ?? (() => {});
+  const onManagedEvent = options.onManagedEvent ?? (() => {});
   const now = options.now ?? Date.now;
   if (!managedClient) throw new TypeError('Conversation session registry requires managedClient');
   if (!externalController) {
@@ -10,6 +11,7 @@ export function createConversationSessionRegistry(options = {}) {
   const sessions = new Map();
   const externalCandidates = new Map();
   let managedSequence = 0;
+  let managedEventSequence = 0;
   let revision = 0;
   let phase = 'ready';
 
@@ -225,21 +227,46 @@ export function createConversationSessionRegistry(options = {}) {
 
   function finishManagedOperation(session, operation, text) {
     if (session.activeOperation !== operation || !sessions.has(session.sessionId)) return;
+    const timestamp = now();
     session.activeOperation = null;
     session.status = 'waiting-input';
-    session.lastActivityAtMs = now();
+    session.lastActivityAtMs = timestamp;
     session.lastResponse = boundedTail(typeof text === 'string' ? text.trim() : '', 4_000) || null;
     session.lastError = null;
     publish();
+    onManagedEvent({
+      eventId: `managed-event-${++managedEventSequence}`,
+      sessionId: session.sessionId,
+      type: 'task-completed',
+      observedAtMs: timestamp,
+      status: 'completed',
+      title: session.title,
+      ...(session.lastResponse
+        ? {
+            lastVisibleLine: boundedTail(session.lastResponse, 500),
+            visibleTextTail: session.lastResponse,
+          }
+        : {}),
+    });
   }
 
   function failManagedOperation(session, operation, error) {
     if (session.activeOperation !== operation || !sessions.has(session.sessionId)) return;
+    const timestamp = now();
     session.activeOperation = null;
     session.status = 'waiting-input';
-    session.lastActivityAtMs = now();
+    session.lastActivityAtMs = timestamp;
     session.lastError = errorMessage(error);
     publish();
+    onManagedEvent({
+      eventId: `managed-event-${++managedEventSequence}`,
+      sessionId: session.sessionId,
+      type: 'task-failed',
+      observedAtMs: timestamp,
+      status: 'failed',
+      title: session.title,
+      error: session.lastError,
+    });
   }
 
   function snapshot() {
