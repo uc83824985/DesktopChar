@@ -147,6 +147,9 @@ type ConversationSession =
   恢复或主动断开。
 - 新建、绑定和关闭成功后由用户动作决定 sticky 目标：新建/绑定自动选择该 Session，关闭/
   断开后切换到 Auto。Router 只能看到注册表中的会话，不能自动选择未绑定窗口。
+- 关闭/断开使用面板内的第二次点击确认，不调用原生阻塞式确认框；操作完成后重新发布当前
+  面板指针状态，使同一已打开面板可以立即从 Auto 切换到 Char 或其他 Session。不可用按钮
+  保持普通箭头，可操作按钮保持交互手势。
 
 首版注册表与 Task Manager 一样只在当前 DesktopChar 进程内存中保存。Managed thread 会
 持久写入 Codex 会话存储，但应用退出时会按所有权归档；External 绑定关系不跨应用重启恢复。
@@ -391,6 +394,9 @@ interface MessageExposure {
   `visibleText`，在进度完成前保持 `showing`；KTV 未到达的后续文本不作为当前可用上下文；
 - 如果调试 transcript 在 commit 时立即显示完整正文，该显示渠道已经使消息成为 `shown`，
   不能再因语音仍在播放而降回 `showing`。
+- 普通对话记录以真实用户输入为主线，输入标题明确标出直接目标或 `Auto → 实际目标`，并在
+  同一记录下展示 Char 的回复/通知；用于触发 Char 的 Task Manager 有界事实不是用户消息，
+  不生成第二个用户气泡。Provider、worker、内部事实和准备队列只进入折叠的技术日志。
 
 用户按下发送时冻结 `visibleContextRevision` 与所有当前 MessageExposure。即使 Router
 推理期间又显示更多文本，本次判断仍使用冻结快照，避免目标在发送途中漂移。

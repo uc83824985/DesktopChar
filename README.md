@@ -50,7 +50,10 @@ fallback。`npm run test:task-manager-foreground` 使用隔离服务和真实 ma
 现有角色对话框已增加 sticky 的 Auto/Char/Session 目标选择、候选状态与二次确认区域，并由
 主进程会话注册表提供“新建 / 绑定 / 关闭”管理：新建会话使用 DesktopChar 拥有的持久 Codex
 thread；绑定只注册 Task Manager 已发现的外部窗口；关闭 Managed 会中断并归档，关闭
-External 只断开注册而不关闭源窗口。`npm run test:routing-foreground` 会用隔离 Session 验证
+External 只断开注册而不关闭源窗口。关闭采用面板内二次点击确认，不打开会抢占透明窗口交互
+状态的系统确认框。普通消息记录只展示真实用户输入及角色可见回复，并在每条输入上标出
+`Auto → 目标` 或直接目标；Task Manager 注入、worker 和准备队列仅保留在折叠的技术日志中。
+`npm run test:routing-foreground` 会用隔离 Session 验证
 绑定、两次 sticky 直接提交、Router 严格失败边界，再热切换到 managed Codex 完成真实 Auto
 路由和 Char 回复，最后验证 Managed 新建/归档与 External 安全断开。
 
