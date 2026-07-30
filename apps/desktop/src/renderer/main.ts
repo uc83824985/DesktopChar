@@ -659,7 +659,7 @@ let conversationAgentStateUnsubscribe: (() => void) | undefined;
 let routingContext: VisibleRoutingContext | undefined;
 let routeCoordinator: RouteCoordinator | undefined;
 let routingInFlight = false;
-let routingUiState: RoutingUiState = { phase: 'idle', text: '选择目标后发送消息。' };
+let routingUiState: RoutingUiState = { phase: 'idle', text: '' };
 let taskManagerState: TaskManagerState | undefined;
 let taskManagerStateUnsubscribe: (() => void) | undefined;
 let conversationSessionState: ConversationSessionRegistryState | undefined;
@@ -2445,7 +2445,7 @@ function mountConversationPanel(container: HTMLElement): DomInteractionPanelView
   const header = document.createElement('header');
   header.className = 'conversation-panel__header';
   const title = document.createElement('strong');
-  title.textContent = '角色对话与任务路由';
+  title.textContent = '对话';
   const summary = document.createElement('span');
   header.append(title, summary);
 
@@ -2523,14 +2523,15 @@ function mountConversationPanel(container: HTMLElement): DomInteractionPanelView
   form.className = 'conversation-panel__form';
   const input = document.createElement('textarea');
   input.name = 'message';
-  input.rows = 2;
+  input.rows = 1;
   input.maxLength = 600;
-  input.placeholder = '输入消息；Enter 换行，Ctrl+Enter 发送…';
+  input.placeholder = '输入消息…';
   input.setAttribute('aria-label', '发送给所选目标的消息');
   const submit = document.createElement('button');
   submit.type = 'submit';
-  submit.textContent = '发送';
-  submit.title = 'Ctrl+Enter';
+  submit.textContent = '↑';
+  submit.title = '发送（Ctrl+Enter）';
+  submit.setAttribute('aria-label', '发送消息');
   form.append(input, submit);
   form.addEventListener('submit', event => {
     event.preventDefault();
@@ -2581,7 +2582,7 @@ function mountConversationPanel(container: HTMLElement): DomInteractionPanelView
         }
       : {
           phase: 'idle',
-          text: `后续消息将发送到 ${targetSelectionLabel(selection)}，直到你主动切换。`,
+          text: '',
         };
     publishRoutingSelection(selection);
     refreshConversationPanel(
@@ -2690,10 +2691,12 @@ function refreshConversationPanel(
   }
   const pending = snapshot.responses.filter(response => !terminalConversationPresentation(response.presentation)).length;
   const assistantCount = conversationConnections?.getSnapshot().length ?? charMaxConcurrency;
-  const providerLabel = desktopShell ? 'Codex App Server' : '浏览器回显';
   const registeredSessions = conversationSessionState?.sessions.length ?? 0;
-  summary.textContent =
-    `${providerLabel} · ${assistantCount} 个 Char worker · ${registeredSessions} 个 Session · ${pending} 个处理中`;
+  summary.textContent = [
+    `${assistantCount} 个 Agent`,
+    registeredSessions > 0 ? `${registeredSessions} 个会话` : '',
+    pending > 0 ? `${pending} 个处理中` : '',
+  ].filter(Boolean).join(' · ');
   submit.disabled = routingInFlight || conversationSessionOperationInFlight || pending >= 6;
   renderRoutingControls(target, routeStatus, confirmation);
   renderSessionManagement(sessionManagement);
@@ -2748,6 +2751,7 @@ function renderRoutingControls(
   target.disabled = routingInFlight || conversationSessionOperationInFlight;
   routeStatus.dataset.phase = routingUiState.phase;
   routeStatus.textContent = routingUiState.text;
+  routeStatus.hidden = routingUiState.phase === 'idle' || routingUiState.phase === 'sent';
   publishRoutingSelection(selection);
   renderPendingRouteConfirmation(confirmation);
 }
@@ -3339,7 +3343,7 @@ function reconcileConversationTranscript(
       empty = document.createElement('li');
       empty.dataset.entryKey = 'empty';
       empty.className = 'conversation-panel__empty';
-      empty.textContent = '尚无消息。每条发送记录都会标明实际路由目标。';
+      empty.textContent = '发送消息，开始对话';
     }
     reconcileConversationTranscriptNodes(transcript, [empty]);
     return;

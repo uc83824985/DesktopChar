@@ -44,6 +44,22 @@ try {
     if (await panel.count()) break;
   }
   await panel.waitFor({ state: 'visible', timeout: 2_000 });
+  const compactConversation = await page.evaluate(() => ({
+    routeStatusHidden: document.querySelector('.conversation-panel__route-status')?.hidden,
+    emptyText: document.querySelector('.conversation-panel__empty')?.textContent,
+    placeholder: document.querySelector('.conversation-panel__form textarea')
+      ?.getAttribute('placeholder'),
+    sendLabel: document.querySelector('.conversation-panel__form button')
+      ?.getAttribute('aria-label'),
+  }));
+  if (
+    !compactConversation.routeStatusHidden
+    || compactConversation.emptyText !== '发送消息，开始对话'
+    || compactConversation.placeholder !== '输入消息…'
+    || compactConversation.sendLabel !== '发送消息'
+  ) {
+    throw new Error(`Conversation chrome is not compact: ${JSON.stringify(compactConversation)}`);
+  }
   const tabs = await page.locator('.scene-interaction-panel__tab').allTextContents();
   if (JSON.stringify(tabs) !== JSON.stringify(['角色对话', '资源调试'])) {
     throw new Error(`Unexpected interaction categories: ${JSON.stringify(tabs)}`);
