@@ -417,16 +417,39 @@ test('passive watch conservatively recovers a fast Codex turn missed between pol
   });
   await runtime.pollOnce();
   await runtime.pollOnce();
-  assert.equal(runtime.eventsAfter().events.length, 0);
+  const events = runtime.eventsAfter().events;
+  assert.equal(events.length, 1);
+  assert.equal(events[0].type, 'external-turn-completed');
+  assert.equal(events[0].latestReply, '快速结果');
+
+  await runtime.pollOnce();
+  assert.equal(runtime.eventsAfter().events.length, 1);
+});
+
+test('passive polling recovers a completed turn after the terminal tail loses overlap', async () => {
+  const monitor = new FakeMonitor(session({
+    agentState: 'waiting_input',
+    hash: 'A',
+    changed: 1,
+    text: `${'旧内容'.repeat(1_000)}\n\n› `,
+  }));
+  const runtime = createTaskManagerRuntime({ monitor });
+  await runtime.pollOnce();
+  await runtime.watchSession('session-a');
+
   monitor.current = session({
     agentState: 'waiting_input',
     hash: 'B',
     changed: 2,
-    observed: 3,
-    text: '• 旧结果\n\n› 快速请求\n\n• 快速结果\n\n› ',
+    text: `› 外部窗口自行发送\n\n• ${'新回复'.repeat(900)}\n\n› `,
   });
   await runtime.pollOnce();
-  assert.equal(runtime.eventsAfter().events[0].type, 'external-turn-completed');
+  await runtime.pollOnce();
+
+  const events = runtime.eventsAfter().events;
+  assert.equal(events.length, 1);
+  assert.equal(events[0].type, 'external-turn-completed');
+  assert.match(events[0].latestReply, /新回复/u);
 });
 
 test('passive watch ignores waiting-input edits and suppresses command-owned turns', async () => {

@@ -503,14 +503,6 @@ export function createTaskManagerRuntime(options) {
       session.lastScreenChangedAtUtc ?? '',
       session.agentState,
     ].join('|');
-    if (
-      session.lastObservedAtUtc
-      && watch.lastWaitingObservedAtUtc
-      && compareUtc(session.lastObservedAtUtc, watch.lastWaitingObservedAtUtc) <= 0
-    ) {
-      return false;
-    }
-    watch.lastWaitingObservedAtUtc = session.lastObservedAtUtc;
     if (watch.lastWaitingFingerprint === waitingFingerprint) {
       watch.stableWaitingCount++;
     }
@@ -721,12 +713,11 @@ export function createTaskManagerRuntime(options) {
       turnSequence: 0,
       baselineSourceHash: undefined,
       baselineSourceRevision: undefined,
-      baselineVisibleText: '',
+      baselineCompletedTurnIdentity: undefined,
       observedActive: false,
       observedChange: false,
       stableWaitingCount: 0,
       lastWaitingFingerprint: undefined,
-      lastWaitingObservedAtUtc: undefined,
     };
     resetPassiveWatch(watch, session);
     return watch;
@@ -739,7 +730,7 @@ export function createTaskManagerRuntime(options) {
         : 'baseline');
     watch.baselineSourceHash = session.lastVisibleTextHash;
     watch.baselineSourceRevision = session.lastScreenChangedAtUtc;
-    watch.baselineVisibleText = boundedTail(session.lastVisibleText ?? '', 4_000);
+    watch.baselineCompletedTurnIdentity = completedTurnIdentity(session);
     watch.observedActive = watch.phase === 'active';
     watch.observedChange = false;
     clearPassiveWaiting(watch);
@@ -755,7 +746,6 @@ export function createTaskManagerRuntime(options) {
   function clearPassiveWaiting(watch) {
     watch.stableWaitingCount = 0;
     watch.lastWaitingFingerprint = undefined;
-    watch.lastWaitingObservedAtUtc = undefined;
   }
 
   function publicPassiveWatch(watch, session) {
@@ -851,6 +841,10 @@ function normalizeSession(value) {
 }
 
 function latestCompletedReply(session) {
+  return latestCompletedTurn(session)?.reply;
+}
+
+function latestCompletedTurn(session) {
   if (
     session.agent?.toLocaleLowerCase('en-US') !== 'codex'
     || session.agentState !== 'waiting_input'
@@ -885,10 +879,23 @@ function latestCompletedReply(session) {
     }
   }
   if (replyStart < 0) return undefined;
+  const prompt = submittedPrompt >= 0
+    ? (lines[submittedPrompt] ?? '').replace(/^\s*[›>]\s*/u, '').trim()
+    : '';
   const replyLines = lines.slice(replyStart, trailingPrompt);
   replyLines[0] = (replyLines[0] ?? '').replace(/^\s*[•●]\s*/u, '');
   const reply = replyLines.join('\n').trim();
-  return reply ? boundedTail(reply, 4_000) : undefined;
+  return reply
+    ? {
+        prompt: boundedTail(prompt, 2_000),
+        reply: boundedTail(reply, 4_000),
+      }
+    : undefined;
+}
+
+function completedTurnIdentity(session) {
+  const turn = latestCompletedTurn(session);
+  return turn ? `${turn.prompt}\u0000${turn.reply}` : undefined;
 }
 
 function changedAfterSubmission(observation, session) {
@@ -908,27 +915,11 @@ function changedAfterPassiveBaseline(watch, session) {
 
 function hasFastPassiveCompletionEvidence(watch, session) {
   if (session.agent?.toLocaleLowerCase('en-US') !== 'codex') return false;
-  const current = boundedTail(session.lastVisibleText ?? '', 4_000);
-  if (!current || !watch.baselineVisibleText) return false;
-  const appended = appendedVisibleText(watch.baselineVisibleText, current);
-  if (!appended || appended.overlapLength === 0) return false;
-  const baselineLastLine = watch.baselineVisibleText.split(/\r?\n/u).at(-1) ?? '';
-  const candidate = `${baselineLastLine}${appended.text}`;
-  return /(?:^|\n)\s*[›>]\s+\S[\s\S]*?(?:^|\n)\s*[•●]\s+\S[\s\S]*?(?:^|\n)\s*[›>]\s*$/u
-    .test(candidate);
-}
-
-function appendedVisibleText(previous, current) {
-  const maximum = Math.min(previous.length, current.length, 2_000);
-  for (let length = maximum; length > 0; length--) {
-    if (previous.endsWith(current.slice(0, length))) {
-      return {
-        overlapLength: length,
-        text: current.slice(length),
-      };
-    }
-  }
-  return { overlapLength: 0, text: current };
+  const currentTurnIdentity = completedTurnIdentity(session);
+  return Boolean(
+    currentTurnIdentity
+    && currentTurnIdentity !== watch.baselineCompletedTurnIdentity,
+  );
 }
 
 function hasFastCodexCompletionEvidence(commandText, session) {
