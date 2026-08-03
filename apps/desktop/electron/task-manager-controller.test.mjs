@@ -29,6 +29,7 @@ test('Task Manager controller stores bounded events before ack and deduplicates 
   assert.equal(snapshot.events[0].type, 'external-turn-completed');
   assert.equal(snapshot.events[0].externalTurnSequence, 1);
   assert.equal(snapshot.events[0].visibleTextTail, '完成');
+  assert.equal(snapshot.events[0].latestReply, '最后回复');
   assert.deepEqual(client.acked, ['event-1']);
   await controller.close();
 });
@@ -144,6 +145,20 @@ test('Task Manager controller validates and submits one exact routed command', a
   await controller.close();
 });
 
+test('Task Manager controller validates a fresh session review', async () => {
+  const client = new FakeClient();
+  const controller = createTaskManagerController(config(), {
+    createClient: () => client,
+  });
+  const review = await controller.reviewSession('session-a');
+  assert.equal(review.schemaVersion, 'desktop-char.task-session-review.v1');
+  assert.equal(review.sessionId, 'session-a');
+  assert.equal(review.state.completion, 'complete');
+  assert.equal(review.content.latestReply, '最后回复');
+  assert.deepEqual(client.reviewed, ['session-a']);
+  await controller.close();
+});
+
 test('passive watches survive Task Manager instance replacement and can be removed', async () => {
   const client = new FakeClient();
   const controller = createTaskManagerController(config(), {
@@ -163,6 +178,47 @@ test('passive watches survive Task Manager instance replacement and can be remov
   await controller.unwatchSession('session-a');
   assert.deepEqual(client.unwatched, ['session-a']);
   assert.equal(controller.snapshot().watchedSessionCount, 0);
+  await controller.close();
+});
+
+test('unwatch sends an idempotent remote delete even when the local remote cache drifted', async () => {
+  const client = new FakeClient();
+  const controller = createTaskManagerController(config(), {
+    createClient: () => client,
+  });
+  await controller.pollNow();
+  await controller.watchSession('session-a');
+  client.instanceId = 'instance-b';
+  client.watchFailures = 1;
+  await controller.pollNow();
+  assert.equal(controller.snapshot().phase, 'degraded');
+
+  await controller.unwatchSession('session-a');
+  assert.deepEqual(client.unwatched, ['session-a']);
+  await controller.close();
+});
+
+test('unwatch waits for an in-flight watch rebuild so remote delete is the final action', async () => {
+  const client = new FakeClient();
+  const controller = createTaskManagerController(config(), {
+    createClient: () => client,
+  });
+  await controller.pollNow();
+  await controller.watchSession('session-a');
+  client.instanceId = 'instance-b';
+  client.pauseWatch = Promise.withResolvers();
+  client.watchStarted = Promise.withResolvers();
+  const rebuilding = controller.pollNow();
+  await client.watchStarted.promise;
+  const unwatching = controller.unwatchSession('session-a');
+  client.pauseWatch.resolve();
+  await rebuilding;
+  await unwatching;
+
+  assert.deepEqual(client.remoteWatchActions.slice(-2), [
+    ['watch', 'session-a'],
+    ['unwatch', 'session-a'],
+  ]);
   await controller.close();
 });
 
@@ -262,11 +318,16 @@ class FakeClient {
   commands = [];
   watched = [];
   unwatched = [];
+  reviewed = [];
   ackFailures = 0;
   pauseFirstSessionList;
   firstSessionListStarted = Promise.withResolvers();
   sessionListCalls = 0;
   sessionListFailures = 0;
+  watchFailures = 0;
+  pauseWatch;
+  watchStarted;
+  remoteWatchActions = [];
 
   async discover() {
     return {
@@ -321,13 +382,29 @@ class FakeClient {
     return { ...command, submissionGeneration: 1, status: 'observing' };
   }
 
+  async reviewSession(sessionId) {
+    this.reviewed.push(sessionId);
+    return sessionReview(sessionId);
+  }
+
   async watchSession(sessionId) {
     this.watched.push(sessionId);
+    this.remoteWatchActions.push(['watch', sessionId]);
+    if (this.pauseWatch) {
+      this.watchStarted?.resolve();
+      await this.pauseWatch.promise;
+      this.pauseWatch = undefined;
+    }
+    if (this.watchFailures > 0) {
+      this.watchFailures--;
+      throw new Error('watch failed');
+    }
     return { sessionId, phase: 'waiting', turnSequence: 0 };
   }
 
   async unwatchSession(sessionId) {
     this.unwatched.push(sessionId);
+    this.remoteWatchActions.push(['unwatch', sessionId]);
     return { sessionId, removed: true };
   }
 }
@@ -359,6 +436,36 @@ function taskEvent(cursor, type) {
     title: '测试会话',
     lastVisibleLine: '完成',
     visibleTextTail: '完成',
+    latestReply: '最后回复',
+  };
+}
+
+function sessionReview(sessionId) {
+  return {
+    schemaVersion: 'desktop-char.task-session-review.v1',
+    sessionId,
+    capturedAtMs: 1_500,
+    metadata: {
+      agent: 'Codex',
+      title: '测试会话',
+      workDir: 'C:\\workspace',
+    },
+    state: {
+      session: 'running',
+      monitor: 'observed',
+      agent: 'waiting_input',
+      completion: 'complete',
+    },
+    source: {
+      hash: 'HASH',
+      screenChangedAtUtc: '2026-07-29T10:00:00Z',
+      observedAtUtc: '2026-07-29T10:00:01Z',
+    },
+    content: {
+      lastVisibleLine: '›',
+      visibleTextTail: '• 最后回复\n\n› ',
+      latestReply: '最后回复',
+    },
   };
 }
 

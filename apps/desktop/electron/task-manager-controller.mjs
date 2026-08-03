@@ -40,6 +40,7 @@ export function createTaskManagerController(initialConfig, options = {}) {
     setEnabled,
     pollNow,
     submitCommand,
+    reviewSession,
     watchSession,
     unwatchSession,
     snapshot,
@@ -137,6 +138,18 @@ export function createTaskManagerController(initialConfig, options = {}) {
     return result;
   }
 
+  async function reviewSession(sessionId) {
+    if (closed) throw new Error('Task Manager controller is closed');
+    if (!desiredEnabled()) throw new Error('Task Manager is disabled');
+    if (config.lifecycle === 'managed' && !activeProcess) {
+      throw new Error('Task Manager managed service is unavailable');
+    }
+    const normalizedSessionId = nonEmptyText(sessionId, 'Task Manager reviewed sessionId');
+    client ??= createClient(config);
+    await client.discover();
+    return normalizeSessionReview(await client.reviewSession(normalizedSessionId));
+  }
+
   function watchSession(sessionId) {
     const normalizedSessionId = nonEmptyText(sessionId, 'Task Manager watched sessionId');
     if (closed) throw new Error('Task Manager controller is closed');
@@ -148,9 +161,12 @@ export function createTaskManagerController(initialConfig, options = {}) {
         const operationClient = client ?? createClient(config);
         client = operationClient;
         await operationClient.discover();
-        const watch = await operationClient.watchSession(normalizedSessionId);
+        const rawWatch = await operationClient.watchSession(normalizedSessionId);
         remoteWatchedSessionIds.add(normalizedSessionId);
-        return watch;
+        return {
+          ...rawWatch,
+          ...(rawWatch?.review ? { review: normalizeSessionReview(rawWatch.review) } : {}),
+        };
       }
       catch (error) {
         watchedSessionIds.delete(normalizedSessionId);
@@ -164,10 +180,12 @@ export function createTaskManagerController(initialConfig, options = {}) {
   function unwatchSession(sessionId) {
     const normalizedSessionId = nonEmptyText(sessionId, 'Task Manager watched sessionId');
     const removed = watchedSessionIds.delete(normalizedSessionId);
+    const activePoll = polling;
     publish();
     return enqueue(async () => {
+      if (activePoll) await activePoll.catch(() => {});
       const operationClient = client;
-      if (closed || !operationClient || !remoteWatchedSessionIds.has(normalizedSessionId)) {
+      if (closed || !operationClient) {
         remoteWatchedSessionIds.delete(normalizedSessionId);
         return { sessionId: normalizedSessionId, removed };
       }
@@ -627,12 +645,19 @@ function normalizeEvent(value, instanceId) {
       ? { externalTurnSequence: value.externalTurnSequence }
       : {}),
     ...(optionalText(value.commandId) ? { commandId: optionalText(value.commandId) } : {}),
+    ...(optionalText(value.sourceHash) ? { sourceHash: boundedTail(value.sourceHash, 200) } : {}),
+    ...(optionalText(value.sourceRevision)
+      ? { sourceRevision: boundedTail(value.sourceRevision, 200) }
+      : {}),
     ...(optionalText(value.title) ? { title: boundedTail(value.title, 300) } : {}),
     ...(optionalText(value.lastVisibleLine, true)
       ? { lastVisibleLine: boundedTail(value.lastVisibleLine, 500) }
       : {}),
     ...(optionalText(value.visibleTextTail, true)
       ? { visibleTextTail: boundedTail(value.visibleTextTail, 4_000) }
+      : {}),
+    ...(optionalText(value.latestReply, true)
+      ? { latestReply: boundedTail(value.latestReply, 4_000) }
       : {}),
     ...(optionalText(value.resultArtifactPath)
       ? { resultArtifactPath: optionalText(value.resultArtifactPath) }
@@ -641,6 +666,69 @@ function normalizeEvent(value, instanceId) {
       ? { openArtifactOnCompletion: value.openArtifactOnCompletion }
       : {}),
     ...(optionalText(value.error) ? { error: boundedTail(value.error, 500) } : {}),
+  };
+}
+
+function normalizeSessionReview(value) {
+  if (!record(value)) throw new TypeError('Task Manager session review must be an object');
+  if (value.schemaVersion !== 'desktop-char.task-session-review.v1') {
+    throw new TypeError('Task Manager session review schemaVersion is invalid');
+  }
+  const metadata = record(value.metadata) ? value.metadata : {};
+  const state = record(value.state) ? value.state : {};
+  const source = record(value.source) ? value.source : {};
+  const content = record(value.content) ? value.content : {};
+  return {
+    schemaVersion: value.schemaVersion,
+    sessionId: nonEmptyText(value.sessionId, 'Task Manager review sessionId'),
+    capturedAtMs: nonNegativeInteger(value.capturedAtMs, 'Task Manager review capturedAtMs'),
+    metadata: {
+      ...(optionalText(metadata.agent) ? { agent: optionalText(metadata.agent) } : {}),
+      ...(optionalText(metadata.title) ? { title: boundedTail(metadata.title, 300) } : {}),
+      ...(optionalText(metadata.workDir) ? { workDir: optionalText(metadata.workDir) } : {}),
+    },
+    state: {
+      session: enumText(
+        state.session,
+        ['running', 'exited', 'closed', 'stale'],
+        'Task Manager review session state',
+      ),
+      monitor: enumText(
+        state.monitor,
+        ['pending', 'observed', 'unreadable', 'closed'],
+        'Task Manager review monitor state',
+      ),
+      agent: enumText(
+        state.agent,
+        ['waiting_input', 'active', 'idle_unknown', 'unknown', 'closed'],
+        'Task Manager review agent state',
+      ),
+      completion: enumText(
+        state.completion,
+        ['complete', 'in-progress', 'unknown', 'unavailable'],
+        'Task Manager review completion state',
+      ),
+    },
+    source: {
+      ...(optionalText(source.hash) ? { hash: optionalText(source.hash) } : {}),
+      ...(optionalText(source.screenChangedAtUtc)
+        ? { screenChangedAtUtc: optionalText(source.screenChangedAtUtc) }
+        : {}),
+      ...(optionalText(source.observedAtUtc)
+        ? { observedAtUtc: optionalText(source.observedAtUtc) }
+        : {}),
+    },
+    content: {
+      ...(optionalText(content.lastVisibleLine, true)
+        ? { lastVisibleLine: boundedTail(content.lastVisibleLine, 500) }
+        : {}),
+      ...(optionalText(content.visibleTextTail, true)
+        ? { visibleTextTail: boundedTail(content.visibleTextTail, 4_000) }
+        : {}),
+      ...(optionalText(content.latestReply, true)
+        ? { latestReply: boundedTail(content.latestReply, 4_000) }
+        : {}),
+    },
   };
 }
 

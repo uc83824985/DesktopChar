@@ -53,6 +53,7 @@ export function createTaskManagerRuntime(options) {
     close,
     pollOnce,
     submitCommand,
+    reviewSession,
     watchSession,
     unwatchSession,
     listSessions,
@@ -205,7 +206,7 @@ export function createTaskManagerRuntime(options) {
     ensureOpen();
     const normalizedSessionId = nonEmptyText(sessionId, 'watched sessionId');
     const existing = passiveWatches.get(normalizedSessionId);
-    if (existing) return publicPassiveWatch(existing);
+    if (existing) return publicPassiveWatch(existing, sessions.get(normalizedSessionId));
     let detail;
     try {
       detail = normalizeSession(await monitor.getSession(normalizedSessionId));
@@ -221,7 +222,25 @@ export function createTaskManagerRuntime(options) {
     sessionFacts.set(detail.sessionId, sessionFingerprint(detail));
     const watch = createPassiveWatch(detail);
     passiveWatches.set(detail.sessionId, watch);
-    return publicPassiveWatch(watch);
+    return publicPassiveWatch(watch, detail);
+  }
+
+  async function reviewSession(sessionId) {
+    ensureOpen();
+    const normalizedSessionId = nonEmptyText(sessionId, 'reviewed sessionId');
+    let detail;
+    try {
+      detail = normalizeSession(await monitor.getSession(normalizedSessionId));
+    }
+    catch (error) {
+      throw new TaskManagerError(
+        'session-unavailable',
+        `Cannot review unavailable session ${normalizedSessionId}`,
+        { cause: error },
+      );
+    }
+    sessions.set(detail.sessionId, detail);
+    return createSessionReview(detail);
   }
 
   function unwatchSession(sessionId) {
@@ -275,7 +294,7 @@ export function createTaskManagerRuntime(options) {
       sessionCount: sessions.size,
       activeObservationCount: observations.size,
       passiveWatchCount: passiveWatches.size,
-      passiveWatches: [...passiveWatches.values()].map(publicPassiveWatch),
+      passiveWatches: [...passiveWatches.values()].map(watch => publicPassiveWatch(watch)),
       sessions: listSessions(),
       commands: commandOrder.map(commandId => cloneCommand(commands.get(commandId))),
     };
@@ -386,6 +405,7 @@ export function createTaskManagerRuntime(options) {
     }
     command.status = 'completed';
     command.completedAtMs = now();
+    const latestReply = latestCompletedReply(session);
     command.result = {
       sessionId: command.sessionId,
       submissionGeneration: command.submissionGeneration,
@@ -397,6 +417,7 @@ export function createTaskManagerRuntime(options) {
       ...(session.lastVisibleText
         ? { visibleTextTail: boundedTail(session.lastVisibleText, maxVisibleTextTailChars) }
         : {}),
+      ...(latestReply ? { latestReply } : {}),
       ...(artifact
         ? {
             resultArtifactPath: artifact.path,
@@ -455,6 +476,7 @@ export function createTaskManagerRuntime(options) {
 
   function completePassiveTurn(watch, session) {
     watch.turnSequence++;
+    const latestReply = latestCompletedReply(session);
     appendEvent({
       sessionId: session.sessionId,
       type: 'external-turn-completed',
@@ -470,6 +492,7 @@ export function createTaskManagerRuntime(options) {
       ...(session.lastVisibleText
         ? { visibleTextTail: boundedTail(session.lastVisibleText, maxVisibleTextTailChars) }
         : {}),
+      ...(latestReply ? { latestReply } : {}),
     });
     resetPassiveWatch(watch, session);
   }
@@ -528,6 +551,7 @@ export function createTaskManagerRuntime(options) {
   }
 
   function emitTaskEvent(type, command, session, status, error) {
+    const latestReply = session ? latestCompletedReply(session) : undefined;
     appendEvent({
       sessionId: command.sessionId,
       type,
@@ -544,6 +568,7 @@ export function createTaskManagerRuntime(options) {
       ...(session?.lastVisibleText
         ? { visibleTextTail: boundedTail(session.lastVisibleText, maxVisibleTextTailChars) }
         : {}),
+      ...(latestReply ? { latestReply } : {}),
       ...(command.resultArtifact && status === 'completed'
         ? {
             resultArtifactPath: command.resultArtifact.path,
@@ -733,13 +758,56 @@ export function createTaskManagerRuntime(options) {
     watch.lastWaitingObservedAtUtc = undefined;
   }
 
-  function publicPassiveWatch(watch) {
+  function publicPassiveWatch(watch, session) {
     return {
       sessionId: watch.sessionId,
       phase: watch.phase,
       turnSequence: watch.turnSequence,
       sourceHash: watch.baselineSourceHash ?? null,
       sourceRevision: watch.baselineSourceRevision ?? null,
+      ...(session ? { review: createSessionReview(session) } : {}),
+    };
+  }
+
+  function createSessionReview(session) {
+    const latestReply = latestCompletedReply(session);
+    return {
+      schemaVersion: 'desktop-char.task-session-review.v1',
+      sessionId: session.sessionId,
+      capturedAtMs: now(),
+      metadata: {
+        ...(session.agent ? { agent: session.agent } : {}),
+        ...(session.title ? { title: session.title } : {}),
+        ...(session.workDir ? { workDir: session.workDir } : {}),
+      },
+      state: {
+        session: session.state,
+        monitor: session.monitorState,
+        agent: session.agentState,
+        completion: session.state !== 'running' || session.monitorState !== 'observed'
+          ? 'unavailable'
+          : session.agentState === 'waiting_input'
+            ? 'complete'
+            : session.agentState === 'active'
+              ? 'in-progress'
+              : 'unknown',
+      },
+      source: {
+        ...(session.lastVisibleTextHash ? { hash: session.lastVisibleTextHash } : {}),
+        ...(session.lastScreenChangedAtUtc
+          ? { screenChangedAtUtc: session.lastScreenChangedAtUtc }
+          : {}),
+        ...(session.lastObservedAtUtc ? { observedAtUtc: session.lastObservedAtUtc } : {}),
+      },
+      content: {
+        ...(session.lastVisibleNonEmptyLine
+          ? { lastVisibleLine: boundedTail(session.lastVisibleNonEmptyLine, 500) }
+          : {}),
+        ...(session.lastVisibleText
+          ? { visibleTextTail: boundedTail(session.lastVisibleText, maxVisibleTextTailChars) }
+          : {}),
+        ...(latestReply ? { latestReply } : {}),
+      },
     };
   }
 
@@ -780,6 +848,47 @@ function normalizeSession(value) {
     lastScreenChangedAtUtc: optionalText(value.lastScreenChangedAtUtc),
     lastObservedAtUtc: optionalText(value.lastObservedAtUtc),
   };
+}
+
+function latestCompletedReply(session) {
+  if (
+    session.agent?.toLocaleLowerCase('en-US') !== 'codex'
+    || session.agentState !== 'waiting_input'
+    || !session.lastVisibleText
+  ) return undefined;
+  const lines = session.lastVisibleText.replaceAll('\r\n', '\n').split('\n');
+  let trailingPrompt = lines.length - 1;
+  while (trailingPrompt >= 0 && !lines[trailingPrompt]?.trim()) trailingPrompt--;
+  if (trailingPrompt < 0 || !/^\s*[›>]\s*$/u.test(lines[trailingPrompt] ?? '')) {
+    return undefined;
+  }
+  let submittedPrompt = -1;
+  for (let index = trailingPrompt - 1; index >= 0; index--) {
+    if (/^\s*[›>]\s+\S/u.test(lines[index] ?? '')) {
+      submittedPrompt = index;
+      break;
+    }
+  }
+  let replyStart = -1;
+  for (let index = submittedPrompt + 1; index < trailingPrompt; index++) {
+    if (/^\s*[•●]\s+\S/u.test(lines[index] ?? '')) {
+      replyStart = index;
+      break;
+    }
+  }
+  if (replyStart < 0) {
+    for (let index = trailingPrompt - 1; index >= 0; index--) {
+      if (/^\s*[•●]\s+\S/u.test(lines[index] ?? '')) {
+        replyStart = index;
+        break;
+      }
+    }
+  }
+  if (replyStart < 0) return undefined;
+  const replyLines = lines.slice(replyStart, trailingPrompt);
+  replyLines[0] = (replyLines[0] ?? '').replace(/^\s*[•●]\s*/u, '');
+  const reply = replyLines.join('\n').trim();
+  return reply ? boundedTail(reply, 4_000) : undefined;
 }
 
 function changedAfterSubmission(observation, session) {

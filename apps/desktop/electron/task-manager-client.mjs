@@ -25,6 +25,18 @@ export function createTaskManagerClient(options) {
       }
       return structuredClone(payload.sessions);
     },
+    async reviewSession(sessionId, signal) {
+      const normalizedSessionId = nonEmptyText(sessionId, 'Task Manager reviewed sessionId');
+      const payload = await request(
+        `/sessions/${encodeURIComponent(normalizedSessionId)}/review`,
+        {},
+        signal,
+      );
+      if (!record(payload) || payload.ok !== true || !record(payload.review)) {
+        throw new TaskManagerClientError('invalid-response', 'Task Manager review response is invalid');
+      }
+      return structuredClone(payload.review);
+    },
     async eventsAfter(after, limit, signal) {
       const cursor = nonNegativeInteger(after, 'Task Manager event cursor');
       const pageSize = boundedInteger(limit, 100, 1, 1_000, 'Task Manager event limit');

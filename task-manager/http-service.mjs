@@ -66,6 +66,11 @@ export function createTaskManagerHttpService(options) {
     if (request.method === 'GET' && url.pathname === '/sessions') {
       return sendJson(response, 200, { ok: true, sessions: runtime.listSessions() });
     }
+    const reviewMatch = /^\/sessions\/([^/]+)\/review$/.exec(url.pathname);
+    if (request.method === 'GET' && reviewMatch) {
+      const review = await runtime.reviewSession(decodeURIComponent(reviewMatch[1]));
+      return sendJson(response, 200, { ok: true, review });
+    }
     if (request.method === 'GET' && url.pathname === '/events') {
       const after = queryInteger(url.searchParams.get('after'), 0, 0, Number.MAX_SAFE_INTEGER, 'after');
       const limit = queryInteger(url.searchParams.get('limit'), 100, 1, 1_000, 'limit');

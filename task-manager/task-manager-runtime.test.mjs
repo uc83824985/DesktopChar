@@ -280,13 +280,14 @@ test('passive watch emits one completion after a streaming external turn returns
     now: () => 8_000,
   });
   await runtime.pollOnce();
-  assert.deepEqual(await runtime.watchSession('session-a'), {
-    sessionId: 'session-a',
-    phase: 'waiting',
-    turnSequence: 0,
-    sourceHash: 'A',
-    sourceRevision: '2026-07-29T10:00:01Z',
-  });
+  const initialWatch = await runtime.watchSession('session-a');
+  assert.equal(initialWatch.sessionId, 'session-a');
+  assert.equal(initialWatch.phase, 'waiting');
+  assert.equal(initialWatch.turnSequence, 0);
+  assert.equal(initialWatch.sourceHash, 'A');
+  assert.equal(initialWatch.sourceRevision, '2026-07-29T10:00:01Z');
+  assert.equal(initialWatch.review.state.completion, 'complete');
+  assert.equal(initialWatch.review.content.latestReply, '上一轮');
 
   monitor.current = session({
     agentState: 'active',
@@ -317,6 +318,7 @@ test('passive watch emits one completion after a streaming external turn returns
   assert.equal(firstTurn[0].type, 'external-turn-completed');
   assert.equal(firstTurn[0].externalTurnSequence, 1);
   assert.equal(firstTurn[0].visibleTextTail, '• 上一轮\n\n› 手动请求\n\n• 完整结果\n\n› ');
+  assert.equal(firstTurn[0].latestReply, '完整结果');
 
   monitor.current = session({
     agentState: 'active',
@@ -340,6 +342,59 @@ test('passive watch emits one completion after a streaming external turn returns
       ['external-turn-completed', 2],
     ],
   );
+});
+
+test('session review returns a fresh bounded snapshot without advancing its passive watch', async () => {
+  const monitor = new FakeMonitor(session({
+    agentState: 'waiting_input',
+    hash: 'A',
+    changed: 1,
+    text: '› 已有问题\n\n• 已有最后回复\n第二行\n\n› ',
+  }));
+  const runtime = createTaskManagerRuntime({ monitor, now: () => 8_500 });
+  await runtime.pollOnce();
+  await runtime.watchSession('session-a');
+
+  const review = await runtime.reviewSession('session-a');
+  assert.deepEqual(review, {
+    schemaVersion: 'desktop-char.task-session-review.v1',
+    sessionId: 'session-a',
+    capturedAtMs: 8_500,
+    metadata: {
+      agent: 'Codex',
+      title: '测试会话',
+      workDir: 'C:\\workspace',
+    },
+    state: {
+      session: 'running',
+      monitor: 'observed',
+      agent: 'waiting_input',
+      completion: 'complete',
+    },
+    source: {
+      hash: 'A',
+      screenChangedAtUtc: '2026-07-29T10:00:01Z',
+      observedAtUtc: '2026-07-29T10:00:11Z',
+    },
+    content: {
+      lastVisibleLine: '›',
+      visibleTextTail: '› 已有问题\n\n• 已有最后回复\n第二行\n\n› ',
+      latestReply: '已有最后回复\n第二行',
+    },
+  });
+  assert.equal(runtime.getSnapshot().passiveWatches[0].turnSequence, 0);
+  assert.equal(runtime.eventsAfter().events.length, 0);
+
+  monitor.current = session({
+    agentState: 'active',
+    hash: 'B',
+    changed: 2,
+    text: '› 新问题\n\n• 流式回复',
+  });
+  const activeReview = await runtime.reviewSession('session-a');
+  assert.equal(activeReview.state.completion, 'in-progress');
+  assert.equal(activeReview.content.latestReply, undefined);
+  assert.equal(runtime.eventsAfter().events.length, 0);
 });
 
 test('passive watch conservatively recovers a fast Codex turn missed between polls', async () => {

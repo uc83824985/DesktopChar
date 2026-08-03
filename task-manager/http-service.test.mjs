@@ -12,6 +12,14 @@ test('Task Manager HTTP service exposes only authenticated narrow domain endpoin
       lastError: undefined,
     }),
     listSessions: () => [{ sessionId: 'session-a', status: 'active' }],
+    async reviewSession(sessionId) {
+      calls.push(['review', sessionId]);
+      return {
+        schemaVersion: 'desktop-char.task-session-review.v1',
+        sessionId,
+        capturedAtMs: 1_500,
+      };
+    },
     eventsAfter: (after, limit) => ({
       requestedAfter: after,
       earliestCursor: 2,
@@ -59,6 +67,12 @@ test('Task Manager HTTP service exposes only authenticated narrow domain endpoin
       ok: true,
       sessions: [{ sessionId: 'session-a', status: 'active' }],
     });
+    const review = await fetch(`${address.baseUrl}/sessions/session-a/review`, { headers });
+    assert.deepEqual((await review.json()).review, {
+      schemaVersion: 'desktop-char.task-session-review.v1',
+      sessionId: 'session-a',
+      capturedAtMs: 1_500,
+    });
     const events = await fetch(`${address.baseUrl}/events?after=2&limit=5`, { headers });
     assert.deepEqual(await events.json(), {
       ok: true,
@@ -82,7 +96,7 @@ test('Task Manager HTTP service exposes only authenticated narrow domain endpoin
     });
     assert.equal(submitted.status, 202);
     assert.equal((await submitted.json()).command.status, 'observing');
-    assert.deepEqual(calls, [command]);
+    assert.deepEqual(calls, [['review', 'session-a'], command]);
 
     const watched = await fetch(`${address.baseUrl}/watches/session-a`, {
       method: 'PUT',
