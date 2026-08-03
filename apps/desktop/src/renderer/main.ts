@@ -84,6 +84,7 @@ import type {
   PresentationUnit,
 } from '../../../../packages/conversation-runtime/src/types.ts';
 import {
+  compileConversationSessionReview,
   compileTaskNotification,
   RouteCoordinator,
   RouteCoordinatorError,
@@ -122,6 +123,7 @@ import type {
   ConversationAgentState,
   ConversationSessionEventState,
   ConversationSessionRegistryState,
+  ConversationSessionReviewState,
   ConversationSessionState,
   DesktopAgentRolesConfig,
   DesktopTtsConfig,
@@ -605,14 +607,17 @@ interface ConversationSessionManagementElements {
   container: HTMLElement;
   createButton: HTMLButtonElement;
   bindButton: HTMLButtonElement;
+  reviewButton: HTMLButtonElement;
+  organizeButton: HTMLButtonElement;
   closeButton: HTMLButtonElement;
   bindControls: HTMLElement;
   bindSelect: HTMLSelectElement;
   bindConfirm: HTMLButtonElement;
+  reviewPanel: HTMLElement;
 }
 
 interface TaskNotificationTurn {
-  event: CharTaskNotificationEvent;
+  event: CharPresentationEvent;
   relatedMessageId?: string;
   turnId: string;
   responseId: string;
@@ -643,6 +648,18 @@ interface CharTaskNotificationEvent {
   visibleTextTail?: string;
 }
 
+interface CharConversationReviewEvent {
+  identity: string;
+  sessionId: string;
+  type: 'conversation-review';
+  observedAtMs: number;
+  status: string;
+  title: string;
+  review: ConversationSessionReviewState;
+}
+
+type CharPresentationEvent = CharTaskNotificationEvent | CharConversationReviewEvent;
+
 let model: Live2DModel<Cubism4InternalModel> | undefined;
 let assetPreviewCatalog: Live2dAssetPreviewCatalog = { expressions: [], motions: [] };
 let assetPreviewIsolation: AssetPreviewIsolationController | undefined;
@@ -671,7 +688,7 @@ let conversationSessionOperationInFlight = false;
 let pendingConversationSessionCloseId: string | undefined;
 let activeTaskNotification: TaskNotificationTurn | undefined;
 const seenTaskNotificationIds = new Set<string>();
-const pendingTaskNotifications: CharTaskNotificationEvent[] = [];
+const pendingTaskNotifications: CharPresentationEvent[] = [];
 const taskNotificationTurns = new Map<string, TaskNotificationTurn>();
 const taskNotificationResponses = new Map<string, TaskNotificationTurn>();
 const routedConversationTurnIds = new Map<string, string>();
@@ -801,7 +818,7 @@ const contextMenuHost = new DomContextMenuHost(immediateUi, {
   },
 });
 const interactionPanelHost = new DomInteractionPanelHost(interactionUi, {
-  dismissDelayMs: 3_000,
+  dismissDelayMs: conversationPanelTestRequested ? 600_000 : 3_000,
   fadeOutMs: 120,
   label: '角色对话与资源调试',
   initialViewId: 'conversation',
@@ -1141,8 +1158,11 @@ try {
   }, { once: true });
 
   document.body.dataset.ready = 'true';
-  if (desktopShell && conversationPanelTestRequested && !interactionPanelHost.isOpen) {
-    openAvatarInteractionPanel('test', undefined);
+  if (desktopShell && conversationPanelTestRequested) {
+    window.addEventListener('desktop-char-test:open-conversation-panel', () => {
+      if (!interactionPanelHost.isOpen) openAvatarInteractionPanel('test', undefined);
+    });
+    if (!interactionPanelHost.isOpen) openAvatarInteractionPanel('test', undefined);
   }
 }
 catch (error) {
@@ -2103,6 +2123,21 @@ function enqueueTaskNotification(event: CharTaskNotificationEvent): void {
   pendingTaskNotifications.push(event);
 }
 
+function enqueueConversationReview(review: ConversationSessionReviewState): void {
+  const event: CharConversationReviewEvent = {
+    identity: `review:${review.reviewId}`,
+    sessionId: review.session.sessionId,
+    type: 'conversation-review',
+    observedAtMs: review.capturedAtMs,
+    status: review.source.completion,
+    title: review.session.title,
+    review,
+  };
+  if (seenTaskNotificationIds.has(event.identity)) return;
+  seenTaskNotificationIds.add(event.identity);
+  pendingTaskNotifications.push(event);
+}
+
 function updateRoutingCandidates(): void {
   const candidates: TaskSessionRouteCandidate[] = (conversationSessionState?.sessions ?? [])
     .map(session => {
@@ -2157,18 +2192,49 @@ function pumpTaskNotifications(): void {
   if (activeTaskNotification || !conversationRuntime) return;
   const event = pendingTaskNotifications.shift();
   if (!event) return;
-  const compiled = compileTaskNotification({
-    type: event.type as TaskNotificationType,
-    subject: event.title?.trim() || event.sessionId,
-    status: event.status,
-    resultArtifactAvailable: Boolean(event.resultArtifactPath),
-    ...(event.visibleTextTail ? { visibleTextTail: event.visibleTextTail } : {}),
-  });
+  const compiled = event.type === 'conversation-review'
+    ? compileConversationSessionReview({
+        capturedAtMs: event.review.capturedAtMs,
+        session: {
+          title: event.review.session.title,
+          ownership: event.review.session.ownership,
+          status: event.review.session.status,
+          ...(event.review.session.workDir ? { workDir: event.review.session.workDir } : {}),
+        },
+        source: {
+          kind: event.review.source.kind,
+          stale: event.review.source.stale,
+          completion: event.review.source.completion,
+          ...(event.review.source.error ? { error: event.review.source.error } : {}),
+        },
+        current: {
+          ...(event.review.current.latestReply
+            ? { latestReply: event.review.current.latestReply }
+            : {}),
+          ...(event.review.current.visibleTextTail
+            ? { visibleTextTail: event.review.current.visibleTextTail }
+            : {}),
+        },
+        records: event.review.records.map(record => ({
+          direction: record.direction,
+          atMs: record.atMs,
+          text: record.text,
+        })),
+        droppedRecordCount: event.review.droppedRecordCount,
+      })
+    : compileTaskNotification({
+        type: event.type,
+        subject: event.title?.trim() || event.sessionId,
+        status: event.status,
+        resultArtifactAvailable: Boolean(event.resultArtifactPath),
+        ...(event.visibleTextTail ? { visibleTextTail: event.visibleTextTail } : {}),
+      });
   const submitted = conversationRuntime.submitUserMessage(
     compiled.focusText,
     { applicationFallbackText: compiled.fallbackText },
   );
   const relatedMessageId = event.type === 'external-turn-completed'
+    || event.type === 'conversation-review'
     ? undefined
     : latestRoutedMessageIdForSession(event.sessionId);
   const work: TaskNotificationTurn = {
@@ -2482,6 +2548,16 @@ function mountConversationPanel(container: HTMLElement): DomInteractionPanelView
   bindSession.dataset.action = 'bind-external';
   bindSession.textContent = '绑定';
   bindSession.title = '绑定 Session Monitor 已发现的对话窗口';
+  const reviewSession = document.createElement('button');
+  reviewSession.type = 'button';
+  reviewSession.dataset.action = 'review-session';
+  reviewSession.textContent = '查看';
+  reviewSession.title = '只读刷新所选会话的当前状态，不向会话发送消息';
+  const organizeSession = document.createElement('button');
+  organizeSession.type = 'button';
+  organizeSession.dataset.action = 'organize-session';
+  organizeSession.textContent = '整理';
+  organizeSession.title = '刷新只读资料并交给 Char 整理，不向所选会话发送消息';
   const closeSession = document.createElement('button');
   closeSession.type = 'button';
   closeSession.dataset.action = 'close-session';
@@ -2499,17 +2575,37 @@ function mountConversationPanel(container: HTMLElement): DomInteractionPanelView
   bindCancel.dataset.action = 'cancel';
   bindCancel.textContent = '取消';
   bindControls.append(bindSelect, bindConfirm, bindCancel);
-  sessionManagement.append(createSession, bindSession, closeSession);
+  const reviewPanel = document.createElement('section');
+  reviewPanel.className = 'conversation-panel__session-review';
+  reviewPanel.setAttribute('aria-label', '所选会话的只读快照');
+  reviewPanel.hidden = true;
+  sessionManagement.append(
+    createSession,
+    bindSession,
+    reviewSession,
+    organizeSession,
+    closeSession,
+  );
   const sessionManagementElements: ConversationSessionManagementElements = {
     container: sessionManagement,
     createButton: createSession,
     bindButton: bindSession,
+    reviewButton: reviewSession,
+    organizeButton: organizeSession,
     closeButton: closeSession,
     bindControls,
     bindSelect,
     bindConfirm,
+    reviewPanel,
   };
-  routeControls.append(targetLabel, sessionManagement, bindControls, routeStatus, confirmation);
+  routeControls.append(
+    targetLabel,
+    sessionManagement,
+    bindControls,
+    routeStatus,
+    confirmation,
+    reviewPanel,
+  );
 
   const agentAudit = document.createElement('details');
   agentAudit.className = 'conversation-panel__agent-audit';
@@ -2624,6 +2720,14 @@ function mountConversationPanel(container: HTMLElement): DomInteractionPanelView
   }, { signal: abort.signal });
   bindCancel.addEventListener('click', () => {
     bindControls.hidden = true;
+  }, { signal: abort.signal });
+  reviewSession.addEventListener('click', () => {
+    const selected = selectedConversationSession();
+    if (selected) void reviewRegisteredConversationSession(selected, false);
+  }, { signal: abort.signal });
+  organizeSession.addEventListener('click', () => {
+    const selected = selectedConversationSession();
+    if (selected) void reviewRegisteredConversationSession(selected, true);
   }, { signal: abort.signal });
   closeSession.addEventListener('click', () => {
     const selected = selectedConversationSession();
@@ -2780,6 +2884,8 @@ function renderSessionManagement(elements: ConversationSessionManagementElements
   elements.container.dataset.phase = conversationSessionOperationInFlight ? 'busy' : 'ready';
   elements.createButton.disabled = unavailable;
   elements.bindButton.disabled = unavailable || candidates.length === 0;
+  elements.reviewButton.disabled = unavailable || !selected;
+  elements.organizeButton.disabled = unavailable || !selected;
   elements.bindButton.textContent = elements.bindControls.hidden ? '绑定' : '收起';
   elements.closeButton.disabled = unavailable || !selected;
   elements.closeButton.textContent = confirmingClose
@@ -2793,6 +2899,12 @@ function renderSessionManagement(elements: ConversationSessionManagementElements
       : selected
         ? '中断活动 Turn 并归档 DesktopChar 托管的 Codex 对话'
         : '请先选择一个 Session';
+  elements.reviewButton.title = selected
+    ? '只读刷新当前状态；不会向所选会话发送消息'
+    : '请先选择一个 Session';
+  elements.organizeButton.title = selected
+    ? '刷新资料并交给 Char 整理；不会向所选会话发送消息'
+    : '请先选择一个 Session';
 
   const previous = elements.bindSelect.value;
   elements.bindSelect.replaceChildren(...candidates.map(candidate => {
@@ -2808,6 +2920,48 @@ function renderSessionManagement(elements: ConversationSessionManagementElements
   elements.bindSelect.disabled = unavailable || candidates.length === 0;
   elements.bindConfirm.disabled = unavailable || candidates.length === 0;
   if (candidates.length === 0) elements.bindControls.hidden = true;
+  renderConversationSessionReview(elements.reviewPanel, selected?.lastReview ?? null);
+}
+
+function renderConversationSessionReview(
+  container: HTMLElement,
+  review: ConversationSessionReviewState | null,
+): void {
+  const signature = review ? `${review.session.sessionId}:${review.reviewId}` : 'none';
+  if (container.dataset.reviewSignature === signature) return;
+  container.dataset.reviewSignature = signature;
+  if (!review) {
+    container.hidden = true;
+    container.replaceChildren();
+    return;
+  }
+  container.hidden = false;
+  container.dataset.completion = review.source.completion;
+  container.dataset.stale = review.source.stale ? 'true' : 'false';
+  const header = document.createElement('header');
+  const title = document.createElement('strong');
+  title.textContent = '当前快照';
+  const meta = document.createElement('span');
+  const completion = review.source.stale
+    ? '缓存'
+    : review.source.completion === 'complete'
+      ? '已完成'
+      : review.source.completion === 'in-progress'
+        ? '输出中'
+        : review.source.completion === 'unavailable'
+          ? '不可用'
+          : '状态未知';
+  meta.textContent = `${completion} · ${new Date(review.capturedAtMs).toLocaleTimeString()}`;
+  header.append(title, meta);
+  const content = document.createElement('pre');
+  content.textContent = review.current.latestReply
+    ?? review.current.visibleTextTail
+    ?? '当前没有可读取的回复文本。';
+  const records = document.createElement('small');
+  const retained = review.records.length;
+  const omitted = review.droppedRecordCount;
+  records.textContent = `接管后记录 ${retained} 条${omitted > 0 ? `，另有 ${omitted} 条已丢弃` : ''}`;
+  container.replaceChildren(header, content, records);
 }
 
 function conversationSessionStatusLabel(
@@ -2885,6 +3039,52 @@ async function bindExternalConversationSession(sourceSessionId: string): Promise
       text: `绑定外部对话失败：${error instanceof Error ? error.message : String(error)}`,
     };
     return false;
+  }
+  finally {
+    conversationSessionOperationInFlight = false;
+    interactionPanelHost.refresh();
+  }
+}
+
+async function reviewRegisteredConversationSession(
+  session: ConversationSessionState,
+  organizeWithChar: boolean,
+): Promise<void> {
+  if (!desktopShell || conversationSessionOperationInFlight) return;
+  pendingConversationSessionCloseId = undefined;
+  conversationSessionOperationInFlight = true;
+  document.body.dataset.conversationReview = organizeWithChar ? 'refreshing-for-char' : 'refreshing';
+  routingUiState = {
+    phase: 'routing',
+    text: organizeWithChar
+      ? `正在刷新 ${session.title} 的只读资料并交给 Char…`
+      : `正在只读刷新 ${session.title}…`,
+  };
+  interactionPanelHost.refresh();
+  try {
+    const review = await desktopShell.reviewConversationSession(session.sessionId);
+    applyConversationSessionState(await desktopShell.getConversationSessionsState());
+    document.body.dataset.conversationReviewId = review.reviewId;
+    if (review.current.latestReply) {
+      taskSessionVisibleEvents.set(session.sessionId, review.current.latestReply);
+      updateRoutingCandidates();
+    }
+    if (organizeWithChar) {
+      enqueueConversationReview(review);
+      document.body.dataset.conversationReview = 'queued-for-char';
+      void pumpTaskNotifications();
+    }
+    else {
+      document.body.dataset.conversationReview = review.source.stale ? 'cached' : 'ready';
+    }
+    routingUiState = { phase: 'idle', text: '' };
+  }
+  catch (error) {
+    document.body.dataset.conversationReview = 'failed';
+    routingUiState = {
+      phase: 'error',
+      text: `读取 Session 失败：${error instanceof Error ? error.message : String(error)}`,
+    };
   }
   finally {
     conversationSessionOperationInFlight = false;

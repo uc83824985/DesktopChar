@@ -27,6 +27,7 @@ const channels = {
   conversationSessionsGet: 'conversation-sessions:get-state',
   conversationSessionsCreate: 'conversation-sessions:create-managed',
   conversationSessionsBind: 'conversation-sessions:bind-external',
+  conversationSessionsReview: 'conversation-sessions:review',
   conversationSessionsClose: 'conversation-sessions:close',
   conversationSessionsSubmit: 'conversation-sessions:submit-command',
   conversationSessionsState: 'conversation-sessions:state',
@@ -72,6 +73,8 @@ contextBridge.exposeInMainWorld('desktopChar', {
     ipcRenderer.invoke(channels.conversationSessionsCreate, request),
   bindExternalConversationSession: request =>
     ipcRenderer.invoke(channels.conversationSessionsBind, request),
+  reviewConversationSession: sessionId =>
+    ipcRenderer.invoke(channels.conversationSessionsReview, sessionId),
   closeConversationSession: sessionId =>
     ipcRenderer.invoke(channels.conversationSessionsClose, sessionId),
   submitConversationSessionCommand: command =>

@@ -4,21 +4,34 @@ export function createConversationSessionRegistry(options = {}) {
   const onStateChanged = options.onStateChanged ?? (() => {});
   const onManagedEvent = options.onManagedEvent ?? (() => {});
   const now = options.now ?? Date.now;
+  const maxSessionRecords = boundedInteger(
+    options.maxSessionRecords,
+    24,
+    4,
+    100,
+    'Conversation session maxSessionRecords',
+  );
   if (!managedClient) throw new TypeError('Conversation session registry requires managedClient');
   if (!externalController) {
     throw new TypeError('Conversation session registry requires externalController');
   }
   const sessions = new Map();
   const externalCandidates = new Map();
+  const seenExternalEventIds = new Set();
+  const seenExternalEventOrder = [];
   let managedSequence = 0;
   let managedEventSequence = 0;
+  let reviewSequence = 0;
+  let recordSequence = 0;
   let revision = 0;
   let phase = 'ready';
 
   return {
     syncExternalSessions,
+    observeExternalEvents,
     createManagedSession,
     bindExternalSession,
+    reviewSession,
     closeSession,
     submitCommand,
     snapshot,
@@ -80,6 +93,9 @@ export function createConversationSessionRegistry(options = {}) {
       lastActivityAtMs: timestamp,
       lastResponse: null,
       lastError: null,
+      lastReview: null,
+      records: [],
+      droppedRecordCount: 0,
       activeOperation: null,
     };
     sessions.set(sessionId, session);
@@ -105,8 +121,15 @@ export function createConversationSessionRegistry(options = {}) {
     if (typeof externalController.watchSession !== 'function') {
       throw new Error('External conversation controller does not support passive observation');
     }
-    await externalController.watchSession(sourceSessionId);
-    if (existing) return publicSession(existing);
+    const watch = await externalController.watchSession(sourceSessionId);
+    if (existing) {
+      if (watch.review) {
+        existing.lastReview = buildExternalReview(existing, watch.review, false);
+        existing.lastResponse = watch.review.content.latestReply ?? existing.lastResponse;
+        publish();
+      }
+      return publicSession(existing);
+    }
     const timestamp = now();
     const session = {
       sessionId: `external:${sourceSessionId}`,
@@ -117,12 +140,16 @@ export function createConversationSessionRegistry(options = {}) {
       workDir: candidate.workDir,
       createdAtMs: timestamp,
       lastActivityAtMs: timestamp,
-      lastResponse: null,
+      lastResponse: watch.review?.content.latestReply ?? null,
       lastError: candidate.status === 'unavailable'
         ? 'External conversation is unavailable'
         : null,
+      lastReview: null,
+      records: [],
+      droppedRecordCount: 0,
       activeOperation: null,
     };
+    if (watch.review) session.lastReview = buildExternalReview(session, watch.review, false);
     sessions.set(session.sessionId, session);
     publish();
     return publicSession(session);
@@ -157,6 +184,103 @@ export function createConversationSessionRegistry(options = {}) {
     }
   }
 
+  async function reviewSession(sessionId) {
+    requireOpen();
+    const normalizedSessionId = nonEmptyText(sessionId, 'Conversation sessionId');
+    const session = sessions.get(normalizedSessionId);
+    if (!session) throw new Error(`Conversation session is not registered: ${normalizedSessionId}`);
+    let review;
+    if (session.ownership === 'managed') {
+      review = buildManagedReview(session);
+    }
+    else {
+      try {
+        if (typeof externalController.reviewSession !== 'function') {
+          throw new Error('External conversation controller does not support read-only review');
+        }
+        review = buildExternalReview(
+          session,
+          await externalController.reviewSession(session.sourceSessionId),
+          false,
+        );
+      }
+      catch (error) {
+        if (!session.lastReview) throw error;
+        review = buildCachedReview(session, session.lastReview, errorMessage(error));
+      }
+    }
+    session.lastReview = review;
+    if (review.current.latestReply) session.lastResponse = review.current.latestReply;
+    publish();
+    return publicReview(review);
+  }
+
+  function observeExternalEvents(values = []) {
+    if (phase === 'closed') return snapshot();
+    let changed = false;
+    for (const value of values) {
+      if (!record(value)) continue;
+      const identity = `${value.sourceInstanceId ?? 'unknown'}:${value.eventId ?? ''}`;
+      if (!value.eventId || seenExternalEventIds.has(identity)) continue;
+      rememberExternalEvent(identity);
+      const session = [...sessions.values()].find(candidate =>
+        candidate.ownership === 'external' && candidate.sourceSessionId === value.sessionId);
+      if (!session || !Number.isInteger(value.observedAtMs) || value.observedAtMs < session.createdAtMs) {
+        continue;
+      }
+      if (value.type === 'external-turn-completed' || value.type === 'task-completed') {
+        const response = optionalBoundedText(value.latestReply, 4_000, 'External latest reply')
+          ?? optionalBoundedText(value.visibleTextTail, 4_000, 'External visible text tail');
+        if (response) {
+          session.lastResponse = response;
+          appendRecord(session, {
+            direction: 'inbound',
+            source: 'task-manager',
+            atMs: value.observedAtMs,
+            text: response,
+          });
+        }
+        session.lastReview = buildReview(session, {
+          source: 'session-monitor',
+          stale: false,
+          completion: 'complete',
+          ...(optionalBoundedText(value.sourceRevision, 200, 'External source revision')
+            ? { revision: value.sourceRevision }
+            : {}),
+          current: {
+            ...(optionalBoundedText(value.lastVisibleLine, 500, 'External last visible line')
+              ? { lastVisibleLine: value.lastVisibleLine }
+              : {}),
+            ...(optionalBoundedText(value.visibleTextTail, 4_000, 'External visible text tail')
+              ? { visibleTextTail: value.visibleTextTail }
+              : {}),
+            ...(optionalBoundedText(value.latestReply, 4_000, 'External latest reply')
+              ? { latestReply: value.latestReply }
+              : {}),
+          },
+        });
+        session.lastActivityAtMs = Math.max(session.lastActivityAtMs, value.observedAtMs);
+        session.lastError = null;
+        changed = true;
+      }
+      else if (value.type === 'task-failed' || value.type === 'task-unavailable') {
+        const error = optionalBoundedText(value.error, 500, 'External task error')
+          ?? `External task became ${value.status ?? 'unavailable'}`;
+        appendRecord(session, {
+          direction: 'status',
+          source: 'task-manager',
+          atMs: value.observedAtMs,
+          text: error,
+        });
+        session.lastActivityAtMs = Math.max(session.lastActivityAtMs, value.observedAtMs);
+        session.lastError = error;
+        changed = true;
+      }
+    }
+    if (changed) publish();
+    return snapshot();
+  }
+
   async function submitCommand(input) {
     requireOpen();
     const command = normalizeCommand(input);
@@ -174,6 +298,14 @@ export function createConversationSessionRegistry(options = {}) {
       });
       session.lastActivityAtMs = now();
       session.lastError = null;
+      if (result.status !== 'failed' && result.status !== 'unavailable') {
+        appendRecord(session, {
+          direction: 'outbound',
+          source: 'desktop-char',
+          atMs: session.lastActivityAtMs,
+          text: command.text,
+        });
+      }
       publish();
       return {
         ...result,
@@ -191,6 +323,12 @@ export function createConversationSessionRegistry(options = {}) {
       const steered = await managedClient.steerThread(session.threadId, command.text);
       session.lastActivityAtMs = now();
       session.lastError = null;
+      appendRecord(session, {
+        direction: 'outbound',
+        source: 'desktop-char',
+        atMs: session.lastActivityAtMs,
+        text: command.text,
+      });
       publish();
       return {
         ...command,
@@ -228,6 +366,13 @@ export function createConversationSessionRegistry(options = {}) {
       },
     );
     const turnId = await started.promise;
+    appendRecord(session, {
+      direction: 'outbound',
+      source: 'desktop-char',
+      atMs: session.lastActivityAtMs,
+      text: command.text,
+    });
+    publish();
     return {
       ...command,
       ownership: 'managed',
@@ -245,6 +390,15 @@ export function createConversationSessionRegistry(options = {}) {
     session.lastActivityAtMs = timestamp;
     session.lastResponse = boundedTail(typeof text === 'string' ? text.trim() : '', 4_000) || null;
     session.lastError = null;
+    if (session.lastResponse) {
+      appendRecord(session, {
+        direction: 'inbound',
+        source: 'managed',
+        atMs: timestamp,
+        text: session.lastResponse,
+      });
+    }
+    session.lastReview = buildManagedReview(session);
     publish();
     onManagedEvent({
       eventId: `managed-event-${++managedEventSequence}`,
@@ -269,6 +423,12 @@ export function createConversationSessionRegistry(options = {}) {
     session.status = 'waiting-input';
     session.lastActivityAtMs = timestamp;
     session.lastError = errorMessage(error);
+    appendRecord(session, {
+      direction: 'status',
+      source: 'managed',
+      atMs: timestamp,
+      text: session.lastError,
+    });
     publish();
     onManagedEvent({
       eventId: `managed-event-${++managedEventSequence}`,
@@ -321,6 +481,109 @@ export function createConversationSessionRegistry(options = {}) {
   function publish() {
     revision++;
     onStateChanged(snapshot());
+  }
+
+  function appendRecord(session, value) {
+    session.records.push({
+      recordId: `session-record-${++recordSequence}`,
+      direction: value.direction,
+      source: value.source,
+      atMs: value.atMs,
+      text: boundedTail(value.text, 2_000),
+    });
+    if (session.records.length > maxSessionRecords) {
+      const removed = session.records.splice(0, session.records.length - maxSessionRecords);
+      session.droppedRecordCount += removed.length;
+    }
+  }
+
+  function rememberExternalEvent(identity) {
+    seenExternalEventIds.add(identity);
+    seenExternalEventOrder.push(identity);
+    if (seenExternalEventOrder.length <= 1_000) return;
+    const removed = seenExternalEventOrder.splice(0, seenExternalEventOrder.length - 1_000);
+    for (const item of removed) seenExternalEventIds.delete(item);
+  }
+
+  function buildExternalReview(session, sourceReview, stale) {
+    return buildReview(session, {
+      source: stale ? 'cached' : 'session-monitor',
+      stale,
+      completion: sourceReview.state.completion,
+      ...(sourceReview.source.screenChangedAtUtc
+        ? { revision: sourceReview.source.screenChangedAtUtc }
+        : {}),
+      ...(sourceReview.source.observedAtUtc
+        ? { observedAtUtc: sourceReview.source.observedAtUtc }
+        : {}),
+      current: {
+        ...(sourceReview.content.lastVisibleLine
+          ? { lastVisibleLine: sourceReview.content.lastVisibleLine }
+          : {}),
+        ...(sourceReview.content.visibleTextTail
+          ? { visibleTextTail: sourceReview.content.visibleTextTail }
+          : {}),
+        ...(sourceReview.content.latestReply
+          ? { latestReply: sourceReview.content.latestReply }
+          : {}),
+      },
+    });
+  }
+
+  function buildManagedReview(session) {
+    return buildReview(session, {
+      source: 'managed-registry',
+      stale: false,
+      completion: session.status === 'waiting-input'
+        ? 'complete'
+        : session.status === 'active'
+          ? 'in-progress'
+          : session.status === 'unavailable'
+            ? 'unavailable'
+            : 'unknown',
+      current: session.lastResponse ? { latestReply: session.lastResponse } : {},
+    });
+  }
+
+  function buildCachedReview(session, previous, reason) {
+    return buildReview(session, {
+      source: 'cached',
+      stale: true,
+      completion: session.status === 'unavailable' ? 'unavailable' : previous.source.completion,
+      ...(previous.source.revision ? { revision: previous.source.revision } : {}),
+      ...(previous.source.observedAtUtc ? { observedAtUtc: previous.source.observedAtUtc } : {}),
+      current: previous.current,
+      error: boundedTail(reason, 500),
+    });
+  }
+
+  function buildReview(session, source) {
+    const capturedAtMs = now();
+    return {
+      schemaVersion: 'desktop-char.conversation-session-review.v1',
+      reviewId: `session-review-${++reviewSequence}`,
+      capturedAtMs,
+      session: {
+        sessionId: session.sessionId,
+        ownership: session.ownership,
+        title: session.title,
+        status: session.status,
+        registeredAtMs: session.createdAtMs,
+        lastActivityAtMs: session.lastActivityAtMs,
+        ...(session.workDir ? { workDir: session.workDir } : {}),
+      },
+      source: {
+        kind: source.source,
+        stale: source.stale,
+        completion: source.completion,
+        ...(source.revision ? { revision: source.revision } : {}),
+        ...(source.observedAtUtc ? { observedAtUtc: source.observedAtUtc } : {}),
+        ...(source.error ? { error: source.error } : {}),
+      },
+      current: { ...source.current },
+      records: session.records.map(item => ({ ...item })),
+      droppedRecordCount: session.droppedRecordCount,
+    };
   }
 
   function externalSyncSignature() {
@@ -382,9 +645,22 @@ function publicSession(session) {
     lastActivityAtMs: session.lastActivityAtMs,
     lastResponse: session.lastResponse,
     lastError: session.lastError,
+    lastReview: session.lastReview ? publicReview(session.lastReview) : null,
+    recordCount: session.records.length,
+    droppedRecordCount: session.droppedRecordCount,
     ...(session.ownership === 'managed'
       ? { threadId: session.threadId }
       : { sourceSessionId: session.sourceSessionId }),
+  };
+}
+
+function publicReview(review) {
+  return {
+    ...review,
+    session: { ...review.session },
+    source: { ...review.source },
+    current: { ...review.current },
+    records: review.records.map(item => ({ ...item })),
   };
 }
 
@@ -458,6 +734,14 @@ function nonNegativeInteger(value, label) {
     throw new TypeError(`${label} must be a non-negative integer`);
   }
   return value;
+}
+
+function boundedInteger(value, fallback, minimum, maximum, label) {
+  const candidate = value ?? fallback;
+  if (!Number.isInteger(candidate) || candidate < minimum || candidate > maximum) {
+    throw new TypeError(`${label} must be an integer from ${minimum} to ${maximum}`);
+  }
+  return candidate;
 }
 
 function exactKeys(value, allowed, label) {

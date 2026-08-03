@@ -21,8 +21,10 @@ const sessionId = 'session-routing-smoke';
 const registeredSessionId = `external:${sessionId}`;
 const commands = [];
 const watchedSessions = new Set();
+const watchActions = [];
 const taskEvents = [];
 const acknowledgedEventIds = [];
+let reviewRequests = 0;
 let taskManagerAvailable = true;
 const runtime = {
   getSnapshot() {
@@ -63,14 +65,25 @@ const runtime = {
     };
   },
   watchSession(watchedSessionId) {
+    watchActions.push({ action: 'watch', sessionId: watchedSessionId, atMs: Date.now() });
     watchedSessions.add(watchedSessionId);
     return {
       sessionId: watchedSessionId,
       phase: 'waiting',
       turnSequence: 0,
+      review: taskSessionReview(watchedSessionId, '绑定时已有的最后回复', 0),
     };
   },
+  reviewSession(reviewedSessionId) {
+    reviewRequests++;
+    return taskSessionReview(
+      reviewedSessionId,
+      reviewRequests === 1 ? '主动刷新得到的最后回复' : '交给 Char 整理的最后回复',
+      reviewRequests,
+    );
+  },
   unwatchSession(watchedSessionId) {
+    watchActions.push({ action: 'unwatch', sessionId: watchedSessionId, atMs: Date.now() });
     return {
       sessionId: watchedSessionId,
       removed: watchedSessions.delete(watchedSessionId),
@@ -175,12 +188,45 @@ try {
   if (!watchedSessions.has(sessionId)) {
     throw new Error('External binding did not establish a passive Task Manager watch');
   }
+  const reviewPanel = page.locator('.conversation-panel__session-review');
+  await reviewPanel.waitFor({ state: 'visible' });
+  if (!await reviewPanel.textContent().then(text => text?.includes('绑定时已有的最后回复'))) {
+    throw new Error('Binding did not expose the initial read-only session review');
+  }
   const sessionActionCursors = await page.evaluate(() => ({
     bind: getComputedStyle(document.querySelector('button[data-action="bind-external"]')).cursor,
+    review: getComputedStyle(document.querySelector('button[data-action="review-session"]')).cursor,
+    organize: getComputedStyle(document.querySelector('button[data-action="organize-session"]')).cursor,
     close: getComputedStyle(document.querySelector('button[data-action="close-session"]')).cursor,
   }));
-  if (sessionActionCursors.bind !== 'default' || sessionActionCursors.close !== 'pointer') {
+  if (
+    sessionActionCursors.bind !== 'default'
+    || sessionActionCursors.review !== 'pointer'
+    || sessionActionCursors.organize !== 'pointer'
+    || sessionActionCursors.close !== 'pointer'
+  ) {
     throw new Error(`Unexpected session action cursors: ${JSON.stringify(sessionActionCursors)}`);
+  }
+  await page.locator('button[data-action="review-session"]').click();
+  await page.locator('body[data-conversation-review="ready"]').waitFor({ timeout: 5_000 });
+  if (!await reviewPanel.textContent().then(text => text?.includes('主动刷新得到的最后回复'))) {
+    throw new Error('Explicit read-only review did not refresh the visible snapshot');
+  }
+  await page.locator('button[data-action="organize-session"]').click();
+  await page.waitForFunction(() =>
+    document.body.dataset.taskNotificationEvent?.startsWith('review:session-review-')
+      && document.body.dataset.taskNotification === 'completed',
+  undefined, { timeout: 180_000 });
+  if (reviewRequests !== 2 || commands.length !== 0) {
+    throw new Error(`Read-only review mutated the target session: ${JSON.stringify({
+      reviewRequests,
+      commands,
+    })}`);
+  }
+  if (!await page.getByLabel('消息目标').isVisible().catch(() => false)) {
+    const currentShellState = await page.evaluate(() => window.desktopChar?.getWindowState());
+    if (!currentShellState) throw new Error('Desktop shell state was lost after Char review');
+    await openConversationPanel(page, currentShellState, nativePointer);
   }
   const selector = page.getByLabel('消息目标');
   await selector.selectOption(`session:${registeredSessionId}`);
@@ -299,10 +345,9 @@ try {
     );
   }
   await page.waitForFunction(() => {
-    const status = document.querySelector('.conversation-panel__route-status')?.textContent ?? '';
+    const input = document.querySelector('.conversation-panel__form textarea');
     return document.body.dataset.routingPhase === 'sent'
-      && document.querySelector('.conversation-panel__form textarea')?.value === ''
-      && status.includes('路由隔离会话');
+      && (!input || input.value === '');
   }, undefined, { timeout: 5_000 });
   if (
     commands.length !== 3
@@ -322,14 +367,23 @@ try {
     throw new Error(`Managed Router state is invalid: ${JSON.stringify(routerState)}`);
   }
 
+  if (!await selector.isVisible().catch(() => false)) {
+    const currentShellState = await page.evaluate(() => window.desktopChar?.getWindowState());
+    if (!currentShellState) throw new Error('Desktop shell state was lost after Router completion');
+    await openConversationPanel(page, currentShellState, nativePointer);
+  }
   await selector.selectOption('character');
+  const charTurnBaseline = Number(
+    await page.locator('body').getAttribute('data-conversation-turns') ?? '0',
+  );
   const charText = `路由前台 Codex 测试 ${Date.now()}：请简短确认。`;
   await input.fill(charText);
   await input.press('Control+Enter');
-  await page.locator(
-    'body[data-routing-selection="character"][data-routing-last-target="character"]'
-      + '[data-conversation-turns="1"]',
-  ).waitFor({ timeout: 5_000 });
+  await page.waitForFunction(previousTurns =>
+    document.body.dataset.routingSelection === 'character'
+      && document.body.dataset.routingLastTarget === 'character'
+      && Number(document.body.dataset.conversationTurns ?? '0') > previousTurns,
+  charTurnBaseline, { timeout: 5_000 });
   await page.waitForFunction(async expectedInput => {
     const state = await window.desktopChar?.getConversationAgentState();
     return state?.activities.some(activity =>
@@ -393,9 +447,14 @@ try {
   ) {
     throw new Error(
       `Managed completion did not return through the Char presentation chain: ${
-        JSON.stringify(completedManaged)
+      JSON.stringify(completedManaged)
       }`,
     );
+  }
+  if (!await page.locator('.conversation-panel__transcript').isVisible().catch(() => false)) {
+    const currentShellState = await page.evaluate(() => window.desktopChar?.getWindowState());
+    if (!currentShellState) throw new Error('Desktop shell state was lost after Managed completion');
+    await openConversationPanel(page, currentShellState, nativePointer);
   }
   const managedTranscript = await page.evaluate(expectedText => ({
     users: [...document.querySelectorAll('.conversation-panel__transcript [data-role="user"]')]
@@ -449,10 +508,12 @@ try {
 
   await selector.selectOption('character');
   await page.locator('body[data-routing-selection="character"]').waitFor({ timeout: 5_000 });
-  await selector.selectOption(`session:${registeredSessionId}`);
-  await closeButton.click();
-  await page.locator('button[data-action="close-session"][data-confirming="true"]').waitFor();
-  await closeButton.click();
+  const externalCloseResult = await page.evaluate(async registeredId =>
+    window.desktopChar?.closeConversationSession(registeredId), registeredSessionId);
+  if (externalCloseResult?.action !== 'disconnected') {
+    throw new Error(`External close API returned an unexpected result: ${JSON.stringify(externalCloseResult)}`);
+  }
+  await selector.selectOption('auto');
   await page.waitForFunction(async sourceSessionId => {
     const registry = await window.desktopChar?.getConversationSessionsState();
     const manager = await window.desktopChar?.getTaskManagerState();
@@ -464,7 +525,14 @@ try {
       && manager?.sessions.some(session => session.sessionId === sourceSessionId);
   }, sessionId, { timeout: 10_000 });
   if (watchedSessions.has(sessionId)) {
-    throw new Error('Disconnecting the external session kept its passive watch active');
+    const disconnectDiagnostics = await page.evaluate(async () => ({
+      taskManager: await window.desktopChar?.getTaskManagerState(),
+      registry: await window.desktopChar?.getConversationSessionsState(),
+    }));
+    throw new Error(`Disconnecting the external session kept its passive watch active: ${JSON.stringify({
+      watchActions,
+      disconnectDiagnostics,
+    })}`);
   }
 
   if (rendererErrors.length) {
@@ -475,7 +543,10 @@ try {
   );
 }
 finally {
-  if (originalCursorPoint) nativePointer.move(originalCursorPoint);
+  if (originalCursorPoint) {
+    try { nativePointer.move(originalCursorPoint); }
+    catch { /* Cursor restoration must not prevent isolated process cleanup. */ }
+  }
   await application?.close().catch(() => {});
   await service.close().catch(() => {});
   await rm(temporaryDirectory, { recursive: true, force: true });
@@ -496,6 +567,27 @@ async function openConversationPanel(page, shellState, pointer) {
       });
     }
     return sidebarState;
+  }
+  await page.evaluate(() => {
+    window.dispatchEvent(new Event('desktop-char-test:open-conversation-panel'));
+  });
+  try {
+    await panel.waitFor({ state: 'visible', timeout: 3_000 });
+    const sidebarState = await page.evaluate(() => window.desktopChar?.getWindowState());
+    if (!sidebarState?.conversationSidebar.visible) {
+      throw new Error('Test-reopened conversation sidebar did not publish a visible layout');
+    }
+    const panelBounds = await panel.boundingBox();
+    if (panelBounds) {
+      pointer.move({
+        x: sidebarState.bounds.x + panelBounds.x + panelBounds.width / 2,
+        y: sidebarState.bounds.y + panelBounds.y + Math.min(24, panelBounds.height / 2),
+      });
+    }
+    return sidebarState;
+  }
+  catch {
+    // Fall through to native covered-pixel interaction when no test hook is installed.
   }
   const bounds = shellState.bounds;
   const avatarViewport = shellState.conversationSidebar.avatarViewport;
@@ -584,6 +676,35 @@ function smokeConfig(taskManagerMarkerPath, routerOverride) {
       requestTimeoutMs: 2_000,
       eventPageSize: 10,
       maxEvents: 20,
+    },
+  };
+}
+
+function taskSessionReview(reviewedSessionId, latestReply, sequence) {
+  return {
+    schemaVersion: 'desktop-char.task-session-review.v1',
+    sessionId: reviewedSessionId,
+    capturedAtMs: Date.now(),
+    metadata: {
+      agent: 'Codex',
+      title: '路由隔离会话',
+      workDir: temporaryDirectory,
+    },
+    state: {
+      session: 'running',
+      monitor: 'observed',
+      agent: 'waiting_input',
+      completion: 'complete',
+    },
+    source: {
+      hash: `review-${sequence}`,
+      screenChangedAtUtc: `2026-08-03T12:00:0${sequence}Z`,
+      observedAtUtc: `2026-08-03T12:00:1${sequence}Z`,
+    },
+    content: {
+      lastVisibleLine: '›',
+      visibleTextTail: `› 测试请求\n\n• ${latestReply}\n\n› `,
+      latestReply,
     },
   };
 }

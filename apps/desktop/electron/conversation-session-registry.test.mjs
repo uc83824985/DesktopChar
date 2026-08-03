@@ -129,6 +129,76 @@ test('a missing external window remains registered as unavailable until the user
   await registry.close();
 });
 
+test('session review combines the binding snapshot with bounded records captured after takeover', async () => {
+  let clock = 2_000;
+  let reviewFailure;
+  const registry = createConversationSessionRegistry({
+    managedClient: new FakeManagedClient(),
+    externalController: {
+      async submitCommand(command) {
+        return { ...command, submissionGeneration: 1, status: 'observing' };
+      },
+      async watchSession(sessionId) {
+        return {
+          sessionId,
+          review: taskSessionReview(sessionId, '绑定前最后回复', 1_900),
+        };
+      },
+      async reviewSession(sessionId) {
+        if (reviewFailure) throw reviewFailure;
+        return taskSessionReview(sessionId, '刷新后的最后回复', 2_100);
+      },
+      async unwatchSession(sessionId) {
+        return { sessionId, removed: true };
+      },
+    },
+    now: () => ++clock,
+  });
+  registry.syncExternalSessions([externalSession('session-a', '会话 A')]);
+  const bound = await registry.bindExternalSession({ sourceSessionId: 'session-a' });
+  assert.equal(bound.lastResponse, '绑定前最后回复');
+  assert.equal(bound.lastReview.current.latestReply, '绑定前最后回复');
+  assert.equal(bound.lastReview.records.length, 0);
+
+  await registry.submitCommand(command(bound.sessionId, '接管后发送的问题'));
+  registry.observeExternalEvents([{
+    sourceInstanceId: 'instance-a',
+    eventId: 'event-a',
+    sessionId: 'session-a',
+    type: 'task-completed',
+    observedAtMs: 2_100,
+    status: 'completed',
+    latestReply: '接管后的回复',
+    visibleTextTail: '› 接管后发送的问题\n\n• 接管后的回复\n\n› ',
+  }]);
+  registry.observeExternalEvents([{
+    sourceInstanceId: 'instance-a',
+    eventId: 'event-a',
+    sessionId: 'session-a',
+    type: 'task-completed',
+    observedAtMs: 2_100,
+    status: 'completed',
+    latestReply: '不应重复',
+  }]);
+
+  const review = await registry.reviewSession(bound.sessionId);
+  assert.equal(review.current.latestReply, '刷新后的最后回复');
+  assert.deepEqual(review.records.map(item => [item.direction, item.text]), [
+    ['outbound', '接管后发送的问题'],
+    ['inbound', '接管后的回复'],
+  ]);
+  assert.equal(review.source.kind, 'session-monitor');
+  assert.equal(review.source.stale, false);
+
+  reviewFailure = new Error('monitor disconnected');
+  const cached = await registry.reviewSession(bound.sessionId);
+  assert.equal(cached.source.kind, 'cached');
+  assert.equal(cached.source.stale, true);
+  assert.equal(cached.current.latestReply, '刷新后的最后回复');
+  assert.match(cached.source.error, /monitor disconnected/);
+  await registry.close();
+});
+
 class FakeManagedClient {
   threads = 0;
   turns = [];
@@ -164,6 +234,35 @@ function externalSession(sessionId, title) {
     state: 'running',
     monitorState: 'observed',
     agentState: 'waiting_input',
+  };
+}
+
+function taskSessionReview(sessionId, latestReply, capturedAtMs) {
+  return {
+    schemaVersion: 'desktop-char.task-session-review.v1',
+    sessionId,
+    capturedAtMs,
+    metadata: {
+      agent: 'Codex',
+      title: '会话 A',
+      workDir: 'C:\\workspace',
+    },
+    state: {
+      session: 'running',
+      monitor: 'observed',
+      agent: 'waiting_input',
+      completion: 'complete',
+    },
+    source: {
+      hash: `hash-${capturedAtMs}`,
+      screenChangedAtUtc: '2026-08-03T10:00:00Z',
+      observedAtUtc: '2026-08-03T10:00:01Z',
+    },
+    content: {
+      lastVisibleLine: '›',
+      visibleTextTail: `• ${latestReply}\n\n› `,
+      latestReply,
+    },
   };
 }
 

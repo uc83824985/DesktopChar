@@ -82,6 +82,7 @@ const channels = {
   conversationSessionsGet: 'conversation-sessions:get-state',
   conversationSessionsCreate: 'conversation-sessions:create-managed',
   conversationSessionsBind: 'conversation-sessions:bind-external',
+  conversationSessionsReview: 'conversation-sessions:review',
   conversationSessionsClose: 'conversation-sessions:close',
   conversationSessionsSubmit: 'conversation-sessions:submit-command',
   conversationSessionsState: 'conversation-sessions:state',
@@ -281,6 +282,7 @@ const taskManager = createTaskManagerController(desktopConfig.taskManager, {
     conversationSessions?.syncExternalSessions(usable ? state.sessions : [], {
       unavailableReason: taskManagerExternalUnavailableReason(state),
     });
+    conversationSessions?.observeExternalEvents(state.events);
   },
 });
 conversationSessions = createConversationSessionRegistry({
@@ -931,6 +933,10 @@ function registerIpc() {
   ipcMain.handle(channels.conversationSessionsBind, (event, request) => {
     requireAvatarSender(event);
     return conversationSessions.bindExternalSession(request);
+  });
+  ipcMain.handle(channels.conversationSessionsReview, (event, sessionId) => {
+    requireAvatarSender(event);
+    return conversationSessions.reviewSession(sessionId);
   });
   ipcMain.handle(channels.conversationSessionsClose, async (event, sessionId) => {
     requireAvatarSender(event);

@@ -47,7 +47,7 @@ button.scene-interaction-panel__item:disabled { opacity: .42; cursor: default; }
 .conversation-panel__route-controls select { min-width: 0; height: 29px; padding: 4px 7px; border: 1px solid #77669e32; border-radius: 8px; color: #3f3553; background: #fff; font: inherit; }
 .conversation-panel__session-management { display: flex; gap: 4px; }
 .conversation-panel__session-management button,
-.conversation-panel__bind-controls button { min-width: 44px; min-height: 29px; padding: 4px 7px; border-radius: 8px; color: #51466a; background: #e9e4f3; font-size: 9px; }
+.conversation-panel__bind-controls button { min-width: 38px; min-height: 29px; padding: 4px 6px; border-radius: 8px; color: #51466a; background: #e9e4f3; font-size: 9px; }
 .conversation-panel__session-management button:hover:not(:disabled),
 .conversation-panel__bind-controls button:hover:not(:disabled) { transform: none; color: #fff; background: #6653a7; }
 .conversation-panel__session-management button[data-action="close-session"]:not(:disabled) { color: #923b51; background: #f8e6eb; }
@@ -64,6 +64,15 @@ button.scene-interaction-panel__item:disabled { opacity: .42; cursor: default; }
 .conversation-panel__route-confirmation[hidden] { display: none; }
 .conversation-panel__route-confirmation button { min-height: 24px; padding: 4px 8px; border-radius: 7px; color: #fff; background: #6653a7; font-size: 9px; }
 .conversation-panel__route-confirmation button[data-action="cancel"] { color: #594f6b; background: #e8e3f0; }
+.conversation-panel__session-review { display: grid; grid-column: 1 / -1; gap: 5px; padding: 7px 8px; border: 1px solid #77669e24; border-radius: 8px; background: #f2eff8; user-select: text; }
+.conversation-panel__session-review[hidden] { display: none; }
+.conversation-panel__session-review header { display: flex; align-items: baseline; justify-content: space-between; gap: 8px; }
+.conversation-panel__session-review header strong { color: #4b405e; font-size: 9px; }
+.conversation-panel__session-review header span,
+.conversation-panel__session-review small { color: #857d93; font-size: 8px; }
+.conversation-panel__session-review pre { max-height: 86px; margin: 0; overflow: auto; color: #3b324c; font: inherit; font-size: 10px; line-height: 1.45; overflow-wrap: anywhere; user-select: text; white-space: pre-wrap; }
+.conversation-panel__session-review[data-completion="in-progress"] { border-color: #b8944438; background: #fff8e8; }
+.conversation-panel__session-review[data-stale="true"] { border-color: #a5516438; background: #fff0f3; }
 .conversation-panel__agent-audit { margin: 0 0 7px; border: 1px solid #77669e24; border-radius: 9px; background: #f7f4fc99; font-size: 9px; }
 .conversation-panel__agent-audit summary { display: flex; align-items: center; gap: 5px; width: 100%; min-height: 28px; padding: 5px 8px; border-radius: 8px; color: #675d78; cursor: pointer; list-style: none; user-select: none; }
 .conversation-panel__agent-audit summary::-webkit-details-marker { display: none; }

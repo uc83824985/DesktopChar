@@ -153,6 +153,68 @@ type ConversationSession =
   面板指针状态，使同一已打开面板可以立即从 Auto 切换到 Char 或其他 Session。不可用按钮
   保持普通箭头，可操作按钮保持交互手势。
 
+### 会话只读审阅
+
+注册会话的“发送”与“审阅”是两条不同的领域操作。审阅不得复用 `TaskCommand`，也不得调用
+Session Monitor `/input`：
+
+```text
+绑定 External
+ -> PUT watch 建立被动 Turn 基线
+ -> 同一响应返回当前只读 review，立即显示已有最后回复
+
+点击“查看”
+ -> GET /sessions/{sourceSessionId}/review
+ -> 新取一次 Monitor 可见快照，不改变 watch 基线，不产生完成事件
+
+点击“整理”
+ -> 先执行同一只读 review
+ -> 将 review 作为不可信 JSON 事实编译给 CharReplyTask
+ -> Char 只做归纳并进入正常表情、TTS 和展示链；不向原 Session 发送
+```
+
+`Session Monitor` 当前只能提供有限的终端可见区域，不能把它描述成完整 thread 历史。
+DesktopChar 因此保存嵌套的 `ConversationSessionReview`，明确区分：
+
+```ts
+interface ConversationSessionReview {
+  schemaVersion: 'desktop-char.conversation-session-review.v1';
+  reviewId: string;
+  capturedAtMs: number;
+  session: {
+    sessionId: string;
+    ownership: 'managed' | 'external';
+    title: string;
+    status: 'waiting-input' | 'active' | 'idle-unknown' | 'unavailable';
+    registeredAtMs: number;
+    lastActivityAtMs: number;
+    workDir?: string;
+  };
+  source: {
+    kind: 'session-monitor' | 'managed-registry' | 'cached';
+    stale: boolean;
+    completion: 'complete' | 'in-progress' | 'unknown' | 'unavailable';
+  };
+  current: {
+    latestReply?: string;       // 仅在完整 Codex 提示符结构可确认时提取
+    visibleTextTail?: string;   // 有界原始可见文本，不是完整 transcript
+  };
+  records: Array<{
+    direction: 'outbound' | 'inbound' | 'status';
+    source: 'desktop-char' | 'task-manager' | 'managed';
+    atMs: number;
+    text: string;
+  }>;
+  droppedRecordCount: number;
+}
+```
+
+`records` 只记录注册之后 DesktopChar 成功提交的输入，以及之后由 Task Manager/Managed
+App Server 观察到的回复或错误；每个 session 默认只保留最近 24 条、每条最多 2000 字符。
+绑定前的内容只存在于 `current` 可见快照中，不能补造成历史。外部连接中断时，“查看/整理”
+可以返回最近 review，但必须标记 `source.kind = cached`、`stale = true`，Char 也必须明确提示
+资料可能过期。只读 review 不修改 `lastActivityAtMs`、watch 基线、Turn 序号或路由选择。
+
 首版注册表与 Task Manager 一样只在当前 DesktopChar 进程内存中保存。Managed thread 会
 持久写入 Codex 会话存储，但应用退出时会按所有权归档；External 绑定关系不跨应用重启恢复。
 注册表恢复、Managed thread 重新接管和 External 自动重绑统一标记为后续待设计，不阻塞当前
@@ -313,6 +375,7 @@ Task Manager 自身应提供窄领域接口，而不是把 Session Monitor 全�
 ```text
 GET  /health
 GET  /sessions
+GET  /sessions/<sessionId>/review
 GET  /events?after=<cursor>
 POST /commands
 PUT  /watches/<sessionId>
@@ -340,6 +403,8 @@ session，并把重启前仍在观察的 submission 视为不可恢复，不补�
 - External 注册通过显式 watch 建立被动 Turn 基线；流式期间保持待响应，恢复
   `waiting_input` 后发布单个 `external-turn-completed`。watch 维护独立轮次序号，
   忽略重复快照和输入编辑，并抑制 DesktopChar 自有 command 的重复完成事件；
+- `/sessions/{sessionId}/review` 直接读取一次当前 Monitor 详情并返回嵌套只读快照；该读取
+  不推进 watch 状态。绑定响应复用首次详情作为初始 review，避免为显示旧回复重复采样；
 - 完成通常先确认目标进入 `active`，再观察提交后的 hash/时间变化，最后连续两次不同
   `lastObservedAtUtc` 的 Monitor 观测得到相同 `waiting_input` 快照；重复读取同一观测不
   增加计数。若轮询漏过 Codex 的快速 `active`，还要求本次提交文本之后存在新回复块；
@@ -348,7 +413,7 @@ session，并把重启前仍在观察的 submission 视为不可恢复，不补�
   命令与事件不跨进程重启恢复；
 - 声明结果文档在提交前校验允许根目录和路径逃逸，在完成时再次校验真实文件；Task Manager
   只回传路径与 `openOnCompletion` 意图，不创建也不打开文件；
-- `http-service.mjs` 仅暴露 `/health`、`/sessions`、`/events`、`/commands`、
+- `http-service.mjs` 仅暴露 `/health`、`/sessions`、`/sessions/{id}/review`、`/events`、`/commands`、
   `/watches/{sessionId}` 和 `/events/{id}/ack`，除 health 外均需 bearer token，
   且拒绝非 loopback 绑定。
 - DesktopChar 默认以 `managed` 生命周期启动该独立子进程，右键“接入服务”可动态关闭和
@@ -727,3 +792,8 @@ Char Agent 的建议只是用户可见内容，不自动转化为 TaskCommand。
 10.（已完成）轮询失败会立即清除 Task Manager 的旧 Session 可用快照，External 注册表将
    当前绑定标为连接中断但保持 sticky 选择；前台提示重连、拒绝中断期间的发送并保留输入，
    重新发现同一 Session 后自动恢复。隔离前台 smoke 已覆盖中断、拒绝发送和恢复闭环。
+11.（已完成）External 绑定建立被动 Turn watch；外部窗口中手动发起的 Turn 在流式期间保持
+   待响应，恢复 `waiting_input` 后只发布一次完成事件，并经 Char/表情/TTS 展示。
+12.（已完成）增加显式只读 review、绑定初始快照和接管后有界记录；面板提供“查看/整理”，
+   前者只显示可复制快照，后者把嵌套事实交给 Char 归纳。前台 smoke 验证两种操作均不会
+   增加目标 Session 的提交命令，并继续覆盖原有路由、Managed 与解绑链路。

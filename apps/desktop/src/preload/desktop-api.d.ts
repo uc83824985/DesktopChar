@@ -154,6 +154,7 @@ export interface DesktopCharApi {
   bindExternalConversationSession(
     request: { sourceSessionId: string },
   ): Promise<ConversationSessionState>;
+  reviewConversationSession(sessionId: string): Promise<ConversationSessionReviewState>;
   closeConversationSession(sessionId: string): Promise<ConversationSessionCloseResult>;
   submitConversationSessionCommand(
     command: TaskManagerCommand,
@@ -263,9 +264,12 @@ export interface TaskManagerEventState {
   submissionGeneration?: number;
   externalTurnSequence?: number;
   commandId?: string;
+  sourceHash?: string;
+  sourceRevision?: string;
   title?: string;
   lastVisibleLine?: string;
   visibleTextTail?: string;
+  latestReply?: string;
   resultArtifactPath?: string;
   openArtifactOnCompletion?: boolean;
   error?: string;
@@ -327,6 +331,9 @@ export interface ConversationSessionState {
   lastActivityAtMs: number;
   lastResponse: string | null;
   lastError: string | null;
+  lastReview: ConversationSessionReviewState | null;
+  recordCount: number;
+  droppedRecordCount: number;
   threadId?: string;
   sourceSessionId?: string;
 }
@@ -355,7 +362,46 @@ export interface ConversationSessionEventState {
   title: string;
   lastVisibleLine?: string;
   visibleTextTail?: string;
+  latestReply?: string;
   error?: string;
+}
+
+export interface ConversationSessionRecordState {
+  recordId: string;
+  direction: 'outbound' | 'inbound' | 'status';
+  source: 'desktop-char' | 'task-manager' | 'managed';
+  atMs: number;
+  text: string;
+}
+
+export interface ConversationSessionReviewState {
+  schemaVersion: 'desktop-char.conversation-session-review.v1';
+  reviewId: string;
+  capturedAtMs: number;
+  session: {
+    sessionId: string;
+    ownership: ConversationSessionOwnership;
+    title: string;
+    status: ConversationSessionRouteStatus;
+    registeredAtMs: number;
+    lastActivityAtMs: number;
+    workDir?: string;
+  };
+  source: {
+    kind: 'session-monitor' | 'managed-registry' | 'cached';
+    stale: boolean;
+    completion: 'complete' | 'in-progress' | 'unknown' | 'unavailable';
+    revision?: string;
+    observedAtUtc?: string;
+    error?: string;
+  };
+  current: {
+    lastVisibleLine?: string;
+    visibleTextTail?: string;
+    latestReply?: string;
+  };
+  records: ConversationSessionRecordState[];
+  droppedRecordCount: number;
 }
 
 export interface ConversationSessionCommandState extends TaskManagerCommand {
