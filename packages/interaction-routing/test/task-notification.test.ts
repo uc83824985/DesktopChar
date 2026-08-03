@@ -48,11 +48,12 @@ test('passively observed external turns reuse the bounded Char notification cont
     subject: '外部 Codex 对话',
     status: 'completed',
     resultArtifactAvailable: false,
+    latestReply: '已完成手动请求',
     visibleTextTail: '› 手动请求\n\n• 已完成手动请求\n\n› ',
   });
   assert.equal(compiled.fallbackText, '「外部 Codex 对话」有新回复。');
   assert.match(compiled.focusText, /"notificationType":"external-turn-completed"/);
-  assert.match(compiled.focusText, /已完成手动请求/);
+  assert.match(compiled.focusText, /"latestReply":"已完成手动请求"/);
 });
 
 test('conversation review compiler separates current snapshot from post-registration records', () => {

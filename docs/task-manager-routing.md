@@ -161,14 +161,12 @@ Session Monitor `/input`：
 ```text
 绑定 External
  -> PUT watch 建立被动 Turn 基线
- -> 同一响应返回当前只读 review，立即显示已有最后回复
+ -> 同一响应返回初始只读 review
+ -> DesktopChar 立即再取一次最新快照，显示已有最后回复并触发 Char 整理
 
-点击“查看”
+点击“更新”
  -> GET /sessions/{sourceSessionId}/review
  -> 新取一次 Monitor 可见快照，不改变 watch 基线，不产生完成事件
-
-点击“整理”
- -> 先执行同一只读 review
  -> 将 review 作为不可信 JSON 事实编译给 CharReplyTask
  -> Char 只做归纳并进入正常表情、TTS 和展示链；不向原 Session 发送
 ```
@@ -211,7 +209,7 @@ interface ConversationSessionReview {
 
 `records` 只记录注册之后 DesktopChar 成功提交的输入，以及之后由 Task Manager/Managed
 App Server 观察到的回复或错误；每个 session 默认只保留最近 24 条、每条最多 2000 字符。
-绑定前的内容只存在于 `current` 可见快照中，不能补造成历史。外部连接中断时，“查看/整理”
+绑定前的内容只存在于 `current` 可见快照中，不能补造成历史。外部连接中断时，“更新”
 可以返回最近 review，但必须标记 `source.kind = cached`、`stale = true`，Char 也必须明确提示
 资料可能过期。只读 review 不修改 `lastActivityAtMs`、watch 基线、Turn 序号或路由选择。
 
@@ -342,19 +340,23 @@ External 会话完成注册时，DesktopChar 还会显式建立一个被动 Turn
 
 ```text
 绑定 External session
- -> 保存当前 hash / revision / visibleText 基线
+ -> 保存当前 hash / revision / 最近完整 Turn 标识
  -> 观察到 active 后持续吸收流式变化，不产生完成事件
  -> active 恢复为 waiting_input 且内容已变化，立即完成一个被动 Turn
- -> 若轮询跨过了极快的 active，仅在新增文本包含 Codex 请求、回复块和新提示符，
-    并由两个不同 Monitor 快照确认稳定后完成
+ -> 若轮询跨过了极快的 active，仅在当前可见区能解析出不同于基线的完整 Codex Turn，
+    并由连续两次 Task Manager 轮询确认同一完成画面后完成
  -> 发布一次 external-turn-completed，递增 turnSequence 并重置基线
 ```
 
-输入框编辑、重复 Monitor 快照、`idle_unknown` 和流式中间帧不完成被动 Turn。若同一
+输入框编辑、未形成新完整 Turn 的重复 Monitor 快照、`idle_unknown` 和流式中间帧不完成
+被动 Turn。若同一
 External session 的输入来自 DesktopChar TaskCommand，被动 watch 在该 generation
 期间进入 `command` 状态，最终只发布原有 `task-completed`，不会重复发布
 `external-turn-completed`。解绑会撤销 watch；Task Manager 进程重启后 DesktopChar
-按仍保留的 External 注册重新建立基线，不回放重启前的旧文本。
+按仍保留的 External 注册重新建立基线，不回放重启前的旧文本。被动快速完成不要求
+`lastObservedAtUtc` 在稳定画面上继续递增，也不要求新旧终端可见文本存在重叠，因此轮询
+错过 active、Monitor 仅在画面变化时更新时间或终端发生滚屏时仍可捕获；完整 Turn 标识和
+基线重置负责避免同一回复被重复发布。
 
 已经处于 `active` 不能单独作为新 generation 已被 CLI 接受的证据；通常必须同时看到
 active 状态以及提交后的新屏幕变化，再等待其恢复并稳定在 `waiting_input`。但快速回复
@@ -794,6 +796,6 @@ Char Agent 的建议只是用户可见内容，不自动转化为 TaskCommand。
    重新发现同一 Session 后自动恢复。隔离前台 smoke 已覆盖中断、拒绝发送和恢复闭环。
 11.（已完成）External 绑定建立被动 Turn watch；外部窗口中手动发起的 Turn 在流式期间保持
    待响应，恢复 `waiting_input` 后只发布一次完成事件，并经 Char/表情/TTS 展示。
-12.（已完成）增加显式只读 review、绑定初始快照和接管后有界记录；面板提供“查看/整理”，
-   前者只显示可复制快照，后者把嵌套事实交给 Char 归纳。前台 smoke 验证两种操作均不会
-   增加目标 Session 的提交命令，并继续覆盖原有路由、Managed 与解绑链路。
+12.（已完成）增加显式只读 review、绑定初始快照和接管后有界记录；面板合并为“更新”，
+   新绑定会自动更新并触发 Char 整理。前台 smoke 验证自动及手动更新均不会增加目标
+   Session 的提交命令，并继续覆盖原有路由、Managed 与解绑链路。

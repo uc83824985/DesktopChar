@@ -78,7 +78,7 @@ const runtime = {
     reviewRequests++;
     return taskSessionReview(
       reviewedSessionId,
-      reviewRequests === 1 ? '主动刷新得到的最后回复' : '交给 Char 整理的最后回复',
+      reviewRequests === 1 ? '注册后自动更新的最后回复' : '手动更新得到的最后回复',
       reviewRequests,
     );
   },
@@ -190,35 +190,38 @@ try {
   }
   const reviewPanel = page.locator('.conversation-panel__session-review');
   await reviewPanel.waitFor({ state: 'visible' });
-  if (!await reviewPanel.textContent().then(text => text?.includes('绑定时已有的最后回复'))) {
-    throw new Error('Binding did not expose the initial read-only session review');
+  if (!await reviewPanel.textContent().then(text => text?.includes('注册后自动更新的最后回复'))) {
+    throw new Error('Binding did not immediately refresh the initial read-only session review');
   }
-  const sessionActionCursors = await page.evaluate(() => ({
-    bind: getComputedStyle(document.querySelector('button[data-action="bind-external"]')).cursor,
-    review: getComputedStyle(document.querySelector('button[data-action="review-session"]')).cursor,
-    organize: getComputedStyle(document.querySelector('button[data-action="organize-session"]')).cursor,
-    close: getComputedStyle(document.querySelector('button[data-action="close-session"]')).cursor,
-  }));
-  if (
-    sessionActionCursors.bind !== 'default'
-    || sessionActionCursors.review !== 'pointer'
-    || sessionActionCursors.organize !== 'pointer'
-    || sessionActionCursors.close !== 'pointer'
-  ) {
-    throw new Error(`Unexpected session action cursors: ${JSON.stringify(sessionActionCursors)}`);
-  }
-  await page.locator('button[data-action="review-session"]').click();
-  await page.locator('body[data-conversation-review="ready"]').waitFor({ timeout: 5_000 });
-  if (!await reviewPanel.textContent().then(text => text?.includes('主动刷新得到的最后回复'))) {
-    throw new Error('Explicit read-only review did not refresh the visible snapshot');
-  }
-  await page.locator('button[data-action="organize-session"]').click();
   await page.waitForFunction(() =>
     document.body.dataset.taskNotificationEvent?.startsWith('review:session-review-')
       && document.body.dataset.taskNotification === 'completed',
   undefined, { timeout: 180_000 });
+  const automaticReviewEvent = await page.evaluate(() =>
+    document.body.dataset.taskNotificationEvent);
+  const sessionActionCursors = await page.evaluate(() => ({
+    bind: getComputedStyle(document.querySelector('button[data-action="bind-external"]')).cursor,
+    update: getComputedStyle(document.querySelector('button[data-action="update-session"]')).cursor,
+    close: getComputedStyle(document.querySelector('button[data-action="close-session"]')).cursor,
+  }));
+  if (
+    sessionActionCursors.bind !== 'default'
+    || sessionActionCursors.update !== 'pointer'
+    || sessionActionCursors.close !== 'pointer'
+  ) {
+    throw new Error(`Unexpected session action cursors: ${JSON.stringify(sessionActionCursors)}`);
+  }
+  await page.locator('button[data-action="update-session"]').click();
+  await page.waitForFunction(previousEvent =>
+    document.body.dataset.taskNotificationEvent?.startsWith('review:session-review-')
+      && document.body.dataset.taskNotificationEvent !== previousEvent
+      && document.body.dataset.taskNotification === 'completed',
+  automaticReviewEvent, { timeout: 180_000 });
+  if (!await reviewPanel.textContent().then(text => text?.includes('手动更新得到的最后回复'))) {
+    throw new Error('Explicit update did not refresh and organize the visible snapshot');
+  }
   if (reviewRequests !== 2 || commands.length !== 0) {
-    throw new Error(`Read-only review mutated the target session: ${JSON.stringify({
+    throw new Error(`Read-only update mutated the target session: ${JSON.stringify({
       reviewRequests,
       commands,
     })}`);
@@ -496,6 +499,7 @@ try {
     externalTurnSequence: 1,
     title: '路由隔离会话',
     lastVisibleLine: '手动外部回复已完成',
+    latestReply: '手动外部回复已完成',
     visibleTextTail: '› 手动输入\n\n• 手动外部回复已完成\n\n› ',
   });
   await page.waitForFunction(expectedEvent => {

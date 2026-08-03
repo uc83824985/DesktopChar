@@ -607,8 +607,7 @@ interface ConversationSessionManagementElements {
   container: HTMLElement;
   createButton: HTMLButtonElement;
   bindButton: HTMLButtonElement;
-  reviewButton: HTMLButtonElement;
-  organizeButton: HTMLButtonElement;
+  updateButton: HTMLButtonElement;
   closeButton: HTMLButtonElement;
   bindControls: HTMLElement;
   bindSelect: HTMLSelectElement;
@@ -645,6 +644,7 @@ interface CharTaskNotificationEvent {
   status: string;
   title?: string;
   resultArtifactPath?: string;
+  latestReply?: string;
   visibleTextTail?: string;
 }
 
@@ -2040,6 +2040,7 @@ function applyTaskManagerState(state: TaskManagerState): void {
       status: event.status,
       ...(event.title ? { title: event.title } : {}),
       ...(event.resultArtifactPath ? { resultArtifactPath: event.resultArtifactPath } : {}),
+      ...(event.latestReply ? { latestReply: event.latestReply } : {}),
       ...(event.visibleTextTail ? { visibleTextTail: event.visibleTextTail } : {}),
     });
   }
@@ -2112,6 +2113,7 @@ function applyConversationSessionEvent(event: ConversationSessionEventState): vo
     observedAtMs: event.observedAtMs,
     status: event.status,
     title: event.title,
+    ...(event.latestReply ? { latestReply: event.latestReply } : {}),
     ...(event.visibleTextTail ? { visibleTextTail: event.visibleTextTail } : {}),
   });
   void pumpTaskNotifications();
@@ -2227,6 +2229,7 @@ function pumpTaskNotifications(): void {
         subject: event.title?.trim() || event.sessionId,
         status: event.status,
         resultArtifactAvailable: Boolean(event.resultArtifactPath),
+        ...(event.latestReply ? { latestReply: event.latestReply } : {}),
         ...(event.visibleTextTail ? { visibleTextTail: event.visibleTextTail } : {}),
       });
   const submitted = conversationRuntime.submitUserMessage(
@@ -2548,16 +2551,11 @@ function mountConversationPanel(container: HTMLElement): DomInteractionPanelView
   bindSession.dataset.action = 'bind-external';
   bindSession.textContent = '绑定';
   bindSession.title = '绑定 Session Monitor 已发现的对话窗口';
-  const reviewSession = document.createElement('button');
-  reviewSession.type = 'button';
-  reviewSession.dataset.action = 'review-session';
-  reviewSession.textContent = '查看';
-  reviewSession.title = '只读刷新所选会话的当前状态，不向会话发送消息';
-  const organizeSession = document.createElement('button');
-  organizeSession.type = 'button';
-  organizeSession.dataset.action = 'organize-session';
-  organizeSession.textContent = '整理';
-  organizeSession.title = '刷新只读资料并交给 Char 整理，不向所选会话发送消息';
+  const updateSession = document.createElement('button');
+  updateSession.type = 'button';
+  updateSession.dataset.action = 'update-session';
+  updateSession.textContent = '更新';
+  updateSession.title = '刷新只读资料并交给 Char 整理，不向所选会话发送消息';
   const closeSession = document.createElement('button');
   closeSession.type = 'button';
   closeSession.dataset.action = 'close-session';
@@ -2582,16 +2580,14 @@ function mountConversationPanel(container: HTMLElement): DomInteractionPanelView
   sessionManagement.append(
     createSession,
     bindSession,
-    reviewSession,
-    organizeSession,
+    updateSession,
     closeSession,
   );
   const sessionManagementElements: ConversationSessionManagementElements = {
     container: sessionManagement,
     createButton: createSession,
     bindButton: bindSession,
-    reviewButton: reviewSession,
-    organizeButton: organizeSession,
+    updateButton: updateSession,
     closeButton: closeSession,
     bindControls,
     bindSelect,
@@ -2721,13 +2717,9 @@ function mountConversationPanel(container: HTMLElement): DomInteractionPanelView
   bindCancel.addEventListener('click', () => {
     bindControls.hidden = true;
   }, { signal: abort.signal });
-  reviewSession.addEventListener('click', () => {
+  updateSession.addEventListener('click', () => {
     const selected = selectedConversationSession();
-    if (selected) void reviewRegisteredConversationSession(selected, false);
-  }, { signal: abort.signal });
-  organizeSession.addEventListener('click', () => {
-    const selected = selectedConversationSession();
-    if (selected) void reviewRegisteredConversationSession(selected, true);
+    if (selected) void updateRegisteredConversationSession(selected);
   }, { signal: abort.signal });
   closeSession.addEventListener('click', () => {
     const selected = selectedConversationSession();
@@ -2884,8 +2876,7 @@ function renderSessionManagement(elements: ConversationSessionManagementElements
   elements.container.dataset.phase = conversationSessionOperationInFlight ? 'busy' : 'ready';
   elements.createButton.disabled = unavailable;
   elements.bindButton.disabled = unavailable || candidates.length === 0;
-  elements.reviewButton.disabled = unavailable || !selected;
-  elements.organizeButton.disabled = unavailable || !selected;
+  elements.updateButton.disabled = unavailable || !selected;
   elements.bindButton.textContent = elements.bindControls.hidden ? '绑定' : '收起';
   elements.closeButton.disabled = unavailable || !selected;
   elements.closeButton.textContent = confirmingClose
@@ -2899,10 +2890,7 @@ function renderSessionManagement(elements: ConversationSessionManagementElements
       : selected
         ? '中断活动 Turn 并归档 DesktopChar 托管的 Codex 对话'
         : '请先选择一个 Session';
-  elements.reviewButton.title = selected
-    ? '只读刷新当前状态；不会向所选会话发送消息'
-    : '请先选择一个 Session';
-  elements.organizeButton.title = selected
+  elements.updateButton.title = selected
     ? '刷新资料并交给 Char 整理；不会向所选会话发送消息'
     : '请先选择一个 Session';
 
@@ -3028,8 +3016,24 @@ async function bindExternalConversationSession(sourceSessionId: string): Promise
     applyConversationSessionState(await desktopShell.getConversationSessionsState());
     selectRegisteredConversationSession(session);
     routingUiState = {
+      phase: 'routing',
+      text: `已绑定 ${session.title}，正在更新只读快照并交给 Char 整理…`,
+    };
+    interactionPanelHost.refresh();
+    try {
+      await refreshConversationSessionForChar(session);
+    }
+    catch (error) {
+      document.body.dataset.conversationReview = 'failed';
+      routingUiState = {
+        phase: 'error',
+        text: `已绑定 ${session.title}，但自动更新失败：${error instanceof Error ? error.message : String(error)}`,
+      };
+      return true;
+    }
+    routingUiState = {
       phase: 'idle',
-      text: `已绑定并切换到 ${session.title}；关闭时只会断开 DesktopChar 注册。`,
+      text: '',
     };
     return true;
   }
@@ -3046,37 +3050,20 @@ async function bindExternalConversationSession(sourceSessionId: string): Promise
   }
 }
 
-async function reviewRegisteredConversationSession(
+async function updateRegisteredConversationSession(
   session: ConversationSessionState,
-  organizeWithChar: boolean,
 ): Promise<void> {
   if (!desktopShell || conversationSessionOperationInFlight) return;
   pendingConversationSessionCloseId = undefined;
   conversationSessionOperationInFlight = true;
-  document.body.dataset.conversationReview = organizeWithChar ? 'refreshing-for-char' : 'refreshing';
+  document.body.dataset.conversationReview = 'refreshing-for-char';
   routingUiState = {
     phase: 'routing',
-    text: organizeWithChar
-      ? `正在刷新 ${session.title} 的只读资料并交给 Char…`
-      : `正在只读刷新 ${session.title}…`,
+    text: `正在更新 ${session.title} 的只读资料并交给 Char…`,
   };
   interactionPanelHost.refresh();
   try {
-    const review = await desktopShell.reviewConversationSession(session.sessionId);
-    applyConversationSessionState(await desktopShell.getConversationSessionsState());
-    document.body.dataset.conversationReviewId = review.reviewId;
-    if (review.current.latestReply) {
-      taskSessionVisibleEvents.set(session.sessionId, review.current.latestReply);
-      updateRoutingCandidates();
-    }
-    if (organizeWithChar) {
-      enqueueConversationReview(review);
-      document.body.dataset.conversationReview = 'queued-for-char';
-      void pumpTaskNotifications();
-    }
-    else {
-      document.body.dataset.conversationReview = review.source.stale ? 'cached' : 'ready';
-    }
+    await refreshConversationSessionForChar(session);
     routingUiState = { phase: 'idle', text: '' };
   }
   catch (error) {
@@ -3090,6 +3077,22 @@ async function reviewRegisteredConversationSession(
     conversationSessionOperationInFlight = false;
     interactionPanelHost.refresh();
   }
+}
+
+async function refreshConversationSessionForChar(
+  session: ConversationSessionState,
+): Promise<void> {
+  if (!desktopShell) throw new Error('Desktop shell is unavailable');
+  const review = await desktopShell.reviewConversationSession(session.sessionId);
+  applyConversationSessionState(await desktopShell.getConversationSessionsState());
+  document.body.dataset.conversationReviewId = review.reviewId;
+  if (review.current.latestReply) {
+    taskSessionVisibleEvents.set(session.sessionId, review.current.latestReply);
+    updateRoutingCandidates();
+  }
+  enqueueConversationReview(review);
+  document.body.dataset.conversationReview = 'queued-for-char';
+  void pumpTaskNotifications();
 }
 
 async function closeRegisteredConversationSession(
