@@ -278,11 +278,11 @@ DesktopChar 托管 Qwen 时可配置 managed：
 `npm run performance:start` 或连接其他已就绪服务。两者使用同一个
 `PerformanceInferencePort`，Supervisor 不进入 AvatarRuntime。
 
-右键菜单“接入服务”中的“表现推理”显示当前 phase。external 勾选表示
+右键菜单“接入服务”中的“表情动作推理”显示当前 phase。external 勾选表示
 允许 Adapter 使用现有 endpoint；managed 勾选会启动入口并等待健康检查。连接失败时
 按配置进入规则回退并输出 `request.fallback`。
 
-桌面右键菜单提供“接入服务 → 表现推理”复选项。该入口通过受控 IPC 修改 main
+桌面右键菜单提供“接入服务 → 表情动作推理”复选项。该入口通过受控 IPC 修改 main
 持有的运行时 enabled override，并立即向 renderer 广播完整有效配置；关闭时会取消
 当前 in-flight 推理，开启后从新的 plan 开始请求。菜单不直接改写用户 JSON，执行
 “重新加载配置”或文件监听到新 revision 时会清除临时 override，并重新采用

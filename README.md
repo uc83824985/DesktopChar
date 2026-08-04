@@ -27,10 +27,10 @@
 角色级视线校准及资源修改边界见 [GazeProfile 工作流](docs/gaze-calibration.md)；透明区穿透、角色点击/拖动和窗口包围盒同步见 [透明桌面悬浮壳](docs/desktop-shell.md)。
 动态场景 UI 使用与 Scene Frame 同 revision 的框架无关 Surface，参考项目取舍和引擎/应用边界见 [桌面 UI 引擎层设计](docs/desktop-ui-engine.md)。
 Live2D Motion 可通过受全局帧预算约束的真实 WebGL 采集器导出 Contact Sheet、采样时点和参数轨迹，使用方式见 [自动动作审阅工具](docs/motion-audit.md)。
-角色语音可通过应用层聊天气泡以完整、渐进追加或 KTV 高亮方式投影；右键“文本显示方式”
+角色语音可通过应用层聊天气泡以完整、渐进追加或高亮显示方式投影；右键“文本显示方式”
 选择会成为角色内部后续回复的当前默认值，配置项为 `interaction.textDisplay.mode`。契约和 Agent
 示例见 [角色聊天气泡](docs/speech-bubble.md)。
-右键菜单只暴露表现推理、外部角色控制和文本语音合成等用户能力；MCP、managed/external 与
+右键菜单只暴露表情动作推理、外部角色控制和文本语音合成等用户能力；MCP、managed/external 与
 Task Manager 进程生命周期属于应用内部接入细节。Task Manager 默认随主应用启用，用于发现和
 观察可绑定的外部对话，不再要求用户从角色菜单手动管理。
 JSON 配置热重载、重连和连接测试见 [MCP 服务生命周期与角色接入接口](docs/mcp-services.md)。
@@ -95,7 +95,7 @@ Qwen3.5-2B 环境可通过 `npm run performance:bootstrap` 初始化，通过
 领域契约诊断。要让桌面端实际使用该服务，将 `desktop-char.config.json` 中
 `performanceInference.enabled` 设为 `true`；配置热重载后，新的 plan 会自动并行请求
 表情/动作建议。
-桌面版也可通过右键菜单“接入服务 → 表现推理”即时启停。菜单切换是本次运行的
+桌面版也可通过右键菜单“接入服务 → 表情动作推理”即时启停。菜单切换是本次运行的
 临时覆盖，不改写 JSON；重新加载配置或文件热重载后重新采用
 `performanceInference.enabled`。菜单会显示当前的“外部”或“托管”生命周期：
 external 勾选只启用 Adapter，managed 勾选会启动配置的 Provider 入口进程并等待
