@@ -23,6 +23,7 @@ test('Windows Codex invocation can use a WorkAssistant launcher profile', () => 
 
 test('Codex conversation executor uses one managed structured-reply client', async () => {
   const calls = [];
+  const diagnostics = [];
   let closed = false;
   const executor = createCodexCharReplyExecutor({
     cwd: process.cwd(),
@@ -34,8 +35,10 @@ test('Codex conversation executor uses one managed structured-reply client', asy
       additionalProperties: false,
     },
     client: {
-      async execute(request) {
+      async execute(request, _signal, hooks) {
         calls.push(request);
+        hooks.onThreadStarted('ephemeral-thread');
+        hooks.onTurnStarted('provider-turn');
         return '{"text":"前台回复"}';
       },
       async close() {
@@ -43,12 +46,29 @@ test('Codex conversation executor uses one managed structured-reply client', asy
       },
     },
   });
-  const result = await executor.execute('codex-a', task(), new AbortController().signal);
+  const result = await executor.execute(
+    'codex-a',
+    task(),
+    new AbortController().signal,
+    diagnostic => diagnostics.push(diagnostic),
+  );
   assert.equal(result.segments[0].text, '前台回复');
   assert.equal(result.baseContextRevision, 1);
   assert.equal(result.personaRevision, 2);
   assert.match(calls[0].prompt, /codex-a/);
   assert.equal(calls[0].outputSchema.additionalProperties, false);
+  assert.deepEqual(diagnostics.map(item => item.stage), [
+    'prompt-prepared',
+    'thread-started',
+    'turn-started',
+    'reply-received',
+    'reply-validated',
+  ]);
+  assert.match(diagnostics[0].detail, /"focusIncluded":true/);
+  assert.match(diagnostics[0].detail, /你好/);
+  assert.equal(diagnostics[1].detail, 'ephemeral-thread');
+  assert.equal(diagnostics[2].detail, 'provider-turn');
+  assert.equal(diagnostics[3].detail, '{"text":"前台回复"}');
   await executor.close();
   assert.equal(closed, true);
 });

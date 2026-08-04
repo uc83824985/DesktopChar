@@ -20,9 +20,24 @@ export function createCodexCharReplyExecutor(options = {}) {
   const ownsClient = options.ownsClient ?? true;
 
   return {
-    async execute(agentId, task, signal) {
+    async execute(agentId, task, signal, onDiagnostic) {
       text(agentId, 'agentId');
       const validated = validateCharReplyTask(task);
+      const focusMessage = validated.context.messages.find(
+        message => message.messageId === validated.context.focusMessageId,
+      );
+      const prompt = charReplyPrompt(agentId, validated);
+      emitDiagnostic(onDiagnostic, 'prompt-prepared', [
+        JSON.stringify({
+          promptLength: prompt.length,
+          focusMessageId: validated.context.focusMessageId,
+          focusIncluded: Boolean(focusMessage && prompt.includes(focusMessage.text)),
+          messageCount: validated.context.messages.length,
+          baseContextRevision: validated.context.baseContextRevision,
+          personaRevision: validated.context.personaRevision,
+        }),
+        prompt,
+      ].join('\n'));
       const controller = new AbortController();
       const onAbort = () => controller.abort(signal.reason);
       signal.addEventListener('abort', onAbort, { once: true });
@@ -33,11 +48,20 @@ export function createCodexCharReplyExecutor(options = {}) {
       try {
         if (signal.aborted) throw signal.reason ?? new DOMException('The operation was aborted', 'AbortError');
         const replyText = await client.execute({
-          prompt: charReplyPrompt(agentId, validated),
+          prompt,
           outputSchema,
-        }, controller.signal);
+        }, controller.signal, {
+          onThreadStarted(threadId) {
+            emitDiagnostic(onDiagnostic, 'thread-started', threadId);
+          },
+          onTurnStarted(turnId) {
+            emitDiagnostic(onDiagnostic, 'turn-started', turnId);
+          },
+        });
+        emitDiagnostic(onDiagnostic, 'reply-received', replyText);
         const parsed = JSON.parse(replyText.trim());
         if (!isReply(parsed)) throw new Error('Codex app-server reply does not match the required schema');
+        emitDiagnostic(onDiagnostic, 'reply-validated', parsed.text.trim());
         return {
           conversationId: validated.conversationId,
           turnId: validated.turnId,
@@ -61,6 +85,20 @@ export function createCodexCharReplyExecutor(options = {}) {
       return ownsClient ? client.close() : Promise.resolve();
     },
   };
+}
+
+function emitDiagnostic(onDiagnostic, stage, detail) {
+  if (typeof onDiagnostic !== 'function') return;
+  try {
+    onDiagnostic({
+      stage,
+      at: new Date().toISOString(),
+      detail: String(detail),
+    });
+  }
+  catch {
+    // Diagnostics are observational and cannot fail a Char request.
+  }
 }
 
 export function resolveCodexInvocation(env = process.env, options = {}) {

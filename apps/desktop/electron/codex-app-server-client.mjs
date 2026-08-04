@@ -24,10 +24,11 @@ export function createCodexAppServerClient(options = {}) {
     close,
   };
 
-  async function execute(request, signal) {
+  async function execute(request, signal, hooks = {}) {
     const thread = await createThread({ ephemeral: true }, signal);
+    callHook(hooks.onThreadStarted, thread.threadId);
     try {
-      return await executeThread(thread.threadId, request, signal);
+      return await executeThread(thread.threadId, request, signal, hooks);
     }
     finally {
       void requestRpc('thread/unsubscribe', { threadId: thread.threadId }).catch(() => {});
@@ -82,7 +83,7 @@ export function createCodexAppServerClient(options = {}) {
       });
       active.turnId = requiredText(turnResponse?.turn?.id, 'Codex app-server turn id');
       active.turnReady.resolve(active.turnId);
-      hooks.onTurnStarted?.(active.turnId);
+      callHook(hooks.onTurnStarted, active.turnId);
       if (signal.aborted) {
         void requestRpc('turn/interrupt', {
           threadId: normalizedThreadId,
@@ -312,6 +313,16 @@ export function createCodexAppServerClient(options = {}) {
     child?.kill();
     child = undefined;
     startPromise = undefined;
+  }
+}
+
+function callHook(hook, value) {
+  if (typeof hook !== 'function') return;
+  try {
+    hook(value);
+  }
+  catch {
+    // Diagnostic hooks must never change App Server request semantics.
   }
 }
 

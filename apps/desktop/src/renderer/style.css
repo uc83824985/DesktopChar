@@ -83,6 +83,7 @@ button.scene-interaction-panel__item:disabled { opacity: .42; cursor: default; }
 .conversation-panel__agent-empty { color: #8a8297; }
 .conversation-panel__agent-activity { display: grid; gap: 2px; padding: 5px 6px; border-radius: 7px; color: #675d78; background: #eeebf5; overflow-wrap: anywhere; }
 .conversation-panel__agent-activity strong { color: #4d4260; }
+.conversation-panel__agent-diagnostic { padding-left: 6px; border-left: 2px solid #77669e33; color: #746a83; font-family: ui-monospace, SFMono-Regular, Consolas, monospace; white-space: pre-wrap; }
 .conversation-panel__agent-activity[data-state="failed"],
 .conversation-panel__agent-activity[data-state="cancelled"] { color: #963d53; background: #ffe7ed; }
 .conversation-panel__transcript { display: grid; align-content: start; gap: 9px; min-height: 128px; max-height: 190px; margin: 0; padding: 5px 3px; overflow: auto; list-style: none; user-select: text; }

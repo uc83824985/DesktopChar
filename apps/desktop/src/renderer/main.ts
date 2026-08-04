@@ -3362,6 +3362,12 @@ function renderConversationAgentAudit(summary: HTMLElement, content: HTMLElement
     const input = document.createElement('span');
     input.textContent = `→ ${activity.input}`;
     item.append(provider, input);
+    for (const diagnostic of activity.diagnostics) {
+      const detail = document.createElement('span');
+      detail.className = 'conversation-panel__agent-diagnostic';
+      detail.textContent = `· ${diagnostic.stage} · ${new Date(diagnostic.at).toLocaleTimeString()}\n${diagnostic.detail}`;
+      item.append(detail);
+    }
     if (activity.reply) {
       const reply = document.createElement('span');
       reply.textContent = `← ${activity.reply}`;

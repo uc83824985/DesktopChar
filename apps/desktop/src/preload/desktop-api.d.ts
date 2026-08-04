@@ -213,6 +213,11 @@ export interface ConversationAgentActivityState {
   state: 'running' | 'completed' | 'failed' | 'cancelled';
   input: string;
   reply: string | null;
+  diagnostics: Array<{
+    stage: string;
+    at: string;
+    detail: string;
+  }>;
   startedAt: string;
   completedAt: string | null;
   error: string | null;

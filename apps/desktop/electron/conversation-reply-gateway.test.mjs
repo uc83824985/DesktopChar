@@ -2,7 +2,7 @@ import assert from 'node:assert/strict';
 import test from 'node:test';
 import { createConversationReplyGateway } from './conversation-reply-gateway.mjs';
 
-test('reply gateway owns one managed App Server executor and audits logical replies', async () => {
+test('reply gateway owns one managed App Server executor and logs logical reply stages', async () => {
   let managedCreated = 0;
   let managedClosed = 0;
   const gateway = createConversationReplyGateway({
@@ -11,7 +11,9 @@ test('reply gateway owns one managed App Server executor and audits logical repl
       managedCreated++;
       assert.equal(timeoutMs, 5_000);
       return {
-        async execute(_agentId, value) {
+        async execute(_agentId, value, _signal, onDiagnostic) {
+          onDiagnostic({ stage: 'prompt-prepared', at: '2026-08-04T00:00:00Z', detail: 'focusIncluded=true' });
+          onDiagnostic({ stage: 'thread-started', at: '2026-08-04T00:00:01Z', detail: `thread-${value.turnSequence}` });
           return reply(value, `托管回复 ${value.turnSequence}`);
         },
         async close() {
@@ -37,6 +39,13 @@ test('reply gateway owns one managed App Server executor and audits logical repl
     ['managed', '消息 0', '托管回复 0'],
     ['managed', '消息 1', '托管回复 1'],
   ]);
+  assert.deepEqual(snapshot.activities[0].diagnostics.map(item => item.stage), [
+    'task-received',
+    'prompt-prepared',
+    'thread-started',
+  ]);
+  assert.match(snapshot.activities[0].diagnostics[0].detail, /"focusMessageId":"message-0"/);
+  assert.equal(snapshot.activities[0].diagnostics[2].detail, 'thread-0');
   await gateway.close();
   assert.equal(managedClosed, 1);
 });

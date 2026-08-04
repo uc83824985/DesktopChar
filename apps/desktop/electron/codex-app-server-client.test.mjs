@@ -17,6 +17,7 @@ test('managed app-server stays hidden while retaining piped stdio', () => {
 test('one app-server process serves concurrent logical reply threads', async () => {
   const messages = [];
   const launches = [];
+  const lifecycle = [];
   let threadSequence = 0;
   let turnSequence = 0;
   const client = createCodexAppServerClient({
@@ -62,7 +63,14 @@ test('one app-server process serves concurrent logical reply threads', async () 
   });
 
   const [first, second] = await Promise.all([
-    client.execute({ prompt: 'one', outputSchema: replySchema() }, new AbortController().signal),
+    client.execute(
+      { prompt: 'one', outputSchema: replySchema() },
+      new AbortController().signal,
+      {
+        onThreadStarted: threadId => lifecycle.push(['thread', threadId]),
+        onTurnStarted: turnId => lifecycle.push(['turn', turnId]),
+      },
+    ),
     client.execute({ prompt: 'two', outputSchema: replySchema() }, new AbortController().signal),
   ]);
   assert.deepEqual([first, second], ['{"text":"turn-1"}', '{"text":"turn-2"}']);
@@ -78,6 +86,7 @@ test('one app-server process serves concurrent logical reply threads', async () 
   assert.equal(threadStarts.length, 2);
   assert.equal(threadStarts.every(message => message.params.ephemeral === true), true);
   assert.equal(messages.filter(message => message.method === 'turn/start').length, 2);
+  assert.deepEqual(lifecycle, [['thread', 'thread-1'], ['turn', 'turn-1']]);
   await client.close();
 });
 

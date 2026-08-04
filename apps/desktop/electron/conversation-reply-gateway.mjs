@@ -1,4 +1,6 @@
 const ACTIVITY_LIMIT = 50;
+const DIAGNOSTIC_LIMIT = 12;
+const DIAGNOSTIC_DETAIL_LIMIT = 16_000;
 
 export function createConversationReplyGateway(options) {
   const createManagedExecutor = options.createManagedExecutor;
@@ -30,6 +32,22 @@ export function createConversationReplyGateway(options) {
       state: 'running',
       input: focusMessageText(task),
       reply: null,
+      diagnostics: [{
+        stage: 'task-received',
+        at: new Date().toISOString(),
+        detail: JSON.stringify({
+          conversationId: task.conversationId,
+          turnId: task.turnId,
+          turnSequence: task.turnSequence,
+          taskId: task.taskId,
+          attemptId: task.attemptId,
+          generation: task.generation,
+          focusMessageId: task.context?.focusMessageId,
+          messageCount: Array.isArray(task.context?.messages) ? task.context.messages.length : 0,
+          baseContextRevision: task.context?.baseContextRevision,
+          personaRevision: task.context?.personaRevision,
+        }),
+      }],
       startedAt: new Date().toISOString(),
       completedAt: null,
       error: null,
@@ -45,7 +63,10 @@ export function createConversationReplyGateway(options) {
       }
       let result;
       try {
-        result = await managedExecutor.execute(logicalAgentId, task, signal);
+        result = await managedExecutor.execute(logicalAgentId, task, signal, diagnostic => {
+          appendDiagnostic(activity, diagnostic);
+          upsertActivity(activity);
+        });
       }
       finally {
         managedActive--;
@@ -125,9 +146,30 @@ export function createConversationReplyGateway(options) {
     publish();
   }
 
+  function appendDiagnostic(activity, value) {
+    if (!value || typeof value.stage !== 'string' || !value.stage.trim()) return;
+    activity.diagnostics.push({
+      stage: value.stage.trim(),
+      at: typeof value.at === 'string' && value.at.trim()
+        ? value.at
+        : new Date().toISOString(),
+      detail: boundedDiagnosticDetail(value.detail),
+    });
+    if (activity.diagnostics.length > DIAGNOSTIC_LIMIT) {
+      activity.diagnostics.splice(0, activity.diagnostics.length - DIAGNOSTIC_LIMIT);
+    }
+  }
+
   function publish() {
     onStateChanged();
   }
+}
+
+function boundedDiagnosticDetail(value) {
+  const text = typeof value === 'string' ? value : String(value ?? '');
+  if (text.length <= DIAGNOSTIC_DETAIL_LIMIT) return text;
+  const half = Math.floor((DIAGNOSTIC_DETAIL_LIMIT - 48) / 2);
+  return `${text.slice(0, half)}\n… diagnostic detail truncated …\n${text.slice(-half)}`;
 }
 
 function focusMessageText(task) {
