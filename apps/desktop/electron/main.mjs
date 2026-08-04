@@ -1172,6 +1172,9 @@ function windowState() {
       conversationSidebar: {
         preferredSide: desktopConfig.interaction.conversationSidebar.preferredSide,
       },
+      textDisplay: {
+        mode: desktopConfig.interaction.textDisplay.mode,
+      },
     },
     conversationSidebar: conversationSidebarSnapshot(),
     agentRoles: {

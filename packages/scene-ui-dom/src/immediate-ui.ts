@@ -5,7 +5,7 @@ export interface ImmediateUiContext {
   data?: Readonly<Record<string, unknown>>;
 }
 
-export type ImmediateUiItem = ImmediateUiAction | ImmediateUiCheckbox;
+export type ImmediateUiItem = ImmediateUiAction | ImmediateUiCheckbox | ImmediateUiRadio;
 
 export interface ImmediateUiAction {
   type: 'action';
@@ -23,6 +23,15 @@ export interface ImmediateUiCheckbox {
   checked: boolean;
   enabled?: boolean;
   invoke(checked: boolean): void | Promise<void>;
+}
+
+export interface ImmediateUiRadio {
+  type: 'radio';
+  id: string;
+  label: string;
+  selected: boolean;
+  enabled?: boolean;
+  invoke(): void | Promise<void>;
 }
 
 export interface ImmediateUiSection {

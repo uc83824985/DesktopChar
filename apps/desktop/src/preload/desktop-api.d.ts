@@ -61,6 +61,9 @@ export interface DesktopInteractionConfig {
   conversationSidebar: {
     preferredSide: 'left' | 'right';
   };
+  textDisplay: {
+    mode: import('../../../../packages/contracts/src/index.ts').SpeechBubbleMode;
+  };
 }
 
 export interface ConversationSidebarLayoutState {

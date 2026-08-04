@@ -134,7 +134,9 @@ try {
   const menu = await page.evaluate(() => ({
     headings: [...document.querySelectorAll('.scene-context-menu__heading')].map(node => node.textContent),
     gazeChecked: document.querySelector('[data-item-id="gaze-follow"]')?.getAttribute('aria-checked'),
-    bubbleItems: [...document.querySelectorAll('[data-item-id="complete"], [data-item-id="stream"], [data-item-id="karaoke"]')].map(node => node.textContent?.trim()),
+    bubbleItems: [...document.querySelectorAll('[data-item-id="complete"], [data-item-id="stream"], [data-item-id="karaoke"]')].map(node => ({
+      text: node.textContent?.trim(), checked: node.getAttribute('aria-checked'),
+    })),
     mcpItems: [...document.querySelectorAll('[data-item-id="task-manager-enabled"], [data-item-id="character-mcp-enabled"], [data-item-id="tts-mcp-enabled"], [data-item-id="mcp-connection-test"]')].map(node => node.getAttribute('data-item-id')),
     performanceInferenceChecked: document.querySelector('[data-item-id="performance-inference-enabled"]')?.getAttribute('aria-checked'),
     emotionBindingTest: document.querySelector('[data-item-id="emotion-binding-test"]')?.textContent?.trim(),
@@ -142,16 +144,16 @@ try {
     hideAvatar: document.querySelector('[data-item-id="hide-avatar"]')?.textContent?.trim(),
   }));
   if (menu.gazeChecked !== 'true' || menu.bubbleItems.length !== 3
+    || menu.bubbleItems[1]?.checked !== 'true'
     || menu.performanceInferenceChecked !== 'false'
     || menu.emotionBindingTest !== '测试 Happy 表情资源'
     || JSON.stringify(menu.mcpItems) !== JSON.stringify([
-      'task-manager-enabled', 'character-mcp-enabled', 'tts-mcp-enabled',
-      'mcp-connection-test',
+      'character-mcp-enabled', 'tts-mcp-enabled', 'mcp-connection-test',
     ])
     || menu.configReload !== '重新加载配置'
     || menu.hideAvatar !== '隐藏角色'
     || !menu.headings.includes('角色设置') || !menu.headings.includes('表现设置')
-    || !menu.headings.includes('聊天气泡测试')
+    || !menu.headings.includes('文本显示方式')
     || !menu.headings.includes('接入服务')
     || !menu.headings.some(label => label?.startsWith('应用配置 · r'))
     || !menu.headings.includes('桌面窗口')) {
@@ -211,18 +213,6 @@ try {
       + '[data-item-id="performance-inference-enabled"][aria-checked="false"]',
   ).waitFor({ timeout: 2_000 });
   assertContextMenuOrigin(await contextMenuOrigin(page), stableMenuOrigin, 'disabling performance inference');
-  await page.locator('[data-item-id="task-manager-enabled"]').click();
-  await page.locator(
-    'body[data-context-menu="open"][data-task-manager-enabled="false"] '
-      + '[data-item-id="task-manager-enabled"][aria-checked="false"]',
-  ).waitFor({ timeout: 5_000 });
-  assertContextMenuOrigin(await contextMenuOrigin(page), stableMenuOrigin, 'disabling Task Manager');
-  await page.locator('[data-item-id="task-manager-enabled"]').click();
-  await page.locator(
-    'body[data-context-menu="open"][data-task-manager-enabled="true"] '
-      + '[data-item-id="task-manager-enabled"][aria-checked="true"]',
-  ).waitFor({ timeout: 5_000 });
-  assertContextMenuOrigin(await contextMenuOrigin(page), stableMenuOrigin, 'enabling Task Manager');
   await page.locator('[data-item-id="character-mcp-enabled"]').click();
   await page.locator('body[data-context-menu="open"][data-character-mcp-service="disabled"] [data-item-id="character-mcp-enabled"][aria-checked="false"]').waitFor({ timeout: 5_000 });
   assertContextMenuOrigin(await contextMenuOrigin(page), stableMenuOrigin, 'disabling character-access MCP');
@@ -298,7 +288,9 @@ try {
   await page.locator('[data-item-id="gaze-follow"]').click();
   await page.locator('body[data-context-menu="open"][data-gaze-follow="enabled"] [data-item-id="gaze-follow"][aria-checked="true"]').waitFor({ timeout: 2_000 });
   await page.locator('[data-item-id="stream"]').click();
-  await page.locator('body[data-context-menu="closed"][data-speech-bubble="stream"]').waitFor({ timeout: 2_000 });
+  await page.locator('[data-item-id="stream"][aria-checked="true"]').waitFor({ timeout: 2_000 });
+  await page.keyboard.press('Escape');
+  await page.locator('body[data-context-menu="closed"][data-speech-bubble="stream"]').waitFor({ timeout: 5_000 });
   const streamDecoration = await page.evaluate(() => getComputedStyle(
     document.querySelector('#speech-bubble p'),
     '::after',
@@ -329,7 +321,8 @@ try {
   await page.locator('body[data-context-menu="open"] [data-item-id="complete"][aria-disabled="true"]').waitFor({ timeout: 2_000 });
   await page.locator('body[data-runtime-state="idle"] [data-item-id="complete"][aria-disabled="false"]').waitFor({ timeout: 10_000 });
   await page.locator('[data-item-id="karaoke"]').click();
-  await page.locator('body[data-speech-bubble="karaoke"] #speech-bubble-active').waitFor({ timeout: 2_000 });
+  await page.keyboard.press('Escape');
+  await page.locator('body[data-speech-bubble="karaoke"] #speech-bubble-active').waitFor({ timeout: 5_000 });
   const karaokeActive = await page.locator('#speech-bubble-active').textContent();
   if (!karaokeActive) throw new Error(`Karaoke bubble did not expose its timed cue: ${karaokeActive}`);
   const karaokeText = await page.locator('#speech-bubble').textContent();

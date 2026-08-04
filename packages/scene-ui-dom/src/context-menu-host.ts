@@ -49,7 +49,6 @@ export class DomContextMenuHost {
     this.#renderSections(menu, sections);
 
     menu.addEventListener('contextmenu', event => event.preventDefault(), { signal: abort.signal });
-    menu.addEventListener('keydown', event => this.#handleKeydown(event), { signal: abort.signal });
     this.#root.append(menu);
     this.#element = menu;
     this.#abort = abort;
@@ -62,6 +61,10 @@ export class DomContextMenuHost {
     menu.style.width = `${menu.offsetWidth}px`;
     clampToViewport(menu);
     document.addEventListener('pointerdown', event => this.#dismissFromOutside(event), {
+      capture: true,
+      signal: abort.signal,
+    });
+    document.addEventListener('keydown', event => this.#handleKeydown(event), {
       capture: true,
       signal: abort.signal,
     });
@@ -141,13 +144,17 @@ export class DomContextMenuHost {
     button.dataset.itemId = item.id;
     button.disabled = !enabled;
     button.setAttribute('aria-disabled', String(!enabled));
-    button.setAttribute('role', item.type === 'checkbox' ? 'menuitemcheckbox' : 'menuitem');
+    button.setAttribute('role', item.type === 'checkbox'
+      ? 'menuitemcheckbox'
+      : item.type === 'radio' ? 'menuitemradio' : 'menuitem');
     if (item.type === 'checkbox') button.setAttribute('aria-checked', String(item.checked));
+    if (item.type === 'radio') button.setAttribute('aria-checked', String(item.selected));
     if (item.type === 'action' && item.danger) button.dataset.danger = 'true';
 
     const marker = document.createElement('span');
     marker.className = 'scene-context-menu__marker';
-    marker.textContent = item.type === 'checkbox' && item.checked ? '✓' : '';
+    marker.textContent = (item.type === 'checkbox' && item.checked)
+      || (item.type === 'radio' && item.selected) ? '✓' : '';
     const label = document.createElement('span');
     label.textContent = item.label;
     button.append(marker, label);
@@ -157,9 +164,9 @@ export class DomContextMenuHost {
       try {
         const result = item.type === 'checkbox' ? item.invoke(!item.checked) : item.invoke();
         if (result instanceof Promise) void result
-          .then(() => { if (item.type === 'checkbox') this.refresh(); })
+          .then(() => { if (item.type !== 'action') this.refresh(); })
           .catch(this.#onError);
-        else if (item.type === 'checkbox') this.refresh();
+        else if (item.type !== 'action') this.refresh();
       }
       catch (error) {
         this.#onError(error);
@@ -203,7 +210,9 @@ function sectionSignature(sections: ReturnType<ImmediateUiRegistry['resolve']>):
       id: item.id,
       label: item.label,
       enabled: item.enabled !== false,
-      ...(item.type === 'checkbox' ? { checked: item.checked } : { danger: item.danger === true }),
+      ...(item.type === 'checkbox' ? { checked: item.checked }
+        : item.type === 'radio' ? { selected: item.selected }
+        : { danger: item.danger === true }),
     })),
   })));
 }

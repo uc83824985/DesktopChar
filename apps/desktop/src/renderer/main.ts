@@ -703,6 +703,7 @@ const exposureStates = new Map<string, {
 }>();
 let charMaxConcurrency = 2;
 let charDisplayName = 'DesktopChar';
+let textDisplayMode: SpeechBubbleMode = 'stream';
 const conversationAgentDisposers: Array<() => void> = [];
 let gazeFrameDriverAttached = false;
 let playbackTimer: ReturnType<typeof setInterval> | undefined;
@@ -1822,6 +1823,12 @@ function submitBubbleDemo(mode: SpeechBubbleMode): void {
   }] } });
 }
 
+function setTextDisplayMode(mode: SpeechBubbleMode): void {
+  textDisplayMode = mode;
+  document.body.dataset.textDisplayMode = mode;
+  submitBubbleDemo(mode);
+}
+
 function submitEmotionBindingDemo(): void {
   if (!runtime || runtime.getSnapshot().state !== 'idle') return;
   const suffix = Date.now();
@@ -2378,7 +2385,7 @@ async function presentAvatarTextPlan(
               sequence,
               displayText: segment.text,
               speechText: segment.text,
-              bubble: { mode: segment.bubbleMode ?? 'stream' },
+              bubble: { mode: segment.bubbleMode ?? textDisplayMode },
             })),
           },
         });
@@ -4131,8 +4138,7 @@ function registerDevelopmentUi(): void {
           {
             type: 'checkbox',
             id: 'performance-inference-enabled',
-            label: `表情动作推理（${config.lifecycle === 'managed' ? '托管' : '外部'}）`
-              + ` · ${config.provider}${config.phase === 'ready' ? '' : ` · ${config.phase}`}`,
+            label: `表情动作推理 · ${config.phase === 'ready' ? '已启用' : config.phase}`,
             checked: config.enabled,
             invoke: setPerformanceInferenceEnabled,
           },
@@ -4148,17 +4154,26 @@ function registerDevelopmentUi(): void {
     },
   });
   immediateUi.register({
-    id: 'avatar.bubble-diagnostics',
+    id: 'avatar.text-display',
     target: 'avatar',
     order: 20,
     build: () => {
       const enabled = runtime?.getSnapshot().state === 'idle';
       return {
-        label: '聊天气泡测试',
+        label: '文本显示方式',
         items: [
-          { type: 'action', id: 'complete', label: '完整显示', enabled, invoke: () => submitBubbleDemo('complete') },
-          { type: 'action', id: 'stream', label: '流式显示', enabled, invoke: () => submitBubbleDemo('stream') },
-          { type: 'action', id: 'karaoke', label: 'KTV 高亮', enabled, invoke: () => submitBubbleDemo('karaoke') },
+          {
+            type: 'radio', id: 'complete', label: '完整显示', selected: textDisplayMode === 'complete', enabled,
+            invoke: () => setTextDisplayMode('complete'),
+          },
+          {
+            type: 'radio', id: 'stream', label: '流式显示', selected: textDisplayMode === 'stream', enabled,
+            invoke: () => setTextDisplayMode('stream'),
+          },
+          {
+            type: 'radio', id: 'karaoke', label: 'KTV 高亮', selected: textDisplayMode === 'karaoke', enabled,
+            invoke: () => setTextDisplayMode('karaoke'),
+          },
         ],
       };
     },
@@ -4174,32 +4189,23 @@ function registerDevelopmentUi(): void {
       return {
         label: '接入服务',
         items: [
-          ...(taskManagerState ? [{
-            type: 'checkbox' as const,
-            id: 'task-manager-enabled',
-            label: `Task Manager（${taskManagerState.lifecycle === 'managed' ? '托管' : '外部'}）`
-              + ` · ${taskManagerPhaseLabel(taskManagerState)}`,
-            checked: taskManagerState.enabled,
-            enabled: taskManagerState.phase !== 'closed',
-            invoke: setTaskManagerEnabled,
-          }] : []),
           {
             type: 'checkbox', id: 'character-mcp-enabled',
-            label: `角色接入 MCP · ${mcpPhaseLabel(services.character)}`,
+            label: `外部角色控制 · ${mcpPhaseLabel(services.character)}`,
             checked: services.character.desiredEnabled,
             enabled: !mcpTransitioning(services.character),
             invoke: enabled => setMcpServiceEnabled('character', enabled),
           },
           {
             type: 'checkbox', id: 'tts-mcp-enabled',
-            label: `语音合成 MCP · ${mcpPhaseLabel(services.tts)}`,
+            label: `语音合成 · ${mcpPhaseLabel(services.tts)}`,
             checked: services.tts.desiredEnabled,
             enabled: runtimeIdle && !mcpTransitioning(services.tts),
             invoke: enabled => setMcpServiceEnabled('tts', enabled),
           },
           {
             type: 'action', id: 'mcp-connection-test',
-            label: '测试 MCP 连接',
+            label: '测试服务连接',
             enabled: runtimeIdle
               && !mcpTransitioning(services.character)
               && !mcpTransitioning(services.tts),
@@ -4248,11 +4254,6 @@ function registerDevelopmentUi(): void {
 async function setMcpServiceEnabled(service: McpServiceId, enabled: boolean): Promise<void> {
   if (!desktopShell) return;
   applyMcpServicesState(await desktopShell.setMcpServiceEnabled(service, enabled));
-}
-
-async function setTaskManagerEnabled(enabled: boolean): Promise<void> {
-  if (!desktopShell) return;
-  applyTaskManagerState(await desktopShell.setTaskManagerEnabled(enabled));
 }
 
 async function setPerformanceInferenceEnabled(enabled: boolean): Promise<void> {
@@ -4308,19 +4309,6 @@ async function reloadDesktopConfig(): Promise<void> {
 
 function mcpTransitioning(service: McpServiceState): boolean {
   return ['starting', 'reloading', 'stopping'].includes(service.phase);
-}
-
-function taskManagerPhaseLabel(state: TaskManagerState): string {
-  const labels: Record<TaskManagerState['phase'], string> = {
-    disabled: '已禁用',
-    standby: '待启动',
-    connecting: '启动中',
-    ready: '已连接',
-    degraded: '部分可用',
-    reconnecting: `重连中 #${state.reconnectAttempt}`,
-    closed: '已关闭',
-  };
-  return labels[state.phase];
 }
 
 function mcpPhaseLabel(service: McpServiceState): string {
@@ -4533,6 +4521,8 @@ function initializeDesktopInteraction(initialState: Awaited<ReturnType<NonNullab
     });
     reconcileConversationAgentSlots();
     dragGesture.setHoldDelayMs(state.interaction.dragHoldDelayMs);
+    textDisplayMode = state.interaction.textDisplay.mode;
+    document.body.dataset.textDisplayMode = textDisplayMode;
     document.body.dataset.dragHoldDelayMs = state.interaction.dragHoldDelayMs.toString();
     document.body.dataset.dragWindowApi = state.interaction.dragWindowApi;
     applyConversationSidebarLayout(state.conversationSidebar);

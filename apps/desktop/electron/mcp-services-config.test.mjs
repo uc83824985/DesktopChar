@@ -147,6 +147,7 @@ test('desktop config owns interaction, window, char agent and character profile 
   });
   assert.equal(config.interaction.drag.holdDelayMs, 120);
   assert.equal(config.interaction.conversationSidebar.preferredSide, 'left');
+  assert.equal(config.interaction.textDisplay.mode, 'stream');
   assert.deepEqual(config.window.defaultSize, { width: 512, height: 768 });
   assert.equal(config.window.alwaysOnTop, false);
   assert.deepEqual(config.applicationCommands.bindings['session.window.bounds'], {
@@ -221,6 +222,9 @@ test('desktop config path prefers the new bootstrap variable and validates appli
   assert.throws(() => normalizeDesktopConfig({
     interaction: { conversationSidebar: { preferredSide: 'top' } },
   }), /must be left or right/);
+  assert.throws(() => normalizeDesktopConfig({
+    interaction: { textDisplay: { mode: 'typewriter' } },
+  }), /must be complete, stream or karaoke/);
   assert.throws(() => normalizeDesktopConfig({ agentHttp: { host: '0.0.0.0' } }), /loopback/);
   const defaultTaskManager = normalizeDesktopConfig({}).taskManager;
   assert.equal(defaultTaskManager.enabled, true);

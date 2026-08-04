@@ -24,6 +24,13 @@
           "properties": {
             "preferredSide": { "enum": ["left", "right"] }
           }
+        },
+        "textDisplay": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "mode": { "enum": ["complete", "stream", "karaoke"] }
+          }
         }
       }
     },

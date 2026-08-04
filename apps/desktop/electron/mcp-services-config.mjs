@@ -97,7 +97,7 @@ export function normalizeDesktopConfig(fileConfig = {}, env = {}, options = {}) 
   const version = fileConfig.version ?? 1;
   if (version !== 1) throw new TypeError('Desktop config version must be 1');
   const interaction = optionalRecord(fileConfig.interaction, 'interaction');
-  assertKnownKeys(interaction, ['drag', 'conversationSidebar'], 'interaction');
+  assertKnownKeys(interaction, ['drag', 'conversationSidebar', 'textDisplay'], 'interaction');
   const drag = optionalRecord(interaction.drag, 'interaction.drag');
   assertKnownKeys(drag, ['holdDelayMs'], 'interaction.drag');
   const conversationSidebar = optionalRecord(
@@ -105,6 +105,8 @@ export function normalizeDesktopConfig(fileConfig = {}, env = {}, options = {}) 
     'interaction.conversationSidebar',
   );
   assertKnownKeys(conversationSidebar, ['preferredSide'], 'interaction.conversationSidebar');
+  const textDisplay = optionalRecord(interaction.textDisplay, 'interaction.textDisplay');
+  assertKnownKeys(textDisplay, ['mode'], 'interaction.textDisplay');
   const window = optionalRecord(fileConfig.window, 'window');
   assertKnownKeys(window, ['defaultSize', 'defaultMarginDip', 'alwaysOnTop'], 'window');
   const defaultSize = optionalRecord(window.defaultSize, 'window.defaultSize');
@@ -322,6 +324,9 @@ export function normalizeDesktopConfig(fileConfig = {}, env = {}, options = {}) 
       },
       conversationSidebar: {
         preferredSide: conversationSidebarSide(conversationSidebar.preferredSide),
+      },
+      textDisplay: {
+        mode: textDisplayMode(textDisplay.mode),
       },
     },
     window: {
@@ -920,6 +925,14 @@ function conversationSidebarSide(value) {
     throw new TypeError('interaction.conversationSidebar.preferredSide must be left or right');
   }
   return side;
+}
+
+function textDisplayMode(value) {
+  const mode = value ?? 'stream';
+  if (mode !== 'complete' && mode !== 'stream' && mode !== 'karaoke') {
+    throw new TypeError('interaction.textDisplay.mode must be complete, stream or karaoke');
+  }
+  return mode;
 }
 
 function fixedSemanticName(value, expected, label) {

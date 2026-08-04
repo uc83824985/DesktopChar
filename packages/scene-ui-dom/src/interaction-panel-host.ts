@@ -271,6 +271,10 @@ export class DomInteractionPanelHost {
       button.setAttribute('aria-pressed', String(item.checked));
       if (item.checked) button.dataset.checked = 'true';
     }
+    if (item.type === 'radio') {
+      button.setAttribute('aria-pressed', String(item.selected));
+      if (item.selected) button.dataset.checked = 'true';
+    }
     button.textContent = item.label;
     button.addEventListener('click', () => {
       if (button.disabled) return;
@@ -334,7 +338,9 @@ function sectionSignature(sections: ReturnType<ImmediateUiRegistry['resolve']>):
       id: item.id,
       label: item.label,
       enabled: item.enabled !== false,
-      ...(item.type === 'checkbox' ? { checked: item.checked } : { danger: item.danger === true }),
+      ...(item.type === 'checkbox' ? { checked: item.checked }
+        : item.type === 'radio' ? { selected: item.selected }
+        : { danger: item.danger === true }),
     })),
   })));
 }
