@@ -37,6 +37,12 @@ PerformanceSegment.displayText + bubble     AudioSource.durationMs/textCues
 
 未声明 `bubble` 时默认 `complete`。TTS 准备、流端点创建和首播缓冲期间聊天气泡保持隐藏；只有播放器确认音频开始输出后才进入 `playing`。`playback.completed` 后三种模式都会补全全文并进入 `holding`，默认延迟 800 ms 隐藏；可用 `dismissDelayMs` 为 segment 覆盖。播放失败或用户中断立即隐藏，不等待延迟。
 
+DesktopChar 内部 Char 回复会在提交计划前补入当前 `interaction.textDisplay.mode`，默认
+`stream`；右键“文本显示方式”可在当前进程内切换，并立即用一条短文案预览。来自角色接入
+接口且已经显式声明 `bubble.mode` 的外部计划保持调用方语义，不被该偏好覆盖。配置热重载后
+当前值重新采用配置文件。Runtime 的通用协议默认仍是 `complete`，因此这个应用偏好不会泄漏为
+引擎隐式全局状态。
+
 ## 无可用 TTS 时的纯文本回退
 
 语音合成 MCP（TTS）被禁用、连接失败或合成失败产生 `tts.segment-failed` 时，Runtime 不再静默跳过该 segment。它进入 `presenting` 状态并按 sequence 依次显示 `displayText`；当前段关闭后才推进下一失败段或已就绪音频，因此并发失败不会互相覆盖。

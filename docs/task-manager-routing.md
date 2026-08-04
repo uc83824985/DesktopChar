@@ -317,6 +317,14 @@ Manager 只能承诺已请求立即投递，以及不向 DesktopChar 发布旧 g
 
 ## Task Manager 服务边界
 
+Task Manager 是应用层的会话观察与提交适配器，不是用户需要直接操作的角色功能，也不进入
+通用引擎的领域类型。引擎层只依赖“发现会话、读取快照、提交输入、订阅轮次事实”的窄端口；
+DesktopChar 应用负责把当前 Task Manager/Session Monitor 实现绑定到该端口。这样以后可替换为
+其他窗口管理或会话后端，而不会把 marker、HTTP 路径、managed/external 生命周期泄漏到
+Conversation Runtime、Router 或 Application Command Runtime。右键菜单因此不再暴露 Task
+Manager 开关；配置中的 `taskManager.lifecycle: external` 暂时作为开发和兼容部署方式保留，待
+窄端口适配完成并有迁移方案后再弃用。
+
 Task Manager 适合作为随系统或用户会话启动的常驻脚本/服务。它读取 Session Monitor
 marker 和 token，并以 marker 中声明的 `capabilities.sessionInput` 为准；当前本机实现是
 v4，客户端同时接受具有该能力的 v3+ marker。通过 loopback HTTP 使用：

@@ -33,15 +33,15 @@ JSON Schema 约束的建议。它由独立的 `PerformanceModelController` 管�
 
 ## 右键菜单
 
-角色右键菜单的“接入服务”分区提供：
+角色右键菜单的“接入服务”分区只使用面向用户的能力名称，提供：
 
-- `Task Manager` checkbox：`managed` 动态启停 DesktopChar 持有的独立子进程并同步清空/
-  恢复外部会话候选；`external` 只断开/重新连接既有 marker；
-- `角色接入 MCP` checkbox：动态绑定/关闭角色接入 MCP Server；
-- `语音合成 MCP` checkbox：动态启停 TTS 能力；`managed` 同时启停所属子进程，`external` 只连接/断开；
-- `测试 MCP 连接`：一次同时探测两端。角色接入侧使用官方 MCP Client 建立临时 session 并确认四个角色工具；语音合成侧校验三个 Profile 强制工具及双向 Schema，再调用 `tts_status` 确认 Provider 可接收请求。两端结果汇总到角色自身聊天气泡，两项状态使用句号分隔并自动换行。
+- `外部角色控制` checkbox：动态绑定/关闭角色接入 MCP Server；
+- `语音合成` checkbox：动态启停 TTS 能力；`managed` 同时启停所属子进程，`external` 只连接/断开；
+- `测试服务连接`：一次同时探测两端。角色接入侧使用官方 MCP Client 建立临时 session 并确认四个角色工具；语音合成侧校验三个 Profile 强制工具及双向 Schema，再调用 `tts_status` 确认 Provider 可接收请求。两端结果汇总到角色自身聊天气泡，两项状态使用句号分隔并自动换行。
 
-四项入口严格按上述顺序排列。表现推理的动态开关保留在“表现设置”。菜单状态直接投影
+Task Manager 不再作为右键菜单中的独立服务开关；它默认由应用内部按配置启动和恢复，并在对话
+面板中通过会话能力与连接状态体现。外部会话的 `ownership: external` 仍表示源窗口由外部应用
+拥有，与 Task Manager 进程采用何种生命周期无关。表现推理的动态开关保留在“表现设置”。菜单状态直接投影
 main 的服务快照，不把 checkbox 自身当作事实来源。状态包括 `disabled`、`starting`、
 `ready`、`degraded`、`failed`、`reload-pending`、`reloading`、`reconnecting` 和
 `stopping`；重连次数、下次重连时间、最近错误和最近连接测试也保存在同一快照。

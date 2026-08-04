@@ -159,6 +159,9 @@ Windows 通常对应 `%APPDATA%/DesktopChar/config.json`。程序只通过 Elect
     },
     "conversationSidebar": {
       "preferredSide": "right"
+    },
+    "textDisplay": {
+      "mode": "stream"
     }
   },
   "window": {
@@ -239,6 +242,8 @@ App Server 时，以 Char 绑定 Provider 的 `launcherScript` 为共享进程�
 - 拖动长按延迟；
 - 对话栏优先从角色左侧或右侧展开，`interaction.conversationSidebar.preferredSide` 接受
   `left/right`，默认 `right`；实际方向仍会根据角色所在显示器的可用工作区自动翻转；
+- 角色内部回复的当前文本显示方式 `interaction.textDisplay.mode`，接受
+  `complete/stream/karaoke`，默认 `stream`；右键选择是当前进程覆盖，配置重载后重新采用文件值；
 - Char worker 并发上限 `agentRoles.char.maxConcurrency`，允许 `1–8`，默认 `2`；
 - managed Char/Router Provider 请求超时；两种角色共享 DesktopChar 托管的单个 Codex
   App Server，并为每次请求建立独立 ephemeral thread；
