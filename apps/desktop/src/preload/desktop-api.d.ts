@@ -169,6 +169,7 @@ export interface DesktopCharApi {
   setMcpServiceEnabled(service: McpServiceId, enabled: boolean): Promise<McpServicesState>;
   reloadDesktopConfig(): Promise<McpServicesState>;
   setPerformanceInferenceEnabled(enabled: boolean): Promise<DesktopWindowState>;
+  testApplicationServices(): Promise<ApplicationServiceTestResult[]>;
   testMcpService(service: McpServiceId): Promise<McpServiceTest>;
   testAllMcpServices(): Promise<Record<McpServiceId, McpServiceTest>>;
   onMcpServicesState(callback: (state: McpServicesState) => void): () => void;
@@ -477,6 +478,16 @@ export type McpServicePhase = 'disabled' | 'starting' | 'ready' | 'degraded' | '
 
 export interface McpServiceTest {
   status: 'passed' | 'failed';
+  testedAt: string;
+  latencyMs: number;
+  details: string;
+}
+
+export interface ApplicationServiceTestResult {
+  id: string;
+  label: string;
+  enabled: boolean;
+  status: 'passed' | 'failed' | 'skipped';
   testedAt: string;
   latencyMs: number;
   details: string;

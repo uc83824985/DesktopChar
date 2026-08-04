@@ -36,6 +36,23 @@ test('external performance Provider becomes operational without owning a process
   assert.equal(controller.snapshot().operational, false);
 });
 
+test('explicit performance connection test probes enabled external services only', async () => {
+  let healthCalls = 0;
+  const controller = createPerformanceModelController(config({ enabled: false }), {
+    fetcher: async () => {
+      healthCalls += 1;
+      return { ok: true, status: 200 };
+    },
+  });
+  await controller.start();
+  await assert.rejects(controller.testConnection(), /未启用/);
+  assert.equal(healthCalls, 0);
+  await controller.setEnabled(true);
+  assert.match(await controller.testConnection(), /健康端点可用/);
+  assert.equal(healthCalls, 1);
+  await controller.close();
+});
+
 test('managed performance Provider waits for health and closes its owned process', async () => {
   const process = fakeProcess(4321);
   let healthCalls = 0;

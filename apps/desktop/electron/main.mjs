@@ -13,6 +13,7 @@ import {
   parseLoopbackDevUrl,
 } from './window-policy.mjs';
 import { createAgentHttpServer } from './agent-http-server.mjs';
+import { createApplicationServiceTestRegistry } from './application-service-test-registry.mjs';
 import { createCodexAppServerClient } from './codex-app-server-client.mjs';
 import { createCodexCharReplyExecutor, resolveCodexInvocation } from './codex-conversation-agent.mjs';
 import { createConversationReplyGateway } from './conversation-reply-gateway.mjs';
@@ -95,6 +96,7 @@ const channels = {
   mcpServicesSetEnabled: 'mcp-services:set-enabled',
   desktopConfigReload: 'desktop-config:reload',
   performanceInferenceSetEnabled: 'performance-inference:set-enabled',
+  applicationServicesTestAll: 'application-services:test-all',
   mcpServicesTest: 'mcp-services:test',
   mcpServicesTestAll: 'mcp-services:test-all',
   mcpServicesState: 'mcp-services:state',
@@ -248,6 +250,26 @@ const mcpServices = createMcpServicesController({
     });
   },
 });
+const applicationServiceTests = createApplicationServiceTestRegistry([
+  {
+    id: 'performance-inference',
+    label: '表现推理',
+    enabled: () => performanceModel.snapshot().enabled,
+    test: () => performanceModel.testConnection(),
+  },
+  {
+    id: 'character-control',
+    label: '外部角色控制',
+    enabled: () => mcpServices.snapshot().character.desiredEnabled,
+    test: () => mcpServices.test('character'),
+  },
+  {
+    id: 'text-to-speech',
+    label: '文本语音合成',
+    enabled: () => mcpServices.snapshot().tts.desiredEnabled,
+    test: () => mcpServices.test('tts'),
+  },
+]);
 let conversationSessions;
 const taskManager = createTaskManagerController(desktopConfig.taskManager, {
   async launchManagedProcess(config) {
@@ -976,6 +998,10 @@ function registerIpc() {
     requireAvatarSender(event);
     await performanceModel.setEnabled(enabled);
     return windowState();
+  });
+  ipcMain.handle(channels.applicationServicesTestAll, event => {
+    requireAvatarSender(event);
+    return applicationServiceTests.testAll();
   });
   ipcMain.handle(channels.mcpServicesTest, (event, service) => {
     requireAvatarSender(event);

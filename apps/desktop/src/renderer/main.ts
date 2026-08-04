@@ -119,6 +119,7 @@ import type {
 import { JsonConsoleTtsLogger, McpTtsAdapter, TtsRuntimeEffectHandler } from '../../../../packages/tts-mcp-adapter/src/index.ts';
 import './style.css';
 import type {
+  ApplicationServiceTestResult,
   ConversationSidebarLayoutState,
   ConversationAgentState,
   ConversationSessionEventState,
@@ -130,7 +131,6 @@ import type {
   DesktopPerformanceInferenceConfig,
   McpServiceId,
   McpServiceState,
-  McpServiceTest,
   McpServicesState,
   PointerPresentation,
   TaskManagerEventState,
@@ -297,13 +297,13 @@ class ReloadableTtsAdapter implements TtsAdapter {
 
   health(): Promise<TtsHealthReport> {
     if (!this.current || !this.enabled) return Promise.resolve({
-      status: 'unavailable', provider: 'desktop-char-mcp-services', latencyMs: 0, details: '语音合成 MCP 服务未启用',
+      status: 'unavailable', provider: 'desktop-char-mcp-services', latencyMs: 0, details: '文本语音合成服务未启用',
     });
     return this.current.adapter.health();
   }
 
   private requireCurrent() {
-    if (!this.current || !this.enabled) throw new Error('语音合成 MCP 服务未就绪');
+    if (!this.current || !this.enabled) throw new Error('文本语音合成服务未就绪');
     return this.current;
   }
 }
@@ -1042,7 +1042,7 @@ try {
     status.textContent = snapshot.state === 'speaking'
       ? `Runtime: speaking · ${Math.round(snapshot.playback.positionMs)} ms`
       : snapshot.state === 'presenting'
-        ? 'Runtime: presenting · 语音合成不可用，正在显示纯文本回退'
+        ? 'Runtime: presenting · 文本语音合成不可用，正在显示纯文本回退'
         : 'Runtime 已就绪 · UI 仅发送事件，状态由 Runtime 持有';
     renderSpeechBubble(snapshot);
     contextMenuHost.refresh();
@@ -1827,19 +1827,6 @@ function setTextDisplayMode(mode: SpeechBubbleMode): void {
   textDisplayMode = mode;
   document.body.dataset.textDisplayMode = mode;
   submitBubbleDemo(mode);
-}
-
-function submitEmotionBindingDemo(): void {
-  if (!runtime || runtime.getSnapshot().state !== 'idle') return;
-  const suffix = Date.now();
-  runtime.dispatch({ type: 'plan.submitted', plan: { id: `emotion-binding-${suffix}`, segments: [{
-    id: `emotion-binding-segment-${suffix}`,
-    sequence: 0,
-    displayText: 'Happy 表情资源测试：正在应用角色级 expression 绑定。',
-    speechText: '很高兴见到你，这是角色表情资源测试。',
-    emotion: { emotion: 'happy', intensity: 0.8, atMs: 0 },
-    actions: [],
-  }] } });
 }
 
 function createDesktopConversationReplyEndpoint(agentId: string): CharAgentEndpoint {
@@ -4123,36 +4110,6 @@ function registerDevelopmentUi(): void {
       };
     },
   });
-  if (desktopShell) immediateUi.register({
-    id: 'desktop.performance-inference',
-    target: '*',
-    order: 15,
-    build: () => {
-      const config = performanceInferenceConfig;
-      if (!config) return null;
-      const canTestHappy = runtime?.getSnapshot().state === 'idle'
-        && (runtime?.getSnapshot().capabilities?.emotions.includes('happy') ?? false);
-      return {
-        label: '表现设置',
-        items: [
-          {
-            type: 'checkbox',
-            id: 'performance-inference-enabled',
-            label: `表情动作推理 · ${config.phase === 'ready' ? '已启用' : config.phase}`,
-            checked: config.enabled,
-            invoke: setPerformanceInferenceEnabled,
-          },
-          {
-            type: 'action',
-            id: 'emotion-binding-test',
-            label: '测试 Happy 表情资源',
-            enabled: canTestHappy,
-            invoke: submitEmotionBindingDemo,
-          },
-        ],
-      };
-    },
-  });
   immediateUi.register({
     id: 'avatar.text-display',
     target: 'avatar',
@@ -4179,16 +4136,24 @@ function registerDevelopmentUi(): void {
     },
   });
   if (desktopShell) immediateUi.register({
-    id: 'desktop.mcp-services',
+    id: 'desktop.access-services',
     target: '*',
     order: 900,
     build: () => {
       const services = mcpServicesState;
-      if (!services) return null;
+      const performance = performanceInferenceConfig;
+      if (!services || !performance) return null;
       const runtimeIdle = runtime?.getSnapshot().state === 'idle';
       return {
         label: '接入服务',
         items: [
+          {
+            type: 'checkbox', id: 'performance-inference-enabled',
+            label: `表现推理 · ${performanceInferencePhaseLabel(performance)}`,
+            checked: performance.enabled,
+            enabled: !performanceInferenceTransitioning(performance),
+            invoke: setPerformanceInferenceEnabled,
+          },
           {
             type: 'checkbox', id: 'character-mcp-enabled',
             label: `外部角色控制 · ${mcpPhaseLabel(services.character)}`,
@@ -4198,18 +4163,19 @@ function registerDevelopmentUi(): void {
           },
           {
             type: 'checkbox', id: 'tts-mcp-enabled',
-            label: `语音合成 · ${mcpPhaseLabel(services.tts)}`,
+            label: `文本语音合成 · ${mcpPhaseLabel(services.tts)}`,
             checked: services.tts.desiredEnabled,
             enabled: runtimeIdle && !mcpTransitioning(services.tts),
             invoke: enabled => setMcpServiceEnabled('tts', enabled),
           },
           {
-            type: 'action', id: 'mcp-connection-test',
+            type: 'action', id: 'service-connection-test',
             label: '测试服务连接',
             enabled: runtimeIdle
+              && !performanceInferenceTransitioning(performance)
               && !mcpTransitioning(services.character)
               && !mcpTransitioning(services.tts),
-            invoke: testAllMcpServices,
+            invoke: testApplicationServices,
           },
         ],
       };
@@ -4262,15 +4228,14 @@ async function setPerformanceInferenceEnabled(enabled: boolean): Promise<void> {
   applyPerformanceInferenceConfig(state.performanceInference);
 }
 
-async function testAllMcpServices(): Promise<void> {
+async function testApplicationServices(): Promise<void> {
   if (!desktopShell) return;
-  const results = await desktopShell.testAllMcpServices();
+  const results = await desktopShell.testApplicationServices();
   applyMcpServicesState(await desktopShell.getMcpServicesState());
   runtime?.dispatch({
     type: 'presentation.chat-bubble-requested',
-    text: `MCP 连接测试：${formatMcpTestResult('角色接入 MCP', results.character)}。`
-      + `${formatMcpTestResult('语音合成 MCP', results.tts)}。`,
-    dismissDelayMs: 4_500,
+    text: `服务连接测试：\n${results.map(formatApplicationServiceTestResult).join('。\n')}。`,
+    dismissDelayMs: 6_000,
   });
 }
 
@@ -4285,8 +4250,8 @@ async function reloadDesktopConfig(): Promise<void> {
       : '无变化';
     showConfigNotification(
       `配置重新加载完成：r${next.config.revision}（${revisionStatus}）。`
-      + `${formatMcpServiceState('角色接入 MCP', next.character)}。`
-      + `${formatMcpServiceState('语音合成 MCP', next.tts)}。`,
+      + `${formatMcpServiceState('外部角色控制', next.character)}。`
+      + `${formatMcpServiceState('文本语音合成', next.tts)}。`,
     );
   }
   catch (error) {
@@ -4300,8 +4265,8 @@ async function reloadDesktopConfig(): Promise<void> {
     }
     const details = summarizeMcpDetails(current?.config.error ?? error);
     const serviceStatus = current
-      ? `。现有${formatMcpServiceState('角色接入 MCP', current.character)}`
-        + `。${formatMcpServiceState('语音合成 MCP', current.tts)}`
+      ? `。现有${formatMcpServiceState('外部角色控制', current.character)}`
+        + `。${formatMcpServiceState('文本语音合成', current.tts)}`
       : '';
     showConfigNotification(`配置重新加载失败：${details}${serviceStatus}。`);
   }
@@ -4309,6 +4274,18 @@ async function reloadDesktopConfig(): Promise<void> {
 
 function mcpTransitioning(service: McpServiceState): boolean {
   return ['starting', 'reloading', 'stopping'].includes(service.phase);
+}
+
+function performanceInferenceTransitioning(config: DesktopPerformanceInferenceConfig): boolean {
+  return ['starting', 'restarting', 'stopping'].includes(config.phase);
+}
+
+function performanceInferencePhaseLabel(config: DesktopPerformanceInferenceConfig): string {
+  const labels: Record<DesktopPerformanceInferenceConfig['phase'], string> = {
+    disabled: '已禁用', starting: '启动中', ready: '已启用', restarting: '重启中',
+    stopping: '停止中', failed: '不可用',
+  };
+  return labels[config.phase];
 }
 
 function mcpPhaseLabel(service: McpServiceState): string {
@@ -4320,10 +4297,10 @@ function mcpPhaseLabel(service: McpServiceState): string {
   return labels[service.phase];
 }
 
-function formatMcpTestResult(label: string, result: McpServiceTest): string {
-  if (result.status === 'passed') return `${label}：通过（${result.latencyMs} ms）`;
-  if (/service is disabled|服务未启用/i.test(result.details)) return `${label}：未启用`;
-  return `${label}：失败（${summarizeMcpDetails(result.details)}）`;
+function formatApplicationServiceTestResult(result: ApplicationServiceTestResult): string {
+  if (result.status === 'passed') return `${result.label}：通过（${result.latencyMs} ms）`;
+  if (result.status === 'skipped') return `${result.label}：未启用`;
+  return `${result.label}：失败（${summarizeMcpDetails(result.details)}）`;
 }
 
 function formatMcpServiceState(label: string, service: McpServiceState): string {

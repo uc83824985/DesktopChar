@@ -1,6 +1,7 @@
 import os from 'node:os';
 import path from 'node:path';
-import { rm } from 'node:fs/promises';
+import { readFile, rm, writeFile } from 'node:fs/promises';
+import { createServer } from 'node:net';
 import { _electron as electron } from 'playwright-core';
 import { Client } from '@modelcontextprotocol/sdk/client/index.js';
 import { StreamableHTTPClientTransport } from '@modelcontextprotocol/sdk/client/streamableHttp.js';
@@ -8,10 +9,20 @@ import koffi from 'koffi';
 import { createNativeWindowTopmost } from '../apps/desktop/electron/native-window-topmost.mjs';
 
 const root = process.cwd();
-const isolatedConfigPath = path.join(
-  os.tmpdir(),
-  `desktop-char-smoke-missing-${process.pid}-${Date.now()}.json`,
-);
+const smokeSuffix = `${process.pid}-${Date.now()}`;
+const isolatedConfigPath = path.join(os.tmpdir(), `desktop-char-smoke-${smokeSuffix}.json`);
+const ttsProfileName = `desktop-smoke-${smokeSuffix}.local`;
+const ttsProfilePath = path.join(root, 'tts-mcp-profiles', `${ttsProfileName}.json`);
+const ttsPort = await reserveLoopbackPort();
+const ttsProfile = JSON.parse(await readFile(path.join(root, 'tts-mcp-profiles/local.json'), 'utf8'));
+ttsProfile.lifecycle.start.env.DESKTOP_CHAR_TTS_LOCAL_MCP_PORT = String(ttsPort);
+ttsProfile.connection.url = `http://127.0.0.1:${ttsPort}/mcp`;
+await writeFile(ttsProfilePath, JSON.stringify(ttsProfile, null, 2), 'utf8');
+await writeFile(isolatedConfigPath, JSON.stringify({
+  agentHttp: { port: 0 },
+  ttsMcp: { autoStart: true, profile: ttsProfileName },
+  characterMcp: { autoStart: true, port: 0 },
+}), 'utf8');
 const isolatedUserDataPath = path.join(
   os.tmpdir(),
   `desktop-char-smoke-user-data-${process.pid}-${Date.now()}`,
@@ -30,6 +41,7 @@ const application = await electron.launch({
 const runNativeInteractionSmoke = process.env.DESKTOP_CHAR_NATIVE_INTERACTION_SMOKE === '1';
 const nativePointer = runNativeInteractionSmoke ? createNativePointer() : undefined;
 const nativeTopmost = createNativeWindowTopmost();
+let toleratePerformanceConnectionRefused = false;
 const originalCursorPoint = runNativeInteractionSmoke
   ? await application.evaluate(({ screen }) => screen.getCursorScreenPoint())
   : undefined;
@@ -40,7 +52,11 @@ try {
   const performanceLogs = [];
   page.on('console', message => {
     if (message.text().startsWith('[performance] ')) performanceLogs.push(message.text());
-    if (message.type() === 'error' && !message.text().includes('404')) errors.push(message.text());
+    if (message.type() === 'error'
+      && !message.text().includes('404')
+      && !(toleratePerformanceConnectionRefused && message.text().includes('ERR_CONNECTION_REFUSED'))) {
+      errors.push(message.text());
+    }
   });
   page.on('pageerror', error => errors.push(error.stack ?? error.message));
   await page.locator(
@@ -137,22 +153,22 @@ try {
     bubbleItems: [...document.querySelectorAll('[data-item-id="complete"], [data-item-id="stream"], [data-item-id="karaoke"]')].map(node => ({
       text: node.textContent?.trim(), checked: node.getAttribute('aria-checked'),
     })),
-    mcpItems: [...document.querySelectorAll('[data-item-id="task-manager-enabled"], [data-item-id="character-mcp-enabled"], [data-item-id="tts-mcp-enabled"], [data-item-id="mcp-connection-test"]')].map(node => node.getAttribute('data-item-id')),
+    serviceItems: [...document.querySelectorAll('[data-item-id="performance-inference-enabled"], [data-item-id="character-mcp-enabled"], [data-item-id="tts-mcp-enabled"], [data-item-id="service-connection-test"]')].map(node => node.getAttribute('data-item-id')),
     performanceInferenceChecked: document.querySelector('[data-item-id="performance-inference-enabled"]')?.getAttribute('aria-checked'),
-    emotionBindingTest: document.querySelector('[data-item-id="emotion-binding-test"]')?.textContent?.trim(),
+    emotionBindingTestPresent: Boolean(document.querySelector('[data-item-id="emotion-binding-test"]')),
     configReload: document.querySelector('[data-item-id="desktop-config-reload"]')?.textContent?.trim(),
     hideAvatar: document.querySelector('[data-item-id="hide-avatar"]')?.textContent?.trim(),
   }));
   if (menu.gazeChecked !== 'true' || menu.bubbleItems.length !== 3
     || menu.bubbleItems[1]?.checked !== 'true'
     || menu.performanceInferenceChecked !== 'false'
-    || menu.emotionBindingTest !== '测试 Happy 表情资源'
-    || JSON.stringify(menu.mcpItems) !== JSON.stringify([
-      'character-mcp-enabled', 'tts-mcp-enabled', 'mcp-connection-test',
+    || menu.emotionBindingTestPresent
+    || JSON.stringify(menu.serviceItems) !== JSON.stringify([
+      'performance-inference-enabled', 'character-mcp-enabled', 'tts-mcp-enabled', 'service-connection-test',
     ])
     || menu.configReload !== '重新加载配置'
     || menu.hideAvatar !== '隐藏角色'
-    || !menu.headings.includes('角色设置') || !menu.headings.includes('表现设置')
+    || !menu.headings.includes('角色设置') || menu.headings.includes('表现设置')
     || !menu.headings.includes('文本显示方式')
     || !menu.headings.includes('接入服务')
     || !menu.headings.some(label => label?.startsWith('应用配置 · r'))
@@ -224,7 +240,8 @@ try {
   assertContextMenuOrigin(await contextMenuOrigin(page), stableMenuOrigin, 'disabling speech-synthesis MCP');
   const fallbackText = '中文回退';
   const fallbackClient = new Client({ name: 'desktop-char-text-fallback-smoke', version: '1.0.0' });
-  await fallbackClient.connect(new StreamableHTTPClientTransport(new URL(initial.mcpServices.character.endpoint)));
+  const fallbackState = await page.evaluate(() => window.desktopChar?.getWindowState());
+  await fallbackClient.connect(new StreamableHTTPClientTransport(new URL(fallbackState.mcpServices.character.endpoint)));
   try {
     const suffix = Date.now();
     const performed = await fallbackClient.callTool({
@@ -262,22 +279,31 @@ try {
   const reloadBubble = await page.locator('#speech-bubble').textContent();
   if (!reloadBubble?.includes('配置重新加载完成')
     || !/r\d+（无变化）/.test(reloadBubble)
-    || !reloadBubble.includes('角色接入 MCP：已连接')
-    || !reloadBubble.includes('语音合成 MCP：已连接')
-    || !reloadBubble.includes('角色接入 MCP：已连接。\n语音合成 MCP：已连接')) {
+    || !reloadBubble.includes('外部角色控制：已连接')
+    || !reloadBubble.includes('文本语音合成：已连接')
+    || !reloadBubble.includes('外部角色控制：已连接。\n文本语音合成：已连接')) {
     throw new Error(`Config reload result did not use the character chat bubble: ${reloadBubble}`);
   }
   await page.evaluate(() => document.querySelector('#avatar')?.dispatchEvent(
     new KeyboardEvent('keydown', { key: 'ContextMenu', bubbles: true }),
   ));
-  await page.locator('body[data-context-menu="open"] [data-item-id="mcp-connection-test"]').waitFor({ timeout: 2_000 });
-  await page.locator('[data-item-id="mcp-connection-test"]').click();
+  await page.locator('body[data-context-menu="open"] [data-item-id="service-connection-test"]').waitFor({ timeout: 2_000 });
+  await page.locator('[data-item-id="service-connection-test"]').click();
   await page.locator('body[data-context-menu="closed"][data-tts-mcp-test="passed"][data-character-mcp-test="passed"][data-speech-bubble="complete"]').waitFor({ timeout: 5_000 });
   const mcpTestBubble = await page.locator('#speech-bubble').textContent();
-  if (!mcpTestBubble?.includes('角色接入 MCP：通过')
-    || !mcpTestBubble.includes('语音合成 MCP：通过')
-    || !/角色接入 MCP：通过（\d+ ms）。\n语音合成 MCP：通过/.test(mcpTestBubble)) {
-    throw new Error(`Combined MCP result did not use the character chat bubble: ${mcpTestBubble}`);
+  if (!mcpTestBubble?.includes('表现推理：未启用')
+    || !mcpTestBubble.includes('外部角色控制：通过')
+    || !mcpTestBubble.includes('文本语音合成：通过')
+    || !/外部角色控制：通过（\d+ ms）。\n文本语音合成：通过/.test(mcpTestBubble)) {
+    throw new Error(`Combined service result did not use the character chat bubble: ${mcpTestBubble}`);
+  }
+  await page.locator('body[data-runtime-state="idle"]').waitFor({ timeout: 8_000 });
+  toleratePerformanceConnectionRefused = true;
+  try {
+    await verifyAccessServiceCombinations(page);
+  }
+  finally {
+    toleratePerformanceConnectionRefused = false;
   }
   await page.evaluate(() => document.querySelector('#avatar')?.dispatchEvent(
     new KeyboardEvent('keydown', { key: 'ContextMenu', bubbles: true }),
@@ -507,8 +533,24 @@ finally {
     await application.close();
   }
   finally {
-    await rm(isolatedUserDataPath, { recursive: true, force: true });
+    await Promise.all([
+      rm(isolatedUserDataPath, { recursive: true, force: true }),
+      rm(isolatedConfigPath, { force: true }),
+      rm(ttsProfilePath, { force: true }),
+    ]);
   }
+}
+
+async function reserveLoopbackPort() {
+  const server = createServer();
+  await new Promise((resolve, reject) => {
+    server.once('error', reject);
+    server.listen(0, '127.0.0.1', resolve);
+  });
+  const address = server.address();
+  await new Promise((resolve, reject) => server.close(error => error ? reject(error) : resolve()));
+  if (!address || typeof address === 'string') throw new Error('Could not reserve a smoke-test port');
+  return address.port;
 }
 
 async function verifyNativeInteractionPanel(application, page) {
@@ -660,6 +702,68 @@ function assertContextMenuOrigin(actual, expected, phase, epsilon = 0.5) {
   if (Math.abs(actual.x - expected.x) > epsilon || Math.abs(actual.y - expected.y) > epsilon) {
     throw new Error(`Context menu moved while ${phase}: ${JSON.stringify({ expected, actual })}`);
   }
+}
+
+async function verifyAccessServiceCombinations(page) {
+  const combinations = [0, 1, 3, 2, 6, 7, 5, 4];
+  for (const mask of combinations) {
+    const expected = {
+      performance: Boolean(mask & 1),
+      character: Boolean(mask & 2),
+      tts: Boolean(mask & 4),
+    };
+    const observed = await page.evaluate(async flags => {
+      const api = window.desktopChar;
+      if (!api) throw new Error('Desktop API is unavailable');
+      const performance = await api.setPerformanceInferenceEnabled(flags.performance);
+      await api.setMcpServiceEnabled('character', flags.character);
+      const mcp = await api.setMcpServiceEnabled('tts', flags.tts);
+      const tests = await api.testApplicationServices();
+      return {
+        performanceEnabled: performance.performanceInference.enabled,
+        characterEnabled: mcp.character.desiredEnabled,
+        ttsEnabled: mcp.tts.desiredEnabled,
+        tests,
+      };
+    }, expected);
+    if (observed.performanceEnabled !== expected.performance
+      || observed.characterEnabled !== expected.character
+      || observed.ttsEnabled !== expected.tts) {
+      throw new Error(`Access service combination did not settle: ${JSON.stringify({ mask, expected, observed })}`);
+    }
+    for (const result of observed.tests) {
+      const enabled = result.id === 'performance-inference' ? expected.performance
+        : result.id === 'character-control' ? expected.character
+        : expected.tts;
+      if ((enabled && result.status === 'skipped') || (!enabled && result.status !== 'skipped')) {
+        throw new Error(`Access service test did not respect enablement: ${JSON.stringify({ mask, result })}`);
+      }
+      if (enabled && result.id !== 'performance-inference' && result.status !== 'passed') {
+        throw new Error(`Enabled access service did not pass its connection test: ${JSON.stringify({ mask, result })}`);
+      }
+    }
+
+    await page.evaluate(() => document.querySelector('#avatar')?.dispatchEvent(
+      new KeyboardEvent('keydown', { key: 'ContextMenu', bubbles: true }),
+    ));
+    await page.locator('body[data-context-menu="open"] [data-item-id="complete"]').click();
+    await page.keyboard.press('Escape');
+    await page.locator('body:not([data-runtime-state="idle"])').waitFor({ timeout: 3_000 });
+    await page.locator('body[data-runtime-state="idle"]').waitFor({ timeout: 15_000 });
+  }
+
+  await page.evaluate(async () => {
+    const api = window.desktopChar;
+    if (!api) throw new Error('Desktop API is unavailable');
+    await api.setPerformanceInferenceEnabled(false);
+    await api.setMcpServiceEnabled('character', true);
+    await api.setMcpServiceEnabled('tts', true);
+  });
+  await page.locator(
+    'body[data-performance-inference="disabled"]'
+      + '[data-character-mcp-service="ready"]'
+      + '[data-tts-mcp-service="ready"]',
+  ).waitFor({ timeout: 10_000 });
 }
 
 function sameRect(left, right, epsilon = 0.5) {

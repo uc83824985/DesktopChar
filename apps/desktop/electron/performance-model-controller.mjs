@@ -74,6 +74,14 @@ export function createPerformanceModelController(initialConfig, options = {}) {
     return enqueue(() => reconcile('runtime-toggle'));
   }
 
+  function testConnection() {
+    return enqueue(async () => {
+      if (!desiredEnabled()) throw new Error('表现推理服务未启用');
+      await probeHealth(config.healthUrl);
+      return `表现推理健康端点可用：${config.healthUrl}`;
+    });
+  }
+
   async function reconcile(reason) {
     if (disposed) return snapshot();
     clearRestart();
@@ -308,6 +316,7 @@ export function createPerformanceModelController(initialConfig, options = {}) {
     start,
     replace,
     setEnabled,
+    testConnection,
     snapshot,
     close,
   };
