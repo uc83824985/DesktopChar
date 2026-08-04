@@ -12,6 +12,8 @@
 - `packages/audio-runtime`：真实播放时钟与原始 PCM 电平事实接口；角色级口型增益由 Runtime 应用。
 - `packages/conversation-runtime`：单角色 Char worker、多 Turn 回复、提前准备与有序呈现。
 - `packages/interaction-routing`：不可变交互消息、sticky 目标、Router 结果校验与无副作用裁决。
+- `packages/application-command-runtime`：应用 Query/Command Definition、资源级公平读写调度、
+  权威 Command 幂等执行与可选 Agent Proposal/Receipt Bridge。
 - `packages/tts-mcp-adapter`：语音合成 MCP（技术标识 TTS）输出适配。
 - `packages/transport`、`packages/config`：传输和配置边界。
 - `tts-mcp-profiles`：可提交的跨设备 TTS Provider Profile；设备专属启动配置使用被忽略的 `*.local.json`。
@@ -40,6 +42,9 @@ JSON 配置热重载、重连和连接测试见 [MCP 服务生命周期与角色
 `sessionId + text` 的命令；DesktopChar 内部的 Router Agent 负责候选会话判断，Char Agent
 负责角色化表达，两者允许绑定独立 Provider/Profile。边界、用户可见时间线和二次确认规则见
 [Task Manager 与会话路由设计](docs/task-manager-routing.md)。
+无需 Agent 的应用操作和未来 Router Command Suggestion 统一建立在
+[Application Command Framework](docs/application-command-framework.md) 上；具体窗口、Session、
+文件与 MCP 能力仍由应用注册，框架本身不持有这些业务类型。
 
 Task Manager 首个内存版本位于 `task-manager/`。默认由 DesktopChar 根据
 `taskManager.sessionMonitorMarkerPath` 托管启动，也可设置 `SESSION_MONITOR_MARKER` 后独立运行

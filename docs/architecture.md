@@ -38,6 +38,15 @@ submission generation，完成通知只采用最后一次提交后恢复 `waitin
 Agent 角色生成。Router 与 Char 允许绑定不同 Provider/Profile，具体边界见
 [Task Manager 与会话路由设计](task-manager-routing.md)。
 
+应用副作用不下沉给 Router/Char Agent，也不堆叠进 RouteCoordinator。引擎层新增独立
+`Application Command Framework`：`ApplicationQueryRuntime` 执行可并发只读查询，
+`ApplicationCommandRuntime` 执行应用已经认可的权威 Command，两者共享资源级公平读写
+Scheduler。UI、快捷键和确定性规则可直接构造 Command，无需 Agent；Router 和未来 WorkAgent
+只能产生不可信 Proposal，经应用桥接完成候选、权限、确认和 revision 校验后才生成 Command，
+执行结果也必须投影后才能成为 Agent Receipt。框架不包含窗口、Session、文件或 MCP 业务类型，
+具体 Definition/Handler 由应用注册。完整边界见
+[Application Command Framework](application-command-framework.md)。
+
 原始用户输入和 Task Manager 有界事实事件先保存为不可变 `InteractionMessage`，Router/Char
 通过引用产生 RouteRecord 和派生消息。
 桌面 UI 提供 `Auto / Char / 已连接 Session` 半自动目标选择；显式目标直连，Auto 才调用
@@ -70,6 +79,7 @@ Router Agent。用户可见上下文区分 `showing` 与 `shown`：正在渐进�
 apps/desktop -> transport, config, avatar-runtime, audio-runtime, live2d-renderer
 apps/desktop -> conversation-runtime
 apps/desktop -> interaction-routing
+apps/desktop -> application-command-runtime
 apps/desktop -> scene-runtime
 apps/desktop -> scene-ui-dom -> scene-runtime
 web test/application host -> scene-ui-dom -> scene-runtime
@@ -81,6 +91,7 @@ transport -> contracts
 config -> contracts
 conversation-runtime -> no domain package dependency
 interaction-routing -> no domain package dependency
+application-command-runtime -> no domain package dependency
 ```
 
 - `contracts` 不依赖任何其他项目包。
@@ -159,5 +170,9 @@ interaction-routing -> no domain package dependency
    Char 回复。真实预合成 artifact、流式 segment 和智能失败迁移尚未实现。外部 Reply 注册
    原型已按最新边界移除。
 8. 已接入角色动态 ExpressionCatalog、确定性 Resolver、performance-planning v2、Adapter/Transport 分层和 Runtime `expressionKey` 主状态；Mao 八项资源均有可达性回归。Qwen3.5-2B 是可选 Transport 后端，关闭或失败时使用确定性目录规则；v1 `emotionBindings` 只作旧角色兼容。安全表情插值、大目录 shortlist、动态动作 schema 和 3070 并发压测仍待实现。
+9. 已引入引擎层 `application-command-runtime`：Query/Command 共享资源级读写 Scheduler，默认
+   Query 并发读、Command 独占写，具体 Definition 可缩小冲突键；权威 Command 可直接执行，
+   Agent Proposal/Receipt 经独立 Bridge 接入。当前只完成框架和测试，尚未注册 Session 窗口
+   等应用操作，也未引入 WorkAgent。
 
 外部 Agent 可通过角色接入 MCP 或兼容的 `127.0.0.1` HTTP 控制面发送完整 `PerformancePlan` 和中断请求，由 Electron main 转为白名单 IPC，再由 renderer 提交 Runtime；Agent 通过 Runtime snapshot 判断实际播放完成。角色接入 MCP 工具与动态服务管理见 [MCP 服务生命周期](mcp-services.md)，HTTP 请求结构见 [外部 Agent 本地 HTTP 接入指南](external-agent-http.md)。

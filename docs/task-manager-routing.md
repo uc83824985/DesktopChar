@@ -240,6 +240,35 @@ RouteCoordinator 变成同时持有所有领域状态的 God Object。
 接入 Task Manager、前台 sticky 选择器和主进程 Router Provider；纯端口测试继续负责覆盖
 阈值、确认、冻结 revision 与严格失败语义。
 
+### Application Command 扩展边界
+
+Router 后续需要从“只选择消息目标”扩展到“建议交互类型与目标”，但 Router Result 仍然只是
+Suggestion，不能直接调用 Task Manager 或 Session Monitor。确定性的应用操作统一进入引擎层
+[Application Command Framework](application-command-framework.md)：
+
+```text
+Auto InteractionMessage
+ -> 确定性高置信路径，或 Router Agent
+ -> character / task-session / command / confirm / no-match Suggestion
+ -> command Suggestion 进入 AgentApplicationCommandBridge
+ -> 应用解析候选、权限、确认和 context/target revision
+ -> 生成权威 ApplicationCommand
+ -> ApplicationCommandRuntime
+ -> 应用注册的 Handler
+ -> Task Manager / Electron / MCP 等外围执行端
+ -> 有界 Receipt 投影给 Char
+```
+
+UI、快捷键和确定性规则可以直接生成 `ApplicationCommand`，不经过 Router 或 Proposal Bridge。
+首版 Runtime 已实现框架但尚未扩展 Router Result，也未注册 `session.window.place`。窗口操作
+接入时，Task Manager 只是具体 Handler/Gateway：它执行语义化命令，不解析自然语言，不生成
+Command。Session review 继续是只读 Query；Query 和 Command 共享资源访问 Scheduler，同一
+Session 窗口的读写冲突由资源键协调，不复用消息 mailbox 或 `TaskCommand`。
+
+WorkAgent 暂不引入。文件/MCP/编码等开放式工作仍发送给明确选择或 Router 选中的已有
+Managed/External Session；没有可用 Session 时返回 `no-match` 或提示新建 Managed 会话。
+未来 WorkAgent 只会成为新的 Proposal 来源，不获得绕过 Command Runtime 的执行权限。
+
 不同目标采用不同的并发规则：
 
 | 目标 | 执行者 | 并发规则 | 上下文来源 |
@@ -799,3 +828,7 @@ Char Agent 的建议只是用户可见内容，不自动转化为 TaskCommand。
 12.（已完成）增加显式只读 review、绑定初始快照和接管后有界记录；面板合并为“更新”，
    新绑定会自动更新并触发 Char 整理。前台 smoke 验证自动及手动更新均不会增加目标
    Session 的提交命令，并继续覆盖原有路由、Managed 与解绑链路。
+13.（已完成）引入独立 `application-command-runtime` 引擎框架：Query/Command 共享公平
+   资源级读写 Scheduler，权威 Command 可由应用直接执行，Agent Proposal/Receipt 经 Bridge
+   隔离。具体 Session 窗口 capability、Router command Suggestion 和 Task Manager Handler
+   仍按上述顺序待接入。
