@@ -35,13 +35,18 @@ JSON Schema 约束的建议。它由独立的 `PerformanceModelController` 管�
 
 角色右键菜单的“接入服务”分区只使用面向用户的能力名称，提供：
 
+- `表现推理` checkbox：动态启停本地表情/动作推理；关闭后使用规则回退，不阻塞文本、语音或
+  外部角色控制；原“测试 Happy 表情资源”开发入口已移除；
 - `外部角色控制` checkbox：动态绑定/关闭角色接入 MCP Server；
-- `语音合成` checkbox：动态启停 TTS 能力；`managed` 同时启停所属子进程，`external` 只连接/断开；
-- `测试服务连接`：一次同时探测两端。角色接入侧使用官方 MCP Client 建立临时 session 并确认四个角色工具；语音合成侧校验三个 Profile 强制工具及双向 Schema，再调用 `tts_status` 确认 Provider 可接收请求。两端结果汇总到角色自身聊天气泡，两项状态使用句号分隔并自动换行。
+- `文本语音合成` checkbox：动态启停 TTS 能力；`managed` 同时启停所属子进程，`external` 只连接/断开；
+- `测试服务连接`：通过应用服务测试注册表依次返回数组结果。表现推理探测健康端点；外部角色
+  控制使用官方 MCP Client 建立临时 session 并确认角色工具；文本语音合成校验 Profile 强制工具
+  及双向 Schema，再调用 `tts_status`。关闭项返回 `skipped/未启用`，单项失败被隔离为该项
+  `failed`，不会让整次测试抛错或遗漏其他结果。
 
 Task Manager 不再作为右键菜单中的独立服务开关；它默认由应用内部按配置启动和恢复，并在对话
 面板中通过会话能力与连接状态体现。外部会话的 `ownership: external` 仍表示源窗口由外部应用
-拥有，与 Task Manager 进程采用何种生命周期无关。表现推理的动态开关保留在“表现设置”。菜单状态直接投影
+拥有，与 Task Manager 进程采用何种生命周期无关。菜单状态直接投影
 main 的服务快照，不把 checkbox 自身当作事实来源。状态包括 `disabled`、`starting`、
 `ready`、`degraded`、`failed`、`reload-pending`、`reloading`、`reconnecting` 和
 `stopping`；重连次数、下次重连时间、最近错误和最近连接测试也保存在同一快照。
@@ -153,4 +158,9 @@ npm run test:desktop
 npm run test:desktop-smoke
 ```
 
-单元/集成测试覆盖：两端动态启停、官方 Client 工具发现、单次双端连接测试、配置解析、文件 watcher、Runtime busy 延迟切换、外部语音合成服务断线退避，以及角色接入端口冲突解除后的自动重绑。桌面 smoke 通过真实右键菜单关闭并重新启用两端服务，验证手动重新加载的聊天气泡回执，再触发双端连接测试，验证两端状态与 Runtime 聊天气泡结果后继续执行语音播放。
+单元/集成测试覆盖：服务测试注册顺序与异常隔离、表现推理健康探测、两端 MCP 动态启停、官方
+Client 工具发现、配置解析、文件 watcher、Runtime busy 延迟切换、外部语音服务断线退避，以及
+角色接入端口冲突解除后的自动重绑。桌面 smoke 使用独立随机端口，遍历表现推理、外部角色
+控制和文本语音合成的全部 8 种开关组合；每组都执行数组连接测试并提交内部文本计划，验证
+关闭表现推理只改变表现建议、关闭外部控制不影响内部计划、关闭文本语音合成稳定进入纯文本
+回退，最终均返回 `idle` 且 renderer 不退出。

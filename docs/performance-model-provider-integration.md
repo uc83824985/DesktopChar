@@ -467,8 +467,9 @@ expression/emotion/actions 的 plan，并检查：
 [performance] ... "event":"expression.applied"
 ```
 
-仅右键执行“测试 Happy 表情资源”不会请求 Provider；它只验证 CharacterProfile 到
-Live2D expression 的链路。
+右键“接入服务 → 测试服务连接”只探测 Provider 健康端点，不生成表情建议。要验收完整
+CharacterProfile 到 Live2D expression 链路，仍需提交一个没有显式表现 cue 的普通 plan，
+并检查上述请求、选择和应用日志。
 
 ## 12. 验收清单
 
