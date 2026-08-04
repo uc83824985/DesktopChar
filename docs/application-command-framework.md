@@ -30,9 +30,10 @@ Agent 入口
            -> CommandReceipt（有界 Agent 事实）
 ```
 
-当前首批实现位于 `packages/application-command-runtime`，只提供框架和测试，不注册具体桌面
-操作，也不改变现有 Router、Task Manager 或 Session Monitor 协议。Session 窗口放置是后续
-第一个应用 Definition；WorkAgent 继续保持待设计。
+通用框架位于 `packages/application-command-runtime`。Desktop 应用已在
+`apps/desktop/src/application-commands` 注册首组 Session 窗口 Definition，但只依赖注入式
+Gateway 和配置 Binding，不依赖 Task Manager 或 Session Monitor 的方法、URL 与响应字段。
+Router、Task Manager 和 Session Monitor 协议本轮不变；WorkAgent 继续保持待设计。
 
 ## 为什么不用 OperationCoordinator
 
@@ -256,6 +257,67 @@ mcp.call-window-tool
 
 未经过第 5、6 步的命令仍可由 UI、快捷键和应用代码使用，确保无需 Agent 的操作是一等能力。
 
+### Session 窗口 Definition 与配置绑定
+
+Desktop 应用当前提供：
+
+- `session.window.bounds` Query：参数必须为空，返回规范化 `x/y/width/height`，可附带
+  `displayId/revision`；
+- `session.window.place` Command：接受 `region`、可选 `displayId/marginDip`，返回最终 bounds；
+- 两者的 target 固定为 `{ kind: 'conversation-session', id }`；
+- 两者共享 `session-window:{sessionId}` 资源键，因此同一窗口读读并行、读写互斥，不同窗口
+  可以并行。
+
+Definition 不认识具体外围接口。`applicationCommands.bindings` 将语义字段映射为 Gateway 参数，
+再将 Gateway 返回值投影为规范结果：
+
+```json
+{
+  "applicationCommands": {
+    "bindings": {
+      "session.window.place": {
+        "operation": "arrange-conversation",
+        "arguments": {
+          "conversation": { "source": "target.id" },
+          "expected": { "source": "target.expectedRevision" },
+          "quadrant": { "source": "parameters.region" },
+          "screen": { "source": "parameters.displayId", "required": false },
+          "margin": { "source": "parameters.marginDip", "required": false }
+        },
+        "result": {
+          "applied": { "source": "changed" },
+          "bounds.x": { "source": "current.left" },
+          "bounds.y": { "source": "current.top" },
+          "bounds.width": { "source": "current.width" },
+          "bounds.height": { "source": "current.height" },
+          "bounds.revision": { "source": "current.version", "required": false }
+        }
+      }
+    }
+  }
+}
+```
+
+目标路径和 source 均是安全的点分字段路径；`required` 默认为 `true`。缺失必需来源时在调用
+Gateway 前失败，未知结果字段、非法 bounds 和 `applied !== true` 也不会成为成功结果。配置
+热重载通过 `DesktopApplicationCommandRuntime.configure()` 替换后续调用使用的 Binding；
+进行中的调用继续使用开始时解析出的 Binding。
+
+窗口 Binding 必须把 `target.id` 作为必需参数传给外围；`session.window.place` 还必须传递必需的
+`target.expectedRevision`，且 Command 本身缺少该 revision 时直接拒绝。进程内 Scheduler 只处理
+本应用并发，外围执行端仍须用 revision 拒绝已漂移的窗口状态。
+
+`ConfiguredApplicationOperationGateway` 是唯一外围端口：
+
+```ts
+interface ConfiguredApplicationOperationGateway {
+  invoke(operation, argumentsValue, { signal }): Promise<ApplicationData>;
+}
+```
+
+后续 Task Manager、MCP 或其他适配器只需实现该端口。操作名及参数/结果字段全部由配置决定，
+因此 Session Monitor 更改接口时不需要修改 Definition 或 Runtime。
+
 ## 首版实现与后续顺序
 
 当前已实现：
@@ -267,12 +329,13 @@ mcp.call-window-tool
 - `ApplicationCommandRuntime`：默认独占写、`commandId` 幂等和有界状态；
 - `AgentApplicationCommandBridge`：Proposal 编译、Result 投影和 Receipt；
 - 同资源并发读、读写公平、无关资源并行、默认全局冲突、幂等和桥接隔离测试。
+- Desktop `session.window.bounds/place` Definition、配置字段投影、Gateway 端口与热替换测试。
 
 后续按以下顺序接应用：
 
-1. Session Monitor 声明并实现受限 `sessionWindow` capability；
-2. Task Manager 增加语义化窗口 Query/Command Handler；
-3. Desktop main 注册 `session.window.bounds` 与 `session.window.place` Definition；
+1. 选择 Task Manager、MCP 或其他外围适配器实现 `ConfiguredApplicationOperationGateway`；
+2. 在配置中绑定外围提供的窗口 capability 操作名和字段；
+3. Desktop main 注入该 Gateway（Definition 与应用组合根已经实现）；
 4. 增加确定性窗口意图入口；
 5. 扩展 Router Agent 为 `character/session/command/confirm/no-match` Suggestion；
 6. 将 Receipt 投影给现有 Char/表情/TTS 展示链；

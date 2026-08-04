@@ -45,6 +45,8 @@ JSON 配置热重载、重连和连接测试见 [MCP 服务生命周期与角色
 无需 Agent 的应用操作和未来 Router Command Suggestion 统一建立在
 [Application Command Framework](docs/application-command-framework.md) 上；具体窗口、Session、
 文件与 MCP 能力仍由应用注册，框架本身不持有这些业务类型。
+Desktop 首组 `session.window.bounds/place` Definition 使用 `applicationCommands.bindings` 将
+语义参数投影到注入式 Gateway，不固定 Session Monitor 的方法或字段。
 
 Task Manager 首个内存版本位于 `task-manager/`。默认由 DesktopChar 根据
 `taskManager.sessionMonitorMarkerPath` 托管启动，也可设置 `SESSION_MONITOR_MARKER` 后独立运行

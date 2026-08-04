@@ -132,6 +132,13 @@ Runtime 仍独占当前 emotion 和复位时机；Renderer 只能执行
 
 仓库根目录的 `desktop-char.config.example.json` 同时是可复制样例和默认预设。应用先读取该预设，再叠加设备本地的用户配置；因此用户配置可以只写需要覆盖的字段，未声明字段会持续跟随预设。若预设文件未随部署提供，才回退到代码内与预设等价的硬编码初始值。自动测试要求实际预设的归一化结果与硬编码初始值完全一致，任一侧单独修改都会使测试失败。
 
+`applicationCommands.bindings` 保存应用语义 Query/Command 到外围 Gateway 的字段绑定。每个
+Binding 指定不透明 `operation`、请求目标字段到语义 source 的映射，以及规范结果字段到外围
+source 的映射；`required: false` 表示来源可以缺失。字段路径只允许安全的点分名称，配置不会
+注册脚本、模块、URL 或任意表达式。当前首组类型为 `session.window.bounds` 和
+`session.window.place`，完整结构与边界见
+[Application Command Framework](application-command-framework.md#session-窗口-definition-与配置绑定)。
+
 开发期用户配置仍为 `desktop-char.config.json`；产品打包后默认有效文件改为：
 
 ```text

@@ -260,9 +260,9 @@ Auto InteractionMessage
 ```
 
 UI、快捷键和确定性规则可以直接生成 `ApplicationCommand`，不经过 Router 或 Proposal Bridge。
-首版 Runtime 已实现框架但尚未扩展 Router Result，也未注册 `session.window.place`。窗口操作
-接入时，Task Manager 只是具体 Handler/Gateway：它执行语义化命令，不解析自然语言，不生成
-Command。Session review 继续是只读 Query；Query 和 Command 共享资源访问 Scheduler，同一
+Runtime 及 Desktop `session.window.bounds/place` Definition 已实现，但尚未扩展 Router Result，
+也尚未注入可执行的外围 Gateway。窗口操作接入时，Task Manager 只是可选 Gateway：它执行
+配置绑定的操作，不解析自然语言，不生成 Command。Session review 继续是只读 Query；Query 和 Command 共享资源访问 Scheduler，同一
 Session 窗口的读写冲突由资源键协调，不复用消息 mailbox 或 `TaskCommand`。
 
 WorkAgent 暂不引入。文件/MCP/编码等开放式工作仍发送给明确选择或 Router 选中的已有
@@ -830,5 +830,7 @@ Char Agent 的建议只是用户可见内容，不自动转化为 TaskCommand。
    Session 的提交命令，并继续覆盖原有路由、Managed 与解绑链路。
 13.（已完成）引入独立 `application-command-runtime` 引擎框架：Query/Command 共享公平
    资源级读写 Scheduler，权威 Command 可由应用直接执行，Agent Proposal/Receipt 经 Bridge
-   隔离。具体 Session 窗口 capability、Router command Suggestion 和 Task Manager Handler
-   仍按上述顺序待接入。
+   隔离。
+14.（已完成）增加 Desktop `session.window.bounds/place` Definition 与 Configured Operation
+   Gateway：操作名、输入字段和结果投影由 `applicationCommands.bindings` 配置，不依赖具体
+   Session Monitor 接口。外围 Gateway 注入、Router command Suggestion 仍待接入。

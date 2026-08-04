@@ -172,7 +172,8 @@ application-command-runtime -> no domain package dependency
 8. 已接入角色动态 ExpressionCatalog、确定性 Resolver、performance-planning v2、Adapter/Transport 分层和 Runtime `expressionKey` 主状态；Mao 八项资源均有可达性回归。Qwen3.5-2B 是可选 Transport 后端，关闭或失败时使用确定性目录规则；v1 `emotionBindings` 只作旧角色兼容。安全表情插值、大目录 shortlist、动态动作 schema 和 3070 并发压测仍待实现。
 9. 已引入引擎层 `application-command-runtime`：Query/Command 共享资源级读写 Scheduler，默认
    Query 并发读、Command 独占写，具体 Definition 可缩小冲突键；权威 Command 可直接执行，
-   Agent Proposal/Receipt 经独立 Bridge 接入。当前只完成框架和测试，尚未注册 Session 窗口
-   等应用操作，也未引入 WorkAgent。
+   Agent Proposal/Receipt 经独立 Bridge 接入。Desktop 已注册 `session.window.bounds/place`
+   Definition，并通过配置完成外围操作名、参数和结果字段绑定；具体 Gateway 与 Router 尚未
+   接入，也未引入 WorkAgent。
 
 外部 Agent 可通过角色接入 MCP 或兼容的 `127.0.0.1` HTTP 控制面发送完整 `PerformancePlan` 和中断请求，由 Electron main 转为白名单 IPC，再由 renderer 提交 Runtime；Agent 通过 Runtime snapshot 判断实际播放完成。角色接入 MCP 工具与动态服务管理见 [MCP 服务生命周期](mcp-services.md)，HTTP 请求结构见 [外部 Agent 本地 HTTP 接入指南](external-agent-http.md)。
