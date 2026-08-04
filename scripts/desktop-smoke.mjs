@@ -291,7 +291,7 @@ try {
   await page.locator('[data-item-id="service-connection-test"]').click();
   await page.locator('body[data-context-menu="closed"][data-tts-mcp-test="passed"][data-character-mcp-test="passed"][data-speech-bubble="complete"]').waitFor({ timeout: 5_000 });
   const mcpTestBubble = await page.locator('#speech-bubble').textContent();
-  if (!mcpTestBubble?.includes('表现推理：未启用')
+  if (!mcpTestBubble?.includes('表情动作推理：未启用')
     || !mcpTestBubble.includes('外部角色控制：通过')
     || !mcpTestBubble.includes('文本语音合成：通过')
     || !/外部角色控制：通过（\d+ ms）。\n文本语音合成：通过/.test(mcpTestBubble)) {

@@ -253,7 +253,7 @@ const mcpServices = createMcpServicesController({
 const applicationServiceTests = createApplicationServiceTestRegistry([
   {
     id: 'performance-inference',
-    label: '表现推理',
+    label: '表情动作推理',
     enabled: () => performanceModel.snapshot().enabled,
     test: () => performanceModel.testConnection(),
   },

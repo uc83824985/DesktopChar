@@ -1804,7 +1804,7 @@ function submitBubbleDemo(mode: SpeechBubbleMode): void {
     ? '完整显示：文本会立即完整出现。'
     : mode === 'stream'
       ? '流式显示：文本会跟随播放进度逐步出现，并保持稳定的自动换行。'
-      : 'KTV 高亮会随播放时点移动。完整文本保持稳定换行布局。';
+      : '高亮显示会随播放时点移动。完整文本保持稳定换行布局。';
   runtime.dispatch({ type: 'plan.submitted', plan: { id: `bubble-${mode}-${suffix}`, segments: [{
     id: `bubble-segment-${suffix}`,
     sequence: 0,
@@ -1813,7 +1813,7 @@ function submitBubbleDemo(mode: SpeechBubbleMode): void {
     bubble: mode === 'karaoke' ? {
       mode,
       cues: [
-        { text: 'KTV 高亮', atMs: 0, durationMs: 550 },
+        { text: '高亮显示', atMs: 0, durationMs: 550 },
         { text: '会随播放时点', atMs: 550, durationMs: 650 },
         { text: '移动。', atMs: 1_200, durationMs: 500 },
         { text: '完整文本保持', atMs: 1_700, durationMs: 700 },
@@ -4128,7 +4128,7 @@ function registerDevelopmentUi(): void {
             invoke: () => setTextDisplayMode('stream'),
           },
           {
-            type: 'radio', id: 'karaoke', label: 'KTV 高亮', selected: textDisplayMode === 'karaoke', enabled,
+            type: 'radio', id: 'karaoke', label: '高亮显示', selected: textDisplayMode === 'karaoke', enabled,
             invoke: () => setTextDisplayMode('karaoke'),
           },
         ],
@@ -4149,7 +4149,7 @@ function registerDevelopmentUi(): void {
         items: [
           {
             type: 'checkbox', id: 'performance-inference-enabled',
-            label: `表现推理 · ${performanceInferencePhaseLabel(performance)}`,
+            label: `表情动作推理 · ${performanceInferencePhaseLabel(performance)}`,
             checked: performance.enabled,
             enabled: !performanceInferenceTransitioning(performance),
             invoke: setPerformanceInferenceEnabled,
