@@ -89,7 +89,7 @@ export async function loadDesktopConfig(options = {}) {
 export function normalizeDesktopConfig(fileConfig = {}, env = {}, options = {}) {
   if (!isRecord(fileConfig)) throw new TypeError('Desktop config root must be an object');
   assertKnownKeys(fileConfig, [
-    '$schema', 'version', 'interaction', 'window', 'agentProviders', 'agentRoles',
+    '$schema', 'version', 'interaction', 'window', 'applicationCommands', 'agentProviders', 'agentRoles',
     'agentHttp', 'taskManager', 'character', 'performanceInference', 'ttsMcp',
     'characterMcp',
   ], 'Desktop config');
@@ -109,6 +109,11 @@ export function normalizeDesktopConfig(fileConfig = {}, env = {}, options = {}) 
   assertKnownKeys(window, ['defaultSize', 'defaultMarginDip', 'alwaysOnTop'], 'window');
   const defaultSize = optionalRecord(window.defaultSize, 'window.defaultSize');
   assertKnownKeys(defaultSize, ['width', 'height'], 'window.defaultSize');
+  const applicationCommands = optionalRecord(fileConfig.applicationCommands, 'applicationCommands');
+  assertKnownKeys(applicationCommands, ['bindings'], 'applicationCommands');
+  const applicationCommandBindings = normalizeApplicationOperationBindings(
+    optionalRecord(applicationCommands.bindings, 'applicationCommands.bindings'),
+  );
   const agentProviders = optionalRecord(fileConfig.agentProviders, 'agentProviders');
   const agentRoles = optionalRecord(fileConfig.agentRoles, 'agentRoles');
   assertKnownKeys(agentRoles, ['char', 'router'], 'agentRoles');
@@ -326,6 +331,9 @@ export function normalizeDesktopConfig(fileConfig = {}, env = {}, options = {}) 
       },
       defaultMarginDip: nonNegative(window.defaultMarginDip, 24, 'window.defaultMarginDip'),
       alwaysOnTop: boolean(window.alwaysOnTop, true, 'window.alwaysOnTop'),
+    },
+    applicationCommands: {
+      bindings: applicationCommandBindings,
     },
     agentProviders: {
       [charProviderName]: charProvider,
@@ -853,6 +861,57 @@ function loopbackHost(value, label) {
 function optionalText(value, label) {
   if (value === undefined || value === null || value === '') return undefined;
   return text(value, label);
+}
+
+function normalizeApplicationOperationBindings(value) {
+  return Object.fromEntries(Object.entries(value).map(([bindingId, bindingValue]) => {
+    const id = text(bindingId, 'applicationCommands binding id');
+    const binding = optionalRecord(bindingValue, `applicationCommands.bindings.${id}`);
+    assertKnownKeys(
+      binding,
+      ['operation', 'arguments', 'result'],
+      `applicationCommands.bindings.${id}`,
+    );
+    return [id, {
+      operation: text(binding.operation, `applicationCommands.bindings.${id}.operation`),
+      arguments: normalizeApplicationOperationFieldRules(
+        optionalRecord(binding.arguments, `applicationCommands.bindings.${id}.arguments`),
+        `applicationCommands.bindings.${id}.arguments`,
+      ),
+      result: normalizeApplicationOperationFieldRules(
+        optionalRecord(binding.result, `applicationCommands.bindings.${id}.result`),
+        `applicationCommands.bindings.${id}.result`,
+      ),
+    }];
+  }));
+}
+
+function normalizeApplicationOperationFieldRules(value, label) {
+  return Object.fromEntries(Object.entries(value).map(([destination, ruleValue]) => {
+    const normalizedDestination = applicationOperationFieldPath(destination, `${label} destination`);
+    const rule = optionalRecord(ruleValue, `${label}.${normalizedDestination}`);
+    assertKnownKeys(rule, ['source', 'required'], `${label}.${normalizedDestination}`);
+    return [normalizedDestination, {
+      source: applicationOperationFieldPath(
+        rule.source,
+        `${label}.${normalizedDestination}.source`,
+      ),
+      ...(rule.required !== undefined
+        ? { required: boolean(rule.required, true, `${label}.${normalizedDestination}.required`) }
+        : {}),
+    }];
+  }));
+}
+
+function applicationOperationFieldPath(value, label) {
+  const result = text(value, label);
+  const invalid = result.split('.').some(segment =>
+    !/^[A-Za-z][A-Za-z0-9_-]*$/u.test(segment)
+    || segment === '__proto__'
+    || segment === 'prototype'
+    || segment === 'constructor');
+  if (invalid) throw new TypeError(`${label} must be a safe dotted field path`);
+  return result;
 }
 
 function conversationSidebarSide(value) {

@@ -43,6 +43,16 @@
         "alwaysOnTop": { "type": "boolean" }
       }
     },
+    "applicationCommands": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "bindings": {
+          "type": "object",
+          "additionalProperties": { "$ref": "#/$defs/applicationOperationBinding" }
+        }
+      }
+    },
     "agentProviders": {
       "type": "object",
       "additionalProperties": { "$ref": "#/$defs/agentProvider" }
@@ -114,6 +124,34 @@
     "characterMcp": { "$ref": "#/$defs/characterMcp" }
   },
   "$defs": {
+    "applicationOperationFieldRule": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["source"],
+      "properties": {
+        "source": {
+          "type": "string",
+          "pattern": "^[A-Za-z][A-Za-z0-9_-]*(\\.[A-Za-z][A-Za-z0-9_-]*)*$"
+        },
+        "required": { "type": "boolean" }
+      }
+    },
+    "applicationOperationBinding": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["operation", "arguments", "result"],
+      "properties": {
+        "operation": { "type": "string", "minLength": 1 },
+        "arguments": {
+          "type": "object",
+          "additionalProperties": { "$ref": "#/$defs/applicationOperationFieldRule" }
+        },
+        "result": {
+          "type": "object",
+          "additionalProperties": { "$ref": "#/$defs/applicationOperationFieldRule" }
+        }
+      }
+    },
     "agentProvider": {
       "oneOf": [
         {

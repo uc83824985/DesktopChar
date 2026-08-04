@@ -84,6 +84,23 @@ test('desktop config owns interaction, window, char agent and character profile 
       conversationSidebar: { preferredSide: 'left' },
     },
     window: { defaultSize: { width: 512, height: 768 }, defaultMarginDip: 16, alwaysOnTop: false },
+    applicationCommands: {
+      bindings: {
+        'session.window.bounds': {
+          operation: 'inspect-conversation-window',
+          arguments: {
+            session: { source: 'target.id' },
+            expected: { source: 'target.expectedRevision', required: false },
+          },
+          result: {
+            x: { source: 'window.left' },
+            y: { source: 'window.top' },
+            width: { source: 'window.width' },
+            height: { source: 'window.height' },
+          },
+        },
+      },
+    },
     agentProviders: {
       'codex-managed': {
         adapter: 'codex-app-server',
@@ -132,6 +149,19 @@ test('desktop config owns interaction, window, char agent and character profile 
   assert.equal(config.interaction.conversationSidebar.preferredSide, 'left');
   assert.deepEqual(config.window.defaultSize, { width: 512, height: 768 });
   assert.equal(config.window.alwaysOnTop, false);
+  assert.deepEqual(config.applicationCommands.bindings['session.window.bounds'], {
+    operation: 'inspect-conversation-window',
+    arguments: {
+      session: { source: 'target.id' },
+      expected: { source: 'target.expectedRevision', required: false },
+    },
+    result: {
+      x: { source: 'window.left' },
+      y: { source: 'window.top' },
+      width: { source: 'window.width' },
+      height: { source: 'window.height' },
+    },
+  });
   assert.equal(config.agentRoles.char.maxConcurrency, 4);
   assert.equal(config.agentRoles.char.provider, 'codex-managed');
   assert.equal(config.agentProviders['codex-managed'].requestTimeoutMs, 90_000);
@@ -217,6 +247,17 @@ test('desktop config path prefers the new bootstrap variable and validates appli
     agentRoles: { router: { maxCandidates: 0 } },
   }), /1 to 50/);
   assert.throws(() => normalizeDesktopConfig({ routing: {} }), /unknown field/);
+  assert.throws(() => normalizeDesktopConfig({
+    applicationCommands: {
+      bindings: {
+        'session.window.bounds': {
+          operation: 'inspect',
+          arguments: { session: { source: '__proto__.id' } },
+          result: {},
+        },
+      },
+    },
+  }), /safe dotted field path/);
   assert.throws(() => normalizeDesktopConfig({
     agentProviders: {
       remote: {
