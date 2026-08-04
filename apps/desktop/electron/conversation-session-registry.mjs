@@ -510,9 +510,11 @@ export function createConversationSessionRegistry(options = {}) {
       source: stale ? 'cached' : 'session-monitor',
       stale,
       completion: sourceReview.state.completion,
-      ...(sourceReview.source.screenChangedAtUtc
-        ? { revision: sourceReview.source.screenChangedAtUtc }
-        : {}),
+      ...(Number.isInteger(sourceReview.source.completionRevision)
+        ? { revision: `completion:${sourceReview.source.completionRevision}` }
+        : sourceReview.source.screenChangedAtUtc
+          ? { revision: sourceReview.source.screenChangedAtUtc }
+          : {}),
       ...(sourceReview.source.observedAtUtc
         ? { observedAtUtc: sourceReview.source.observedAtUtc }
         : {}),

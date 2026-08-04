@@ -568,6 +568,28 @@ function normalizeSession(value) {
       ['waiting_input', 'active', 'idle_unknown', 'unknown', 'closed'],
       'session agentState',
     ),
+    ...(optionalText(value.agentStateSource)
+      ? {
+          agentStateSource: enumText(
+            value.agentStateSource,
+            ['codex_rollout', 'terminal'],
+            'session agentStateSource',
+          ),
+        }
+      : {}),
+    ...(optionalText(value.agentStateChangedAtUtc)
+      ? { agentStateChangedAtUtc: optionalText(value.agentStateChangedAtUtc) }
+      : {}),
+    ...(Number.isInteger(value.turnRevision) && value.turnRevision >= 0
+      ? { turnRevision: value.turnRevision }
+      : {}),
+    ...(optionalText(value.submissionId) ? { submissionId: optionalText(value.submissionId) } : {}),
+    ...(optionalText(value.activeSubmissionId)
+      ? { activeSubmissionId: optionalText(value.activeSubmissionId) }
+      : {}),
+    ...(Number.isInteger(value.completionRevision) && value.completionRevision >= 0
+      ? { completionRevision: value.completionRevision }
+      : {}),
     ...(optionalText(value.title) ? { title: optionalText(value.title) } : {}),
     ...(optionalText(value.workDir) ? { workDir: optionalText(value.workDir) } : {}),
     ...(optionalText(value.lastVisibleNonEmptyLine, true)
@@ -649,6 +671,25 @@ function normalizeEvent(value, instanceId) {
     ...(optionalText(value.sourceRevision)
       ? { sourceRevision: boundedTail(value.sourceRevision, 200) }
       : {}),
+    ...(optionalText(value.agentStateSource)
+      ? {
+          agentStateSource: enumText(
+            value.agentStateSource,
+            ['codex_rollout', 'terminal'],
+            'Task Manager event agentStateSource',
+          ),
+        }
+      : {}),
+    ...(Number.isInteger(value.turnRevision) && value.turnRevision >= 0
+      ? { turnRevision: value.turnRevision }
+      : {}),
+    ...(optionalText(value.submissionId) ? { submissionId: optionalText(value.submissionId) } : {}),
+    ...(optionalText(value.activeSubmissionId)
+      ? { activeSubmissionId: optionalText(value.activeSubmissionId) }
+      : {}),
+    ...(Number.isInteger(value.completionRevision) && value.completionRevision >= 0
+      ? { completionRevision: value.completionRevision }
+      : {}),
     ...(optionalText(value.title) ? { title: boundedTail(value.title, 300) } : {}),
     ...(optionalText(value.lastVisibleLine, true)
       ? { lastVisibleLine: boundedTail(value.lastVisibleLine, 500) }
@@ -716,6 +757,27 @@ function normalizeSessionReview(value) {
         : {}),
       ...(optionalText(source.observedAtUtc)
         ? { observedAtUtc: optionalText(source.observedAtUtc) }
+        : {}),
+      ...(optionalText(source.agentStateSource)
+        ? {
+            agentStateSource: enumText(
+              source.agentStateSource,
+              ['codex_rollout', 'terminal'],
+              'Task Manager review agentStateSource',
+            ),
+          }
+        : {}),
+      ...(Number.isInteger(source.turnRevision) && source.turnRevision >= 0
+        ? { turnRevision: source.turnRevision }
+        : {}),
+      ...(optionalText(source.submissionId)
+        ? { submissionId: optionalText(source.submissionId) }
+        : {}),
+      ...(optionalText(source.activeSubmissionId)
+        ? { activeSubmissionId: optionalText(source.activeSubmissionId) }
+        : {}),
+      ...(Number.isInteger(source.completionRevision) && source.completionRevision >= 0
+        ? { completionRevision: source.completionRevision }
         : {}),
     },
     content: {

@@ -10,7 +10,7 @@ import {
   SessionMonitorClientError,
 } from './session-monitor-client.mjs';
 
-test('Session Monitor client discovers v4 capability and submits UTF-8 through bearer auth', async () => {
+test('Session Monitor client consumes v5 structured observation and submits UTF-8', async () => {
   const temporaryDirectory = await mkdtemp(path.join(os.tmpdir(), 'desktop-char-monitor-client-'));
   const markerPath = path.join(temporaryDirectory, 'session_monitor.json');
   const tokenPath = path.join(temporaryDirectory, 'session_monitor_token.txt');
@@ -53,7 +53,7 @@ test('Session Monitor client discovers v4 capability and submits UTF-8 through b
   try {
     await writeFile(tokenPath, `${expectedToken}\n`, 'utf8');
     await writeFile(markerPath, JSON.stringify({
-      version: 4,
+      version: 5,
       role: 'session_monitor',
       intervalMs: 1_000,
       httpBaseUrl: `http://127.0.0.1:${address.port}`,
@@ -64,15 +64,29 @@ test('Session Monitor client discovers v4 capability and submits UTF-8 through b
           modes: ['insert', 'submit'],
           maxTextChars: 32_768,
         },
+        sessionObservation: {
+          enabled: true,
+          structuredCodexRollout: true,
+          fields: [
+            'agentStateSource', 'turnRevision', 'submissionId', 'activeSubmissionId',
+            'completionRevision', 'latestCompletedReply',
+          ],
+        },
       },
     }), 'utf8');
     const client = createSessionMonitorClient({ markerPath });
     const discovery = await client.discover();
-    assert.equal(discovery.markerVersion, 4);
+    assert.equal(discovery.markerVersion, 5);
+    assert.equal(discovery.structuredObservation, true);
     assert.equal('token' in discovery, false);
     const [listed] = await client.listSessions();
     assert.equal(listed.lastVisibleText, '任务处理中');
     assert.equal(listed.agent, 'Codex');
+    assert.equal(listed.agentStateSource, 'codex_rollout');
+    assert.equal(listed.turnRevision, 8);
+    assert.equal(listed.completionRevision, 7);
+    assert.equal(listed.activeSubmissionId, 'turn-8');
+    assert.equal(listed.latestCompletedReply.text, '上一轮完成');
     assert.equal((await client.getSession('session-a')).agentState, 'active');
     assert.deepEqual(await client.submitInput('session-a', '继续检查 UTF-8：你好'), {
       sessionId: 'session-a',
@@ -132,6 +146,25 @@ function session() {
     state: 'running',
     monitorState: 'observed',
     agentState: 'active',
+    agentStateSource: 'codex_rollout',
+    agentStateChangedAtUtc: '2026-07-29T10:00:00Z',
+    turnRevision: 8,
+    submissionId: 'turn-8',
+    activeSubmissionId: 'turn-8',
+    completionRevision: 7,
+    latestCompletedReply: {
+      source: 'codex_rollout',
+      submissionId: 'turn-7',
+      completionRevision: 7,
+      startedAtUtc: '2026-07-29T09:59:00Z',
+      completedAtUtc: '2026-07-29T09:59:02Z',
+      durationMs: 2_000,
+      timeToFirstTokenMs: 300,
+      text: '上一轮完成',
+      textHash: 'REPLY-7',
+      originalTextLength: 5,
+      textTruncated: false,
+    },
     agent: 'Codex',
     desiredTitle: '测试会话',
     workDir: 'C:\\workspace',

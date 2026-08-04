@@ -81,7 +81,11 @@ test('command idempotency prevents repeated input and conflicts fail closed', as
 
 test('waiting-input editor changes never masquerade as task completion', async () => {
   const monitor = new FakeMonitor(
-    session({ agentState: 'waiting_input', hash: 'A', changed: 1, text: '> ' }),
+    session({
+      agentState: 'waiting_input', hash: 'A', changed: 1, text: '> ',
+      turnRevision: 3, completionRevision: 3, submissionId: 'turn-3',
+      reply: structuredReply('turn-3', 3, '上一轮'),
+    }),
   );
   let now = 1_000;
   const runtime = createTaskManagerRuntime({
@@ -100,6 +104,10 @@ test('waiting-input editor changes never masquerade as task completion', async (
     hash: 'B',
     changed: 2,
     text: '> 这段文字只进入了输入框',
+    turnRevision: 3,
+    completionRevision: 3,
+    submissionId: 'turn-3',
+    reply: structuredReply('turn-3', 3, '上一轮'),
   });
   await runtime.pollOnce();
   await runtime.pollOnce();
@@ -108,10 +116,49 @@ test('waiting-input editor changes never masquerade as task completion', async (
 
   now = 6_001;
   await runtime.pollOnce();
-  const [failed] = runtime.eventsAfter().events;
-  assert.equal(failed.type, 'task-failed');
-  assert.match(failed.error, /did not enter active state/);
-  assert.equal(runtime.getSnapshot().commands[0].status, 'failed');
+  assert.equal(runtime.eventsAfter().events.length, 0);
+  assert.equal(runtime.getSnapshot().commands[0].status, 'activation-unconfirmed');
+  assert.equal(runtime.getSnapshot().commands[0].activationUnconfirmedAtMs, 6_001);
+  assert.equal(runtime.getSnapshot().activeObservationCount, 1);
+
+  monitor.current = session({
+    agentState: 'active', hash: 'C', changed: 3, text: '◦ Working',
+    turnRevision: 4, completionRevision: 3, submissionId: 'turn-4',
+    activeSubmissionId: 'turn-4', reply: structuredReply('turn-3', 3, '上一轮'),
+  });
+  await runtime.pollOnce();
+  monitor.current = session({
+    agentState: 'waiting_input', hash: 'D', changed: 4, text: '> ',
+    turnRevision: 4, completionRevision: 4, submissionId: 'turn-4',
+    reply: structuredReply('turn-4', 4, '编辑后任务完成'),
+  });
+  await runtime.pollOnce();
+  const [completed] = runtime.eventsAfter().events;
+  assert.equal(completed.type, 'task-completed');
+  assert.equal(completed.latestReply, '编辑后任务完成');
+});
+
+test('structured completion closes a command even when polling misses active state and terminal overlap', async () => {
+  const monitor = new FakeMonitor(session({
+    agentState: 'waiting_input', hash: 'A', changed: 1, text: '旧画面',
+    turnRevision: 10, completionRevision: 10, submissionId: 'turn-10',
+    reply: structuredReply('turn-10', 10, '旧回复'),
+  }));
+  const runtime = createTaskManagerRuntime({ monitor });
+  await runtime.pollOnce();
+  await runtime.submitCommand(command('structured-fast', '不会保留在可见尾部'));
+
+  monitor.current = session({
+    agentState: 'waiting_input', hash: 'Z', changed: 9, text: '仅剩新的终端尾部',
+    turnRevision: 11, completionRevision: 11, submissionId: 'turn-11',
+    reply: structuredReply('turn-11', 11, '结构化最终回复'),
+  });
+  await runtime.pollOnce();
+
+  const [completed] = runtime.eventsAfter().events;
+  assert.equal(completed.type, 'task-completed');
+  assert.equal(completed.latestReply, '结构化最终回复');
+  assert.equal(runtime.getSnapshot().activeObservationCount, 0);
 });
 
 test('a fast Codex reply can complete when polling misses the active state', async () => {
@@ -349,7 +396,7 @@ test('session review returns a fresh bounded snapshot without advancing its pass
     agentState: 'waiting_input',
     hash: 'A',
     changed: 1,
-    text: '› 已有问题\n\n• 已有最后回复\n第二行\n\n› ',
+    text: '› 已有问题\n\n• 已有最后回复\n第二行\n\n› Improve documentation in @filename',
   }));
   const runtime = createTaskManagerRuntime({ monitor, now: () => 8_500 });
   await runtime.pollOnce();
@@ -377,8 +424,8 @@ test('session review returns a fresh bounded snapshot without advancing its pass
       observedAtUtc: '2026-07-29T10:00:11Z',
     },
     content: {
-      lastVisibleLine: '›',
-      visibleTextTail: '› 已有问题\n\n• 已有最后回复\n第二行\n\n› ',
+      lastVisibleLine: '› Improve documentation in @filename',
+      visibleTextTail: '› 已有问题\n\n• 已有最后回复\n第二行\n\n› Improve documentation in @filename',
       latestReply: '已有最后回复\n第二行',
     },
   });
@@ -424,6 +471,31 @@ test('passive watch conservatively recovers a fast Codex turn missed between pol
 
   await runtime.pollOnce();
   assert.equal(runtime.eventsAfter().events.length, 1);
+});
+
+test('passive watch uses completion revision once and does not require terminal overlap', async () => {
+  const monitor = new FakeMonitor(session({
+    agentState: 'waiting_input', hash: 'A', changed: 1, text: '旧终端尾部',
+    turnRevision: 20, completionRevision: 20, submissionId: 'turn-20',
+    reply: structuredReply('turn-20', 20, '旧结构化回复'),
+  }));
+  const runtime = createTaskManagerRuntime({ monitor });
+  await runtime.pollOnce();
+  await runtime.watchSession('session-a');
+
+  monitor.current = session({
+    agentState: 'waiting_input', hash: 'B', changed: 2, text: '完全不重叠的新终端尾部',
+    turnRevision: 21, completionRevision: 21, submissionId: 'turn-21',
+    reply: structuredReply('turn-21', 21, '被动观察的新回复'),
+  });
+  await runtime.pollOnce();
+  await runtime.pollOnce();
+
+  const events = runtime.eventsAfter().events;
+  assert.equal(events.length, 1);
+  assert.equal(events[0].type, 'external-turn-completed');
+  assert.equal(events[0].latestReply, '被动观察的新回复');
+  assert.equal(events[0].completionRevision, 21);
 });
 
 test('passive polling recovers a completed turn after the terminal tail loses overlap', async () => {
@@ -641,12 +713,22 @@ function session({
   changed,
   observed = changed,
   text = '处理中',
+  turnRevision,
+  completionRevision,
+  submissionId,
+  activeSubmissionId,
+  reply,
 }) {
   return {
     sessionId: 'session-a',
     state: 'running',
     monitorState: 'observed',
     agentState,
+    ...(turnRevision !== undefined ? { agentStateSource: 'codex_rollout', turnRevision } : {}),
+    ...(completionRevision !== undefined ? { completionRevision } : {}),
+    ...(submissionId ? { submissionId } : {}),
+    ...(activeSubmissionId ? { activeSubmissionId } : {}),
+    ...(reply ? { latestCompletedReply: reply } : {}),
     agent: 'Codex',
     title: '测试会话',
     workDir: 'C:\\workspace',
@@ -655,6 +737,17 @@ function session({
     lastVisibleTextHash: hash,
     lastScreenChangedAtUtc: `2026-07-29T10:00:0${changed}Z`,
     lastObservedAtUtc: `2026-07-29T10:00:1${observed}Z`,
+  };
+}
+
+function structuredReply(submissionId, completionRevision, text) {
+  return {
+    source: 'codex_rollout',
+    submissionId,
+    completionRevision,
+    text,
+    textHash: `reply-${completionRevision}`,
+    textTruncated: false,
   };
 }
 

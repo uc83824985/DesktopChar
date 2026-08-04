@@ -189,6 +189,7 @@ test('session review combines the binding snapshot with bounded records captured
   ]);
   assert.equal(review.source.kind, 'session-monitor');
   assert.equal(review.source.stale, false);
+  assert.equal(review.source.revision, 'completion:7');
 
   reviewFailure = new Error('monitor disconnected');
   const cached = await registry.reviewSession(bound.sessionId);
@@ -257,6 +258,7 @@ function taskSessionReview(sessionId, latestReply, capturedAtMs) {
       hash: `hash-${capturedAtMs}`,
       screenChangedAtUtc: '2026-08-03T10:00:00Z',
       observedAtUtc: '2026-08-03T10:00:01Z',
+      completionRevision: 7,
     },
     content: {
       lastVisibleLine: '›',

@@ -179,7 +179,10 @@ export function createTaskManagerRuntime(options) {
     const previous = observations.get(command.sessionId);
     if (previous) {
       const previousCommand = commands.get(previous.commandId);
-      if (previousCommand?.status === 'observing') previousCommand.status = 'superseded';
+      if (previousCommand
+        && ['observing', 'activation-unconfirmed'].includes(previousCommand.status)) {
+        previousCommand.status = 'superseded';
+      }
     }
     record.status = 'observing';
     record.submittedAtMs = now();
@@ -191,8 +194,13 @@ export function createTaskManagerRuntime(options) {
       generation,
       beforeVisibleTextHash: detail.lastVisibleTextHash,
       beforeScreenChangedAtUtc: detail.lastScreenChangedAtUtc,
+      beforeTurnRevision: detail.turnRevision,
+      beforeCompletionRevision: detail.completionRevision,
+      beforeCompletedSubmissionId: detail.latestCompletedReply?.submissionId,
+      observedSubmissionId: undefined,
       observedActive:
         detail.agentState === 'active' || submission?.agentState === 'active',
+      activationUnconfirmed: false,
       observedChange: false,
       stableWaitingCount: 0,
       lastWaitingFingerprint: undefined,
@@ -339,10 +347,20 @@ export function createTaskManagerRuntime(options) {
     if (changed) observation.observedChange = true;
     if (session.agentState === 'active') observation.observedActive = true;
     const command = commands.get(observation.commandId);
-    if (!command || command.status !== 'observing') {
+    if (!command || !['observing', 'activation-unconfirmed'].includes(command.status)) {
       observations.delete(observation.sessionId);
       return;
     }
+    observeStructuredSubmission(observation, session);
+    if (observation.observedActive && command.status === 'activation-unconfirmed') {
+      command.status = 'observing';
+    }
+    const structuredCompletion = structuredCompletionForObservation(observation, session);
+    if (structuredCompletion) {
+      await completeCommand(observation, command, session, structuredCompletion.text);
+      return;
+    }
+    const structuredObservation = hasStructuredObservation(observation, session);
     const fastCompletionVisible =
       observation.observedChange
       && session.agentState === 'waiting_input'
@@ -352,15 +370,13 @@ export function createTaskManagerRuntime(options) {
       observation.lastWaitingFingerprint = undefined;
       observation.lastWaitingObservedAtUtc = undefined;
       if (now() - command.submittedAtMs >= activationTimeoutMs) {
-        command.status = 'failed';
-        command.completedAtMs = now();
-        command.error =
-          `Session did not enter active state within ${activationTimeoutMs} ms after submission`;
-        emitTaskEvent('task-failed', command, session, 'failed', command.error);
-        observations.delete(observation.sessionId);
+        observation.activationUnconfirmed = true;
+        command.status = 'activation-unconfirmed';
+        command.activationUnconfirmedAtMs ??= now();
       }
       return;
     }
+    if (structuredObservation) return;
     if (!observation.observedChange || session.agentState !== 'waiting_input') {
       observation.stableWaitingCount = 0;
       observation.lastWaitingFingerprint = undefined;
@@ -389,6 +405,10 @@ export function createTaskManagerRuntime(options) {
     }
     if (observation.stableWaitingCount < stableWaitingPolls) return;
 
+    await completeCommand(observation, command, session);
+  }
+
+  async function completeCommand(observation, command, session, structuredReply) {
     const artifact = command.resultArtifact;
     if (artifact) {
       try {
@@ -405,7 +425,9 @@ export function createTaskManagerRuntime(options) {
     }
     command.status = 'completed';
     command.completedAtMs = now();
-    const latestReply = latestCompletedReply(session);
+    const latestReply = structuredReply
+      ? boundedTail(structuredReply, 4_000)
+      : latestCompletedReply(session);
     command.result = {
       sessionId: command.sessionId,
       submissionGeneration: command.submissionGeneration,
@@ -429,6 +451,36 @@ export function createTaskManagerRuntime(options) {
     observations.delete(observation.sessionId);
   }
 
+  function observeStructuredSubmission(observation, session) {
+    if (!revisionAdvanced(session.turnRevision, observation.beforeTurnRevision)) return;
+    const candidate = session.activeSubmissionId ?? session.submissionId;
+    if (!candidate || candidate === observation.beforeCompletedSubmissionId) return;
+    observation.observedSubmissionId ??= candidate;
+    observation.observedActive = true;
+  }
+
+  function structuredCompletionForObservation(observation, session) {
+    if (!hasStructuredObservation(observation, session)) return undefined;
+    if (!revisionAdvanced(session.turnRevision, observation.beforeTurnRevision)) return undefined;
+    if (!revisionAdvanced(session.completionRevision, observation.beforeCompletionRevision)) {
+      return undefined;
+    }
+    const reply = session.latestCompletedReply;
+    if (!reply || reply.completionRevision !== session.completionRevision) return undefined;
+    if (reply.submissionId === observation.beforeCompletedSubmissionId) return undefined;
+    if (observation.observedSubmissionId
+      && reply.submissionId !== observation.observedSubmissionId) return undefined;
+    observation.observedSubmissionId ??= reply.submissionId;
+    return reply;
+  }
+
+  function hasStructuredObservation(observation, session) {
+    return Number.isInteger(observation.beforeTurnRevision)
+      && Number.isInteger(observation.beforeCompletionRevision)
+      && Number.isInteger(session.turnRevision)
+      && Number.isInteger(session.completionRevision);
+  }
+
   function advancePassiveWatch(watch, session) {
     if (session.state !== 'running' || session.monitorState !== 'observed') {
       resetPassiveWatch(watch, session, 'baseline');
@@ -436,6 +488,12 @@ export function createTaskManagerRuntime(options) {
     }
     if (watch.phase === 'baseline' || watch.phase === 'command') {
       resetPassiveWatch(watch, session);
+      return;
+    }
+
+    const structuredCompletion = structuredCompletionForWatch(watch, session);
+    if (structuredCompletion) {
+      completePassiveTurn(watch, session, structuredCompletion.text);
       return;
     }
 
@@ -474,9 +532,11 @@ export function createTaskManagerRuntime(options) {
     completePassiveTurn(watch, session);
   }
 
-  function completePassiveTurn(watch, session) {
+  function completePassiveTurn(watch, session, structuredReply) {
     watch.turnSequence++;
-    const latestReply = latestCompletedReply(session);
+    const latestReply = structuredReply
+      ? boundedTail(structuredReply, 4_000)
+      : latestCompletedReply(session);
     appendEvent({
       sessionId: session.sessionId,
       type: 'external-turn-completed',
@@ -493,8 +553,19 @@ export function createTaskManagerRuntime(options) {
         ? { visibleTextTail: boundedTail(session.lastVisibleText, maxVisibleTextTailChars) }
         : {}),
       ...(latestReply ? { latestReply } : {}),
+      ...structuredEventFacts(session),
     });
     resetPassiveWatch(watch, session);
+  }
+
+  function structuredCompletionForWatch(watch, session) {
+    if (!revisionAdvanced(session.completionRevision, watch.baselineCompletionRevision)) {
+      return undefined;
+    }
+    const reply = session.latestCompletedReply;
+    if (!reply || reply.completionRevision !== session.completionRevision) return undefined;
+    if (reply.submissionId === watch.baselineCompletedSubmissionId) return undefined;
+    return reply;
   }
 
   function countStablePassiveWaiting(watch, session) {
@@ -515,7 +586,7 @@ export function createTaskManagerRuntime(options) {
 
   async function settleUnavailable(observation, reason, session = sessions.get(observation.sessionId)) {
     const command = commands.get(observation.commandId);
-    if (command?.status === 'observing') {
+    if (command && ['observing', 'activation-unconfirmed'].includes(command.status)) {
       command.status = 'unavailable';
       command.completedAtMs = now();
       command.error = reason;
@@ -539,11 +610,14 @@ export function createTaskManagerRuntime(options) {
       ...(session.lastVisibleText
         ? { visibleTextTail: boundedTail(session.lastVisibleText, maxVisibleTextTailChars) }
         : {}),
+      ...structuredEventFacts(session),
     });
   }
 
   function emitTaskEvent(type, command, session, status, error) {
-    const latestReply = session ? latestCompletedReply(session) : undefined;
+    const latestReply = status === 'completed' && session
+      ? latestCompletedReply(session)
+      : undefined;
     appendEvent({
       sessionId: command.sessionId,
       type,
@@ -561,6 +635,7 @@ export function createTaskManagerRuntime(options) {
         ? { visibleTextTail: boundedTail(session.lastVisibleText, maxVisibleTextTailChars) }
         : {}),
       ...(latestReply ? { latestReply } : {}),
+      ...(session ? structuredEventFacts(session) : {}),
       ...(command.resultArtifact && status === 'completed'
         ? {
             resultArtifactPath: command.resultArtifact.path,
@@ -714,6 +789,9 @@ export function createTaskManagerRuntime(options) {
       baselineSourceHash: undefined,
       baselineSourceRevision: undefined,
       baselineCompletedTurnIdentity: undefined,
+      baselineTurnRevision: undefined,
+      baselineCompletionRevision: undefined,
+      baselineCompletedSubmissionId: undefined,
       observedActive: false,
       observedChange: false,
       stableWaitingCount: 0,
@@ -731,6 +809,9 @@ export function createTaskManagerRuntime(options) {
     watch.baselineSourceHash = session.lastVisibleTextHash;
     watch.baselineSourceRevision = session.lastScreenChangedAtUtc;
     watch.baselineCompletedTurnIdentity = completedTurnIdentity(session);
+    watch.baselineTurnRevision = session.turnRevision;
+    watch.baselineCompletionRevision = session.completionRevision;
+    watch.baselineCompletedSubmissionId = session.latestCompletedReply?.submissionId;
     watch.observedActive = watch.phase === 'active';
     watch.observedChange = false;
     clearPassiveWaiting(watch);
@@ -788,6 +869,7 @@ export function createTaskManagerRuntime(options) {
           ? { screenChangedAtUtc: session.lastScreenChangedAtUtc }
           : {}),
         ...(session.lastObservedAtUtc ? { observedAtUtc: session.lastObservedAtUtc } : {}),
+        ...structuredEventFacts(session),
       },
       content: {
         ...(session.lastVisibleNonEmptyLine
@@ -816,6 +898,10 @@ export class TaskManagerError extends Error {
 
 function normalizeSession(value) {
   if (!record(value)) throw new TaskManagerError('invalid-monitor-data', 'Session must be an object');
+  const latestCompletedReply = value.latestCompletedReply === undefined
+    || value.latestCompletedReply === null
+    ? undefined
+    : normalizeStructuredReply(value.latestCompletedReply);
   return {
     sessionId: nonEmptyText(value.sessionId, 'session.sessionId'),
     state: enumText(value.state, ['running', 'exited', 'closed', 'stale'], 'session.state'),
@@ -829,6 +915,20 @@ function normalizeSession(value) {
       ['waiting_input', 'active', 'idle_unknown', 'unknown', 'closed'],
       'session.agentState',
     ),
+    agentStateSource: optionalEnumText(
+      value.agentStateSource,
+      ['codex_rollout', 'terminal'],
+      'session.agentStateSource',
+    ),
+    agentStateChangedAtUtc: optionalText(value.agentStateChangedAtUtc),
+    turnRevision: optionalNonNegativeInteger(value.turnRevision, 'session.turnRevision'),
+    submissionId: optionalText(value.submissionId),
+    activeSubmissionId: optionalText(value.activeSubmissionId),
+    completionRevision: optionalNonNegativeInteger(
+      value.completionRevision,
+      'session.completionRevision',
+    ),
+    latestCompletedReply,
     agent: optionalText(value.agent),
     title: optionalText(value.title),
     workDir: optionalText(value.workDir),
@@ -840,7 +940,43 @@ function normalizeSession(value) {
   };
 }
 
+function normalizeStructuredReply(value) {
+  if (!record(value)) {
+    throw new TaskManagerError('invalid-monitor-data', 'session.latestCompletedReply must be an object');
+  }
+  if (value.textTruncated !== undefined && typeof value.textTruncated !== 'boolean') {
+    throw new TaskManagerError(
+      'invalid-monitor-data',
+      'session.latestCompletedReply.textTruncated must be a boolean',
+    );
+  }
+  return {
+    source: enumText(
+      value.source,
+      ['codex_rollout'],
+      'session.latestCompletedReply.source',
+    ),
+    submissionId: nonEmptyText(
+      value.submissionId,
+      'session.latestCompletedReply.submissionId',
+    ),
+    completionRevision: monitorNonNegativeInteger(
+      value.completionRevision,
+      'session.latestCompletedReply.completionRevision',
+    ),
+    text: boundedTail(
+      nonEmptyText(value.text, 'session.latestCompletedReply.text', false),
+      12_000,
+    ),
+    textHash: optionalText(value.textHash),
+    textTruncated: typeof value.textTruncated === 'boolean' ? value.textTruncated : undefined,
+  };
+}
+
 function latestCompletedReply(session) {
+  if (session.agentState === 'waiting_input' && session.latestCompletedReply?.text) {
+    return boundedTail(session.latestCompletedReply.text, 4_000);
+  }
   return latestCompletedTurn(session)?.reply;
 }
 
@@ -853,7 +989,7 @@ function latestCompletedTurn(session) {
   const lines = session.lastVisibleText.replaceAll('\r\n', '\n').split('\n');
   let trailingPrompt = lines.length - 1;
   while (trailingPrompt >= 0 && !lines[trailingPrompt]?.trim()) trailingPrompt--;
-  if (trailingPrompt < 0 || !/^\s*[›>]\s*$/u.test(lines[trailingPrompt] ?? '')) {
+  if (trailingPrompt < 0 || !/^\s*[›>](?:\s.*)?$/u.test(lines[trailingPrompt] ?? '')) {
     return undefined;
   }
   let submittedPrompt = -1;
@@ -894,11 +1030,20 @@ function latestCompletedTurn(session) {
 }
 
 function completedTurnIdentity(session) {
+  if (session.latestCompletedReply) {
+    return [
+      session.latestCompletedReply.submissionId,
+      session.latestCompletedReply.completionRevision,
+      session.latestCompletedReply.textHash ?? session.latestCompletedReply.text,
+    ].join('\u0000');
+  }
   const turn = latestCompletedTurn(session);
   return turn ? `${turn.prompt}\u0000${turn.reply}` : undefined;
 }
 
 function changedAfterSubmission(observation, session) {
+  if (revisionAdvanced(session.turnRevision, observation.beforeTurnRevision)) return true;
+  if (revisionAdvanced(session.completionRevision, observation.beforeCompletionRevision)) return true;
   if (
     session.lastVisibleTextHash
     && session.lastVisibleTextHash !== observation.beforeVisibleTextHash
@@ -907,6 +1052,8 @@ function changedAfterSubmission(observation, session) {
 }
 
 function changedAfterPassiveBaseline(watch, session) {
+  if (revisionAdvanced(session.turnRevision, watch.baselineTurnRevision)) return true;
+  if (revisionAdvanced(session.completionRevision, watch.baselineCompletionRevision)) return true;
   if (session.lastVisibleTextHash) {
     return session.lastVisibleTextHash !== watch.baselineSourceHash;
   }
@@ -942,14 +1089,35 @@ function sessionFingerprint(session) {
     session.state,
     session.monitorState,
     session.agentState,
+    session.agentStateSource ?? '',
+    session.turnRevision ?? '',
+    session.submissionId ?? '',
+    session.activeSubmissionId ?? '',
+    session.completionRevision ?? '',
     session.lastVisibleTextHash ?? '',
     session.lastScreenChangedAtUtc ?? '',
   ].join('|');
 }
 
+function revisionAdvanced(current, baseline) {
+  return Number.isInteger(current) && Number.isInteger(baseline) && current > baseline;
+}
+
 function sessionStatus(session) {
   if (session.state !== 'running') return 'unavailable';
   return session.agentState.replaceAll('_', '-');
+}
+
+function structuredEventFacts(session) {
+  return {
+    ...(session.agentStateSource ? { agentStateSource: session.agentStateSource } : {}),
+    ...(Number.isInteger(session.turnRevision) ? { turnRevision: session.turnRevision } : {}),
+    ...(session.submissionId ? { submissionId: session.submissionId } : {}),
+    ...(session.activeSubmissionId ? { activeSubmissionId: session.activeSubmissionId } : {}),
+    ...(Number.isInteger(session.completionRevision)
+      ? { completionRevision: session.completionRevision }
+      : {}),
+  };
 }
 
 function compareUtc(left, right) {
@@ -1054,6 +1222,11 @@ function enumText(value, allowed, label) {
   return value;
 }
 
+function optionalEnumText(value, allowed, label) {
+  if (value === undefined || value === null || value === '') return undefined;
+  return enumText(value, allowed, label);
+}
+
 function nonEmptyText(value, label, trim = true) {
   if (typeof value !== 'string' || !value.trim()) {
     throw new TaskManagerError('invalid-command', `${label} must be a non-empty string`);
@@ -1069,6 +1242,18 @@ function optionalText(value, preserveWhitespace = false) {
 function nonNegativeInteger(value, label) {
   if (!Number.isInteger(value) || value < 0) {
     throw new TaskManagerError('invalid-command', `${label} must be a non-negative integer`);
+  }
+  return value;
+}
+
+function optionalNonNegativeInteger(value, label) {
+  if (value === undefined || value === null) return undefined;
+  return monitorNonNegativeInteger(value, label);
+}
+
+function monitorNonNegativeInteger(value, label) {
+  if (!Number.isInteger(value) || value < 0) {
+    throw new TaskManagerError('invalid-monitor-data', `${label} must be a non-negative integer`);
   }
   return value;
 }

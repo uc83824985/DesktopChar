@@ -67,6 +67,10 @@ export async function discoverSessionMonitor(markerPath, options = {}) {
     1_000_000,
     'capabilities.sessionInput.maxTextChars',
   );
+  const observationCapability = record(marker.capabilities.sessionObservation)
+    ? marker.capabilities.sessionObservation
+    : undefined;
+  const structuredObservation = structuredObservationCapability(observationCapability);
   return {
     markerPath: resolvedMarkerPath,
     markerVersion: marker.version,
@@ -75,6 +79,7 @@ export async function discoverSessionMonitor(markerPath, options = {}) {
     token,
     intervalMs,
     maxTextChars,
+    structuredObservation,
   };
 }
 
@@ -253,6 +258,10 @@ function normalizeSession(value, label) {
     throw new SessionMonitorClientError('invalid-response', `${label} must be an object`);
   }
   const sessionId = nonEmptyText(value.sessionId, `${label}.sessionId`);
+  const latestCompletedReply = value.latestCompletedReply === undefined
+    || value.latestCompletedReply === null
+    ? undefined
+    : normalizeCompletedReply(value.latestCompletedReply, `${label}.latestCompletedReply`);
   return {
     sessionId,
     state: enumText(value.state, ['running', 'exited', 'closed', 'stale'], `${label}.state`),
@@ -266,6 +275,30 @@ function normalizeSession(value, label) {
       ['waiting_input', 'active', 'idle_unknown', 'unknown', 'closed'],
       `${label}.agentState`,
     ),
+    ...(optionalEnumText(
+      value.agentStateSource,
+      ['codex_rollout', 'terminal'],
+      `${label}.agentStateSource`,
+    )
+      ? { agentStateSource: value.agentStateSource }
+      : {}),
+    ...(optionalText(value.agentStateChangedAtUtc)
+      ? { agentStateChangedAtUtc: optionalText(value.agentStateChangedAtUtc) }
+      : {}),
+    ...(optionalNonNegativeInteger(value.turnRevision, `${label}.turnRevision`) !== undefined
+      ? { turnRevision: value.turnRevision }
+      : {}),
+    ...(optionalText(value.submissionId) ? { submissionId: optionalText(value.submissionId) } : {}),
+    ...(optionalText(value.activeSubmissionId)
+      ? { activeSubmissionId: optionalText(value.activeSubmissionId) }
+      : {}),
+    ...(optionalNonNegativeInteger(
+      value.completionRevision,
+      `${label}.completionRevision`,
+    ) !== undefined
+      ? { completionRevision: value.completionRevision }
+      : {}),
+    ...(latestCompletedReply ? { latestCompletedReply } : {}),
     agent: optionalText(value.agent),
     title: optionalText(value.desiredTitle ?? value.currentTitle ?? value.baseTitle),
     workDir: optionalText(value.workDir ?? value.root),
@@ -277,9 +310,49 @@ function normalizeSession(value, label) {
   };
 }
 
+function normalizeCompletedReply(value, label) {
+  if (!record(value)) {
+    throw new SessionMonitorClientError('invalid-response', `${label} must be an object`);
+  }
+  const completionRevision = nonNegativeInteger(
+    value.completionRevision,
+    `${label}.completionRevision`,
+  );
+  const sourceText = nonEmptyText(value.text, `${label}.text`, false);
+  const text = sourceText.length <= 12_000 ? sourceText : sourceText.slice(-12_000);
+  const originalTextLength = optionalNonNegativeInteger(
+    value.originalTextLength,
+    `${label}.originalTextLength`,
+  );
+  const durationMs = optionalNonNegativeInteger(value.durationMs, `${label}.durationMs`);
+  const timeToFirstTokenMs = optionalNonNegativeInteger(
+    value.timeToFirstTokenMs,
+    `${label}.timeToFirstTokenMs`,
+  );
+  if (value.textTruncated !== undefined && typeof value.textTruncated !== 'boolean') {
+    throw new SessionMonitorClientError(
+      'invalid-response',
+      `${label}.textTruncated must be a boolean`,
+    );
+  }
+  return {
+    source: enumText(value.source, ['codex_rollout'], `${label}.source`),
+    submissionId: nonEmptyText(value.submissionId, `${label}.submissionId`),
+    completionRevision,
+    ...(optionalText(value.startedAtUtc) ? { startedAtUtc: optionalText(value.startedAtUtc) } : {}),
+    ...(optionalText(value.completedAtUtc) ? { completedAtUtc: optionalText(value.completedAtUtc) } : {}),
+    ...(durationMs !== undefined ? { durationMs } : {}),
+    ...(timeToFirstTokenMs !== undefined ? { timeToFirstTokenMs } : {}),
+    text,
+    ...(optionalText(value.textHash) ? { textHash: optionalText(value.textHash) } : {}),
+    ...(originalTextLength !== undefined ? { originalTextLength } : {}),
+    ...(value.textTruncated !== undefined ? { textTruncated: value.textTruncated } : {}),
+  };
+}
+
 async function readJsonResponse(response) {
   const text = await response.text();
-  if (text.length > 2_000_000) {
+  if (text.length > 16_000_000) {
     throw new SessionMonitorClientError('invalid-response', 'Session Monitor response is too large');
   }
   try {
@@ -309,6 +382,7 @@ function publicDiscovery(value) {
     baseUrl: value.baseUrl,
     intervalMs: value.intervalMs,
     maxTextChars: value.maxTextChars,
+    structuredObservation: value.structuredObservation,
   };
 }
 
@@ -350,6 +424,11 @@ function enumText(value, allowed, label) {
   return value;
 }
 
+function optionalEnumText(value, allowed, label) {
+  if (value === undefined || value === null || value === '') return undefined;
+  return enumText(value, allowed, label);
+}
+
 function nonEmptyText(value, label, trim = true) {
   if (typeof value !== 'string' || !value.trim()) {
     throw new TypeError(`${label} must be a non-empty string`);
@@ -360,6 +439,32 @@ function nonEmptyText(value, label, trim = true) {
 function optionalText(value, preserveWhitespace = false) {
   if (typeof value !== 'string' || !value.trim()) return undefined;
   return preserveWhitespace ? value : value.trim();
+}
+
+function nonNegativeInteger(value, label) {
+  if (!Number.isInteger(value) || value < 0) {
+    throw new SessionMonitorClientError('invalid-response', `${label} must be non-negative`);
+  }
+  return value;
+}
+
+function optionalNonNegativeInteger(value, label) {
+  if (value === undefined || value === null) return undefined;
+  return nonNegativeInteger(value, label);
+}
+
+function structuredObservationCapability(value) {
+  if (!value || value.enabled !== true || value.structuredCodexRollout !== true) return false;
+  if (!Array.isArray(value.fields)) return false;
+  const fields = new Set(value.fields.filter(field => typeof field === 'string'));
+  return [
+    'agentStateSource',
+    'turnRevision',
+    'submissionId',
+    'activeSubmissionId',
+    'completionRevision',
+    'latestCompletedReply',
+  ].every(field => fields.has(field));
 }
 
 function boundedInteger(value, fallback, minimum, maximum, label) {

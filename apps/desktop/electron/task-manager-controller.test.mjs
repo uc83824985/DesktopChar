@@ -30,6 +30,9 @@ test('Task Manager controller stores bounded events before ack and deduplicates 
   assert.equal(snapshot.events[0].externalTurnSequence, 1);
   assert.equal(snapshot.events[0].visibleTextTail, '完成');
   assert.equal(snapshot.events[0].latestReply, '最后回复');
+  assert.equal(snapshot.events[0].agentStateSource, 'codex_rollout');
+  assert.equal(snapshot.events[0].completionRevision, 7);
+  assert.equal(snapshot.events[0].submissionId, 'turn-7');
   assert.deepEqual(client.acked, ['event-1']);
   await controller.close();
 });
@@ -155,6 +158,7 @@ test('Task Manager controller validates a fresh session review', async () => {
   assert.equal(review.sessionId, 'session-a');
   assert.equal(review.state.completion, 'complete');
   assert.equal(review.content.latestReply, '最后回复');
+  assert.equal(review.source.completionRevision, 7);
   assert.deepEqual(client.reviewed, ['session-a']);
   await controller.close();
 });
@@ -437,6 +441,10 @@ function taskEvent(cursor, type) {
     lastVisibleLine: '完成',
     visibleTextTail: '完成',
     latestReply: '最后回复',
+    agentStateSource: 'codex_rollout',
+    turnRevision: 7,
+    submissionId: 'turn-7',
+    completionRevision: 7,
   };
 }
 
@@ -460,6 +468,10 @@ function sessionReview(sessionId) {
       hash: 'HASH',
       screenChangedAtUtc: '2026-07-29T10:00:00Z',
       observedAtUtc: '2026-07-29T10:00:01Z',
+      agentStateSource: 'codex_rollout',
+      turnRevision: 7,
+      submissionId: 'turn-7',
+      completionRevision: 7,
     },
     content: {
       lastVisibleLine: '›',

@@ -242,6 +242,12 @@ export interface TaskManagerSessionState {
   state: 'running' | 'exited' | 'closed' | 'stale';
   monitorState: 'pending' | 'observed' | 'unreadable' | 'closed';
   agentState: 'waiting_input' | 'active' | 'idle_unknown' | 'unknown' | 'closed';
+  agentStateSource?: 'codex_rollout' | 'terminal';
+  agentStateChangedAtUtc?: string;
+  turnRevision?: number;
+  submissionId?: string;
+  activeSubmissionId?: string;
+  completionRevision?: number;
   title?: string;
   workDir?: string;
   lastVisibleLine?: string;
@@ -266,6 +272,11 @@ export interface TaskManagerEventState {
   commandId?: string;
   sourceHash?: string;
   sourceRevision?: string;
+  agentStateSource?: 'codex_rollout' | 'terminal';
+  turnRevision?: number;
+  submissionId?: string;
+  activeSubmissionId?: string;
+  completionRevision?: number;
   title?: string;
   lastVisibleLine?: string;
   visibleTextTail?: string;
@@ -307,9 +318,17 @@ export interface TaskManagerCommand {
 
 export interface TaskManagerCommandState extends TaskManagerCommand {
   submissionGeneration: number;
-  status: 'submitting' | 'observing' | 'completed' | 'failed' | 'unavailable' | 'superseded';
+  status:
+    | 'submitting'
+    | 'observing'
+    | 'activation-unconfirmed'
+    | 'completed'
+    | 'failed'
+    | 'unavailable'
+    | 'superseded';
   createdAtMs?: number;
   submittedAtMs?: number;
+  activationUnconfirmedAtMs?: number;
   completedAtMs?: number;
   error?: string;
 }
