@@ -340,13 +340,15 @@ Manager 内部只保存命令日志和 submission generation，不额外延迟�
 
 端口必须从 marker 的 `httpBaseUrl` 发现，token 只从 `httpTokenFile` 读取，不能写进仓库
 配置或日志。`capabilities.sessionInput.enabled` 为真后才可使用 `/input`。该接口不要求
-CLI 窗口位于前台，也不要求 `agentState == waiting_input`；`agentState` 基于可见终端文本
-推断，只能作为启发式信号，不能当成 CLI 官方完成事件。
+CLI 窗口位于前台，也不要求 `agentState == waiting_input`。Session Monitor v5 对 Codex rollout
+提供结构化会话观察：从 `task_started` 到 `task_complete` 稳定报告 `active`，并提供单调的
+`turnRevision`、`completionRevision`、稳定的 `submissionId/activeSubmissionId` 和
+`latestCompletedReply`。Task Manager 在 marker 明确声明 `sessionObservation` 能力且字段完整时，
+以这些字段作为开始、关联和完成事实来源。
 
-当前 Session Monitor 源码将终端尾部八行中出现以 `›` 或 `> ` 开头的行推断为
-`waiting_input`；本轮屏幕发生变化但未看到提示符时为 `active`，屏幕稳定且没有提示符时为
-`idle_unknown`。因此它可以支持首版保守轮询，但不能单独证明某个 command 对应的回复已经
-完整结束。
+非结构化目标或旧版 Monitor 继续使用终端回退。回退会把 `Working / Running / Ran / Called`
+等执行状态置于残留输入提示符之上；`›` 或 `> ` 提示符、可见文本 hash 和屏幕变化时间仍只是
+启发式信号，不能单独充当官方完成事件。
 
 Task Manager 对每个 session 维护命令日志、最新 `submissionGeneration` 和完成观测状态：
 
@@ -354,13 +356,11 @@ Task Manager 对每个 session 维护命令日志、最新 `submissionGeneration
 每次提交前保存 visibleTextHash / lastScreenChangedAt
  -> 递增 submissionGeneration
  -> 立即 POST /input mode=submit
- -> 通常观察目标进入 active（提交回执或后续轮询）
- -> 若轮询漏过极短的 active，Codex 可由“已提交文本之后出现新的回复块”补充确认
- -> 至少观察一次最新 generation 提交后的 hash / lastScreenChangedAt 变化
+ -> 观察 turnRevision 递增并记录本轮 submissionId
+ -> task_started 至 task_complete 期间保持 active
  -> 若又有新请求，立即提交并再次递增 generation
- -> 持续轮询 session 状态与有界文本尾部
- -> 最新 generation 之后观察 waiting_input 恢复并稳定
- -> 以最后一次有界可见文本采样完成最新 generation
+ -> completionRevision 递增且 latestCompletedReply 关联本轮 submissionId
+ -> 以结构化回复完成最新 generation；轮询漏过整个 active 区间也不会丢失完成
 ```
 
 External 会话完成注册时，DesktopChar 还会显式建立一个被动 Turn watch。watch 以绑定时
@@ -369,10 +369,11 @@ External 会话完成注册时，DesktopChar 还会显式建立一个被动 Turn
 
 ```text
 绑定 External session
- -> 保存当前 hash / revision / 最近完整 Turn 标识
+ -> 保存当前 completionRevision / submissionId；旧协议保存 hash / 最近完整 Turn 标识
  -> 观察到 active 后持续吸收流式变化，不产生完成事件
- -> active 恢复为 waiting_input 且内容已变化，立即完成一个被动 Turn
- -> 若轮询跨过了极快的 active，仅在当前可见区能解析出不同于基线的完整 Codex Turn，
+ -> completionRevision 递增后消费一次 latestCompletedReply，立即完成一个被动 Turn
+ -> 旧协议恢复 waiting_input 且内容已变化时完成；若轮询跨过极快的 active，
+    仅在当前可见区能解析出不同于基线的完整 Codex Turn，
     并由连续两次 Task Manager 轮询确认同一完成画面后完成
  -> 发布一次 external-turn-completed，递增 turnSequence 并重置基线
 ```
@@ -387,19 +388,24 @@ External session 的输入来自 DesktopChar TaskCommand，被动 watch 在该 g
 错过 active、Monitor 仅在画面变化时更新时间或终端发生滚屏时仍可捕获；完整 Turn 标识和
 基线重置负责避免同一回复被重复发布。
 
-已经处于 `active` 不能单独作为新 generation 已被 CLI 接受的证据；通常必须同时看到
-active 状态以及提交后的新屏幕变化，再等待其恢复并稳定在 `waiting_input`。但快速回复
-可能在两个轮询采样之间完成：对于明确标识为 Codex 的 session，若可见文本在本次提交内容
-之后已经出现新的 Codex 回复块，并连续两次来自不同 `lastObservedAtUtc` 的 Monitor 快照
-稳定在 `waiting_input`，也可判定完成。重复读取同一 Monitor 快照不增加稳定计数；仅有
-输入编辑框文本或状态栏变化仍不能完成，超过激活超时后失败且不重试；`idle_unknown` 不
-视为完成。轮询周期不应快于 marker 的 `intervalMs`。首版不处理回复被
+结构化观察中，`turnRevision` 证明新 Turn 已开始，`completionRevision` 是唯一消费的新回复
+游标；`latestCompletedReply.submissionId` 在观察到本轮 ID 后必须与之匹配。即使两个轮询之间
+完成整轮，修订字段仍能闭合命令。若激活确认超时，命令只进入非终态
+`activation-unconfirmed` 并继续观察，不发布失败通知；只有提交接口拒绝、目标消失等确定性
+错误才失败。
+
+旧协议中，已经处于 `active` 不能单独作为新 generation 已被 CLI 接受的证据；通常必须同时
+看到 active 状态以及提交后的新屏幕变化，再等待其恢复并稳定在 `waiting_input`。若可见文本
+在本次提交内容之后出现新的 Codex 回复块，并连续两次来自不同 `lastObservedAtUtc` 的 Monitor
+快照稳定在 `waiting_input`，也可判定完成。重复读取同一 Monitor 快照不增加稳定计数；仅有
+输入编辑框文本或状态栏变化仍不能完成，`idle_unknown` 不视为完成。轮询周期不应快于 marker
+的 `intervalMs`。首版不处理回复被
 用户中断的情况；若新请求在上一轮完成前提交，旧 generation 不再单独产生完成通知，完成
 事件以最后一次提交后的稳定快照为准。由于 `lastVisibleText` 是有限长度的终端可见文本，
 这只能提供保守的最终文本尾部，不能保证得到任意长回复的完整 transcript。Task Manager
 只保留协议上限内的最新 `visibleTextTail`、hash、状态和观察时间，不跨轮询拼接文本，也不
-尝试合并重叠屏幕内容。后续若 Session Monitor 提供正式 turn completion/correlation，
-只替换完成事实来源，不扩大 Task Manager 的内容存储职责。
+尝试合并重叠屏幕内容。结构化 `latestCompletedReply` 同样按协议上限保存，不扩大 Task Manager
+的内容存储职责。
 
 Task Manager 自身应提供窄领域接口，而不是把 Session Monitor 全量透传给 DesktopChar：
 
@@ -428,18 +434,18 @@ session，并把重启前仍在观察的 submission 视为不可恢复，不补�
 当前 `task-manager/` 已落地上述内存版本：
 
 - `session-monitor-client.mjs` 仅从显式 marker 路径读取 loopback 地址和 token 文件，验证
-  `submit` capability；token 不进入快照、URL或日志；
+  `submit` capability，并识别 v5 `sessionObservation` 字段集合；token 不进入快照、URL或日志；
 - `task-manager-runtime.mjs` 立即提交精确命令；同 session 的新成功提交以递增 generation
   supersede 旧观察，乱序 HTTP 确认也不能把旧 generation 重新设为当前；
-- External 注册通过显式 watch 建立被动 Turn 基线；流式期间保持待响应，恢复
-  `waiting_input` 后发布单个 `external-turn-completed`。watch 维护独立轮次序号，
+- External 注册通过显式 watch 建立被动 Turn 基线；结构化路径按 `completionRevision` 精确消费
+  `latestCompletedReply` 并发布单个 `external-turn-completed`。旧协议在流式期间保持待响应，
+  恢复 `waiting_input` 后完成。watch 维护独立轮次序号，
   忽略重复快照和输入编辑，并抑制 DesktopChar 自有 command 的重复完成事件；
 - `/sessions/{sessionId}/review` 直接读取一次当前 Monitor 详情并返回嵌套只读快照；该读取
   不推进 watch 状态。绑定响应复用首次详情作为初始 review，避免为显示旧回复重复采样；
-- 完成通常先确认目标进入 `active`，再观察提交后的 hash/时间变化，最后连续两次不同
-  `lastObservedAtUtc` 的 Monitor 观测得到相同 `waiting_input` 快照；重复读取同一观测不
-  增加计数。若轮询漏过 Codex 的快速 `active`，还要求本次提交文本之后存在新回复块；
-  仅有编辑框变化、`active` 本身和 `idle_unknown` 均不构成完成；
+- v5 完成以递增的 turn/completion 修订和关联 submission 为准，可跨过完整 active 采样区间；
+  激活超时只标记 `activation-unconfirmed` 并继续观察。旧协议才使用 active、hash、时间及
+  稳定 waiting 快照；仅有编辑框变化、`active` 本身和 `idle_unknown` 均不构成完成；
 - 中间采样不跨轮询拼接，事件只保存有界尾部；事件有单调 cursor 和幂等 ack，运行时状态、
   命令与事件不跨进程重启恢复；
 - 声明结果文档在提交前校验允许根目录和路径逃逸，在完成时再次校验真实文件；Task Manager
@@ -451,7 +457,7 @@ session，并把重启前仍在观察的 submission 视为不可恢复，不补�
   重启；关闭会立即从注册表移除未绑定候选，已有 External 注册转为 unavailable，但不会
   关闭或修改源窗口。`external` 生命周期继续兼容预先启动的 Task Manager marker。
 
-真实 Session Monitor v4 的 marker/token、会话记录和独立 HTTP 服务启动已经完成验收。
+真实 Session Monitor v5 的 marker/token、结构化会话记录和独立 HTTP 服务启动已经完成验收。
 2026-07-30 的早期 Codex CLI 实机测试曾出现 `mode=submit` 的 Enter 未被目标接受，因此
 DesktopChar 仍不能把 `submitted: true` 或仅有的编辑框 hash 变化解释为完成。修复提交后，
 又验证了回复可能在相邻轮询之间完整生成、从而完全漏过启发式 `active`；当前通过提交后的
@@ -834,3 +840,6 @@ Char Agent 的建议只是用户可见内容，不自动转化为 TaskCommand。
 14.（已完成）增加 Desktop `session.window.bounds/place` Definition 与 Configured Operation
    Gateway：操作名、输入字段和结果投影由 `applicationCommands.bindings` 配置，不依赖具体
    Session Monitor 接口。外围 Gateway 注入、Router command Suggestion 仍待接入。
+15.（已完成）适配 Session Monitor v5 结构化 Turn 观察：Task Manager 使用稳定的
+   turn/submission/completion 修订关联主动命令和被动 External Turn，轮询漏过完整 active
+   区间仍可完成；激活确认超时降为非终态诊断，旧 Monitor 保留终端启发式兼容。

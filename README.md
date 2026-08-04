@@ -55,7 +55,9 @@ Task Manager 首个内存版本位于 `task-manager/`。默认由 DesktopChar �
 只读发现和完整常驻服务只读验收，不会向任何 CLI 提交输入。DesktopChar 已可通过
 `taskManager.markerPath` 接收有界事件、在 main 保存后 ack，再把标题、状态和结果文档是否可用
 编译为精简 CharReplyTask；角色化短句由前台 Avatar Runtime 播放，每个 Turn 自带固定终态
-fallback。`npm run test:task-manager-foreground` 使用隔离服务和真实 managed Codex 验证这条
+fallback。Session Monitor v5 的 turn/submission/completion 修订是主动命令和 External 被动
+轮次的首选完成依据；旧 Monitor 仍兼容终端启发式观察。`npm run test:task-manager-foreground`
+使用隔离服务和真实 managed Codex 验证这条
 链路；`npm run test:task-manager-managed-foreground` 使用真实 Session Monitor 验证右键关闭/
 重启 owned Task Manager 后候选同步消失和恢复。两者均不提交任务命令。
 现有角色对话框已增加 sticky 的 Auto/Char/Session 目标选择、候选状态与二次确认区域，并由

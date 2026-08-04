@@ -32,7 +32,8 @@ Electron 壳层在领域链路之外：main 独占原生窗口位置、包围盒
 
 Router 当前只在 `character` 与具体 `task-session` 之间选择：角色目标进入可并行的 Char
 Agent Pool；session 目标由独立 Task Manager 默认立即提交。对同一 session 的新补充会递增
-submission generation，完成通知只采用最后一次提交后恢复 `waiting_input` 的最终稳定结果；
+submission generation；Session Monitor v5 路径使用单调 turn/completion 修订和 submission ID
+关联最终结果，旧协议才依赖恢复 `waiting_input` 的稳定终端画面；
 首版不实现等待上一轮完成再发送的串行策略。Task Manager 通过 Session Monitor 读取原始
 会话状态并只执行明确的 `sessionId + text` 命令；普通角色回复和任务通知都由同一个 Char
 Agent 角色生成。Router 与 Char 允许绑定不同 Provider/Profile，具体边界见
@@ -162,7 +163,8 @@ application-command-runtime -> no domain package dependency
    也支持只保存 `apiKeyEnv` 的 OpenAI-compatible Provider，Profile 修改只影响新请求。
    `interaction-routing` 已实现 sticky 直连、冻结投影、候选阈值裁决、二次确认和严格无回退
    错误边界。独立 `task-manager/` 已实现 Session Monitor marker/token 发现、立即提交、
-   generation 完成观测、内存事件 cursor/ack、结果文档复核和鉴权 loopback 服务。Electron
+   v5 结构化 turn/submission/completion 修订观测、旧终端协议兼容、generation 完成观测、
+   内存事件 cursor/ack、结果文档复核和鉴权 loopback 服务。Electron
    main 按 `instanceId + cursor` 保存有界事实并在保存后 ack；renderer 将终态编译为只含
    标题、状态和 artifact 可用性的 CharReplyTask。终端尾部、错误长文与结果绝对路径均不
    进入 Char 上下文。前台已有 sticky Auto/Char/Session、候选状态和二次确认；真实 smoke
